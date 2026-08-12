@@ -1,5 +1,4 @@
-import { execFile, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -15,17 +14,28 @@ import {
   auditAgentSkillScript
 } from "./agentSkillScriptAudit.js";
 
-export const SKILL_SCRIPT_DOCKER_ENTRYPOINT = "/usr/local/libexec/sunabot-skill-script-entrypoint";
 export const SKILL_SCRIPT_DEFAULT_TIMEOUT_MS = 30_000;
 export const SKILL_SCRIPT_MAX_TIMEOUT_MS = 300_000;
 export const SKILL_SCRIPT_MAX_OUTPUT_BYTES = 64 * 1024;
 
 const BWRAP = "/usr/bin/bwrap";
 const PRLIMIT = "/usr/bin/prlimit";
-const DOCKER = "/usr/local/bin/docker";
 const FIXED_PATH = "/usr/local/bin:/usr/bin:/bin";
 const SHA256 = /^[a-f0-9]{64}$/u;
 const SAFE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+
+export function resolveAgentSkillScriptBubblewrapExecutable(
+  environment: Readonly<Record<string, string | undefined>> = process.env
+): string {
+  const configured = environment.SUNABOT_BWRAP_EXECUTABLE?.trim();
+  if (!configured) {
+    if (environment.SUNABOT_PACKAGED_RELEASE === "1") {
+      throw stableError("SKILL_SCRIPT_ISOLATION_UNAVAILABLE");
+    }
+    return BWRAP;
+  }
+  return validateAbsoluteExecutable(configured);
+}
 
 export interface AgentSkillScriptSandboxInput {
   agentId: string;
@@ -59,15 +69,10 @@ export interface AgentSkillScriptSandboxPort {
 }
 
 export interface SkillScriptInvocation {
-  kind: "bubblewrap" | "docker";
+  kind: "bubblewrap";
   file: string;
   args: string[];
   env: Readonly<Record<string, string>>;
-  cleanup?: {
-    file: string;
-    args: ["rm", "-f", string];
-    env: Readonly<Record<string, string>>;
-  };
 }
 
 export interface SkillScriptChild {
@@ -90,28 +95,15 @@ export type SkillScriptSpawn = (
   }
 ) => SkillScriptChild;
 
-export type SkillScriptCleanupRunner = (input: {
-  file: string;
-  args: readonly string[];
-  env: Readonly<Record<string, string>>;
-  timeoutMs: number;
-}) => Promise<void>;
-
 export class StrongIsolatedAgentSkillScriptSandbox implements AgentSkillScriptSandboxPort {
   constructor(private readonly options: {
-    backend?: "auto" | "bubblewrap" | "docker";
+    backend?: "auto" | "bubblewrap";
     platform?: NodeJS.Platform;
     bwrapExecutable?: string;
     prlimitExecutable?: string;
-    dockerExecutable?: string;
-    dockerImage?: string;
-    dockerEnvironment?: Readonly<Record<string, string>>;
     effectiveUid?: number;
-    effectiveGid?: number;
     cleanupTimeoutMs?: number;
     spawnProcess?: SkillScriptSpawn;
-    cleanupRunner?: SkillScriptCleanupRunner;
-    containerNameFactory?: () => string;
     beforeSpawn?: () => Promise<void> | void;
     killProcessGroup?: (pid: number, signal: NodeJS.Signals) => void;
   } = {}) {}
@@ -133,32 +125,17 @@ export class StrongIsolatedAgentSkillScriptSandbox implements AgentSkillScriptSa
     }
     await verifyAgentSkillScriptProjection(input.projection);
     await revalidateSandboxAudit(input);
-    const backend = this.options.backend === "auto" || !this.options.backend
-      ? (this.options.platform ?? process.platform) === "darwin" ? "docker" : "bubblewrap"
-      : this.options.backend;
-    const invocation = backend === "docker"
-      ? buildSkillScriptDockerInvocation(input, {
-          dockerExecutable: this.options.dockerExecutable,
-          image: this.options.dockerImage,
-          dockerEnvironment: this.options.dockerEnvironment,
-          uid: this.options.effectiveUid,
-          gid: this.options.effectiveGid,
-          containerName: this.options.containerNameFactory?.()
-        })
-      : buildSkillScriptBubblewrapInvocation(input, {
-          platform: this.options.platform,
-          bwrapExecutable: this.options.bwrapExecutable,
-          prlimitExecutable: this.options.prlimitExecutable
-        });
-    if (invocation.kind === "bubblewrap") {
-      await Promise.all([
-        assertExecutable(invocation.file),
-        assertExecutable(this.options.bwrapExecutable ?? BWRAP),
-        assertExecutable(input.interpreter)
-      ]);
-    } else {
-      await assertExecutable(invocation.file);
-    }
+    const bwrapExecutable = this.options.bwrapExecutable ?? resolveAgentSkillScriptBubblewrapExecutable();
+    const invocation = buildSkillScriptBubblewrapInvocation(input, {
+      platform: this.options.platform,
+      bwrapExecutable,
+      prlimitExecutable: this.options.prlimitExecutable
+    });
+    await Promise.all([
+      assertExecutable(invocation.file),
+      assertExecutable(bwrapExecutable),
+      assertExecutable(input.interpreter)
+    ]);
     await this.options.beforeSpawn?.();
     await verifyAgentSkillScriptProjection(input.projection);
     await revalidateSandboxAudit(input);
@@ -166,7 +143,6 @@ export class StrongIsolatedAgentSkillScriptSandbox implements AgentSkillScriptSa
     return executeInvocation(invocation, input, {
       cleanupTimeoutMs: boundedInteger(this.options.cleanupTimeoutMs, 10_000, 1, 30_000),
       spawnProcess: this.options.spawnProcess ?? defaultSpawn,
-      cleanupRunner: this.options.cleanupRunner ?? defaultCleanupRunner,
       killProcessGroup: this.options.killProcessGroup ?? ((pid, signal) => process.kill(-pid, signal))
     });
   }
@@ -236,77 +212,12 @@ export function buildSkillScriptBubblewrapInvocation(
   return { kind: "bubblewrap", file: prlimit, args, env: {} };
 }
 
-export function buildSkillScriptDockerInvocation(
-  input: AgentSkillScriptSandboxInput,
-  options: {
-    dockerExecutable?: string;
-    image?: string;
-    dockerEnvironment?: Readonly<Record<string, string>>;
-    uid?: number;
-    gid?: number;
-    containerName?: string;
-  } = {}
-): SkillScriptInvocation {
-  validateSandboxInput(input);
-  const file = validateAbsoluteExecutable(options.dockerExecutable ?? DOCKER);
-  const image = validateImmutableImage(options.image);
-  const uid = options.uid ?? (typeof process.getuid === "function" ? process.getuid() : -1);
-  const gid = options.gid ?? (typeof process.getgid === "function" ? process.getgid() : uid);
-  if (!Number.isSafeInteger(uid) || uid <= 0 || !Number.isSafeInteger(gid) || gid <= 0) {
-    throw stableError("SKILL_SCRIPT_ISOLATION_UNAVAILABLE");
-  }
-  const containerName = options.containerName ?? `sunabot-skill-script-${randomBytes(16).toString("hex")}`;
-  if (!/^sunabot-skill-script-[a-f0-9]{32}$/u.test(containerName)) {
-    throw stableError("SKILL_SCRIPT_ISOLATION_UNAVAILABLE");
-  }
-  const env = validateDockerEnvironment(options.dockerEnvironment ?? {});
-  const args = [
-    "run", "--rm", "--init", "--pull", "never",
-    "--name", containerName,
-    "--user", `${uid}:${gid}`,
-    "--network", "none",
-    "--ipc", "none",
-    "--read-only",
-    "--cap-drop", "ALL",
-    "--security-opt", "no-new-privileges:true",
-    "--pids-limit", "64",
-    "--memory", "512m",
-    "--memory-swap", "512m",
-    "--cpus", "1",
-    "--ulimit", "nofile=128:128",
-    "--ulimit", "fsize=268435456:268435456",
-    "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777",
-    "--mount", `type=bind,src=${validateMountSource(input.projection.workbench)},dst=/workbench,readonly`,
-    "--mount", `type=bind,src=${validateMountSource(input.projection.skills)},dst=/skills,readonly`,
-    "--workdir", "/workbench",
-    "--entrypoint", SKILL_SCRIPT_DOCKER_ENTRYPOINT,
-    image,
-    "--skill", input.skillId,
-    "--digest", input.expectedDigestSha256,
-    "--resource", input.resourcePath,
-    "--resource-sha256", input.resourceSha256,
-    "--resource-bytes", String(input.resourceBytes),
-    "--audit", input.auditFingerprintSha256,
-    "--interpreter", input.interpreter,
-    "--",
-    ...input.args
-  ];
-  return {
-    kind: "docker",
-    file,
-    args,
-    env,
-    cleanup: { file, args: ["rm", "-f", containerName], env }
-  };
-}
-
 async function executeInvocation(
   invocation: SkillScriptInvocation,
   input: AgentSkillScriptSandboxInput,
   options: {
     cleanupTimeoutMs: number;
     spawnProcess: SkillScriptSpawn;
-    cleanupRunner: SkillScriptCleanupRunner;
     killProcessGroup: (pid: number, signal: NodeJS.Signals) => void;
   }
 ) {
@@ -322,14 +233,10 @@ async function executeInvocation(
       stdio: ["ignore", "pipe", "pipe"]
     });
   } catch {
-    if (invocation.cleanup) {
-      await runCleanup(invocation.cleanup, options).catch(() => { throw stableError("SKILL_SCRIPT_CLEANUP_FAILED"); });
-    }
     throw stableError("SKILL_SCRIPT_LAUNCH_FAILED");
   }
   let settled = false;
   let forced: "abort" | "timeout" | undefined;
-  let cleanupPromise: Promise<void> | undefined;
   let resolveExit!: (value: { code: number | null; signal: NodeJS.Signals | null; error?: Error }) => void;
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>((resolve) => {
     resolveExit = resolve;
@@ -343,9 +250,6 @@ async function executeInvocation(
   child.stderr.on("data", (chunk: Buffer | Uint8Array | string) => output.append("stderr", chunk));
   child.once("error", (error) => settle({ code: null, signal: null, error }));
   child.once("exit", (code, signal) => settle({ code, signal }));
-  const cleanup = () => cleanupPromise ??= invocation.cleanup
-    ? runCleanup(invocation.cleanup, options)
-    : Promise.resolve();
   let forcedGuardTimer: NodeJS.Timeout | undefined;
   let rejectForcedGuard!: (error: Error) => void;
   const forcedGuard = new Promise<never>((_resolve, reject) => {
@@ -364,15 +268,13 @@ async function executeInvocation(
     forced = kind;
     watchForcedStop();
     try {
-      if (invocation.kind === "bubblewrap" && child.pid) options.killProcessGroup(child.pid, "SIGKILL");
+      if (child.pid) options.killProcessGroup(child.pid, "SIGKILL");
       else child.kill("SIGKILL");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-        cleanupPromise = Promise.reject(error);
+        rejectForcedGuard(stableError("SKILL_SCRIPT_CLEANUP_FAILED"));
       }
     }
-    if (invocation.cleanup) cleanupPromise = cleanup();
-    void cleanupPromise?.catch(() => rejectForcedGuard(stableError("SKILL_SCRIPT_CLEANUP_FAILED")));
   };
   const abortListener = () => forceStop("abort");
   input.signal?.addEventListener("abort", abortListener, { once: true });
@@ -382,8 +284,6 @@ async function executeInvocation(
   let result: Awaited<typeof exited>;
   try {
     result = await Promise.race([exited, forcedGuard]);
-    if (result.error && invocation.cleanup) cleanupPromise = cleanup();
-    if (cleanupPromise) await cleanupPromise.catch(() => { throw stableError("SKILL_SCRIPT_CLEANUP_FAILED"); });
   } finally {
     clearTimeout(timer);
     if (forcedGuardTimer) clearTimeout(forcedGuardTimer);
@@ -544,22 +444,6 @@ function validateAbsoluteExecutable(value: string) {
   return resolved;
 }
 
-function validateImmutableImage(value: string | undefined) {
-  if (!value || (!/^sha256:[a-f0-9]{64}$/u.test(value) &&
-      !/^[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$/u.test(value))) {
-    throw stableError("SKILL_SCRIPT_ISOLATION_UNAVAILABLE");
-  }
-  return value;
-}
-
-function validateDockerEnvironment(input: Readonly<Record<string, string>>) {
-  if (Object.keys(input).some((key) => key !== "DOCKER_HOST") ||
-      Object.values(input).some((value) => /[\u0000\r\n]/u.test(value) || value.length > 4_096)) {
-    throw stableError("SKILL_SCRIPT_ISOLATION_UNAVAILABLE");
-  }
-  return { ...input };
-}
-
 async function assertExecutable(file: string) {
   await fs.access(file, 1).catch(() => { throw stableError("SKILL_SCRIPT_ISOLATION_UNAVAILABLE"); });
 }
@@ -573,50 +457,8 @@ function addVirtualParents(args: string[], target: string) {
   }
 }
 
-async function runCleanup(
-  cleanup: NonNullable<SkillScriptInvocation["cleanup"]>,
-  options: { cleanupTimeoutMs: number; cleanupRunner: SkillScriptCleanupRunner }
-) {
-  await withDeadline(Promise.resolve().then(() => options.cleanupRunner({
-    ...cleanup,
-    timeoutMs: options.cleanupTimeoutMs
-  })), options.cleanupTimeoutMs);
-}
-
 function defaultSpawn(file: string, args: readonly string[], options: Parameters<SkillScriptSpawn>[2]) {
   return spawn(file, [...args], options) as unknown as SkillScriptChild;
-}
-
-function defaultCleanupRunner(input: {
-  file: string;
-  args: readonly string[];
-  env: Readonly<Record<string, string>>;
-  timeoutMs: number;
-}) {
-  return new Promise<void>((resolve, reject) => {
-    execFile(input.file, [...input.args], {
-      cwd: "/",
-      env: { ...input.env },
-      timeout: input.timeoutMs,
-      killSignal: "SIGKILL",
-      windowsHide: true
-    }, (error) => error ? reject(error) : resolve());
-  });
-}
-
-async function withDeadline<T>(promise: Promise<T>, timeoutMs: number) {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(stableError("SKILL_SCRIPT_CLEANUP_FAILED")), timeoutMs);
-        timer.unref?.();
-      })
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 function boundedInteger(value: number | undefined, fallback: number, minimum: number, maximum: number) {

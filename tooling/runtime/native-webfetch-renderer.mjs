@@ -4,13 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-const RENDERER_DEPENDENCIES = ["fastify", "ipaddr.js", "playwright"];
-const INSTALL_MARKER = "sunabot-native-webfetch-installation-v1";
-const BROWSER_MARKER = "sunabot-native-webfetch-browser-v1";
+const RENDERER_DEPENDENCIES = ["fastify", "linkedom"];
+const INSTALL_MARKER = "sunabot-native-webfetch-installation-v2";
 
 export async function prepareNativeWebfetchRendererInstallation(context, options = {}) {
-  const command = options.command;
-  if (typeof command !== "function") throw new Error("WEBFETCH_INSTALL_COMMAND_REQUIRED");
   const cacheRoot = nativeRendererCacheRoot({
     environment: context.environment,
     platform: process.platform
@@ -18,6 +15,15 @@ export async function prepareNativeWebfetchRendererInstallation(context, options
   assertRendererCacheBoundary(cacheRoot, context);
   await fs.mkdir(cacheRoot, { recursive: true, mode: 0o700 });
   await fs.chmod(cacheRoot, 0o700);
+
+  const lightpandaSource = path.resolve(
+    context.environment.SUNABOT_WEBFETCH_LIGHTPANDA_EXECUTABLE?.trim()
+      || path.join(context.root, "runtime/lightpanda/lightpanda")
+  );
+  if (!await regularExecutable(lightpandaSource)) {
+    throw new Error("WEBFETCH_LIGHTPANDA_MISSING");
+  }
+  if (!await regularExecutable(process.execPath)) throw new Error("WEBFETCH_NODE_RUNTIME_MISSING");
 
   const packageLockPath = path.join(context.root, "package-lock.json");
   const packageLockContent = await fs.readFile(packageLockPath);
@@ -28,11 +34,7 @@ export async function prepareNativeWebfetchRendererInstallation(context, options
   ]));
   packageLockContent.fill(0);
   const dependenciesRoot = path.join(cacheRoot, "dependencies", dependencyDigest);
-  await ensureRendererDependencies({
-    dependenciesRoot,
-    packageLock,
-    projectRoot: context.root
-  });
+  await ensureRendererDependencies({ dependenciesRoot, packageLock, projectRoot: context.root });
 
   const applicationInputs = [
     path.join(context.root, "dist/apps/webfetch-renderer"),
@@ -42,43 +44,37 @@ export async function prepareNativeWebfetchRendererInstallation(context, options
   ];
   const applicationDigest = await hashPaths(applicationInputs);
   const applicationRoot = path.join(cacheRoot, "applications", applicationDigest);
-  await ensureRendererApplication({
-    applicationRoot,
-    dependenciesRoot,
-    projectRoot: context.root
-  });
+  await ensureRendererApplication({ applicationRoot, dependenciesRoot, projectRoot: context.root });
 
-  const playwrightVersion = packageLock.packages?.["node_modules/playwright"]?.version;
-  if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/u.test(playwrightVersion ?? "")) {
-    throw new Error("WEBFETCH_PLAYWRIGHT_VERSION_INVALID");
+  const [lightpandaExecutable, nodeExecutable] = await Promise.all([
+    cacheExecutable(cacheRoot, "lightpanda", lightpandaSource),
+    cacheExecutable(cacheRoot, `node-${process.versions.node}`, process.execPath)
+  ]);
+  if (typeof options.command === "function") {
+    await options.command(lightpandaExecutable, ["version"], {
+      capture: true,
+      env: { LIGHTPANDA_DISABLE_TELEMETRY: "true" },
+      timeoutMs: 10_000
+    });
   }
-  const browserRoot = path.join(
-    cacheRoot,
-    "browsers",
-    `playwright-${playwrightVersion}-${process.platform}-${process.arch}`
-  );
-  const browserExecutable = await ensureNativeChromium({
-    browserRoot,
-    markerPath: path.join(browserRoot, "installation.json"),
-    playwrightCli: path.join(context.root, "node_modules/playwright/cli.js"),
-    command,
-    repair: options.repairBrowser === true
-  });
-
   return {
     applicationRoot,
-    browserExecutable,
-    browserRoot,
     cacheRoot,
     entry: path.join(applicationRoot, "dist/apps/webfetch-renderer/main.js"),
-    supervisorEntry: path.join(
-      applicationRoot,
-      "tooling/runtime/native-webfetch-renderer-supervisor.mjs"
-    )
+    lightpandaExecutable,
+    nodeExecutable,
+    supervisorEntry: path.join(applicationRoot, "tooling/runtime/native-webfetch-renderer-supervisor.mjs")
   };
 }
 
 export async function createNativeWebfetchRendererLaunch(context, installation) {
+  if (process.platform === "darwin") throw new Error("WEBFETCH_MACOS_NATIVE_RENDERER_UNAVAILABLE");
+  if (process.platform !== "linux") throw new Error(`WEBFETCH_NATIVE_PLATFORM_UNSUPPORTED:${process.platform}`);
+  const bubblewrap = validatedBubblewrapExecutable(context.bubblewrapExecutable);
+  await fs.access(bubblewrap, fs.constants.X_OK).catch(() => {
+    throw new Error("WEBFETCH_LINUX_BUBBLEWRAP_UNAVAILABLE");
+  });
+
   const runRoot = await fs.mkdtemp(path.join(os.tmpdir(), `sunabot-webfetch-${context.identity}-`));
   const home = path.join(runRoot, "home");
   const cache = path.join(runRoot, "cache");
@@ -91,55 +87,47 @@ export async function createNativeWebfetchRendererLaunch(context, installation) 
   const logPath = path.join(installation.cacheRoot, "logs", `${context.identity}.log`);
   await fs.mkdir(path.dirname(logPath), { recursive: true, mode: 0o700 });
   const environment = rendererProcessEnvironment({
-    browserExecutable: installation.browserExecutable,
-    browserRoot: installation.browserRoot,
     cache,
     entry: installation.entry,
     home,
+    lightpandaExecutable: installation.lightpandaExecutable,
     port: context.contract.webfetchRendererPort,
     runtime,
     workspaceId: context.identity
   });
+  const bubblewrapOptions = {
+    cache,
+    home,
+    projectRoot: context.root,
+    runtime,
+    sensitivePaths: await existingDirectories(linuxCredentialPaths()),
+    workspace: context.workspace
+  };
+  return {
+    args: [
+      ...linuxRendererBubblewrapPrefix(bubblewrapOptions),
+      installation.nodeExecutable,
+      installation.supervisorEntry
+    ],
+    environment,
+    executable: bubblewrap,
+    isolationProbe: {
+      args: linuxRendererBubblewrapPrefix(bubblewrapOptions),
+      executable: bubblewrap,
+      nodeExecutable: installation.nodeExecutable
+    },
+    logPath,
+    runRoot,
+    runtimeIsolation: "linux-bubblewrap"
+  };
+}
 
-  if (process.platform === "darwin") {
-    await fs.rm(runRoot, { recursive: true, force: true });
-    throw new Error("WEBFETCH_MACOS_NATIVE_RENDERER_UNSUPPORTED");
+function validatedBubblewrapExecutable(value) {
+  if (typeof value !== "string" || !path.isAbsolute(value) || /[\u0000\r\n]/u.test(value)
+      || path.resolve(value) !== value) {
+    throw new Error("WEBFETCH_LINUX_BUBBLEWRAP_UNAVAILABLE");
   }
-
-  if (process.platform === "linux") {
-    await fs.access("/usr/bin/bwrap", fs.constants.X_OK).catch(() => {
-      throw new Error("WEBFETCH_LINUX_BUBBLEWRAP_UNAVAILABLE");
-    });
-    const bubblewrapOptions = {
-      cache,
-      home,
-      projectRoot: context.root,
-      runtime,
-      sensitivePaths: await existingDirectories(linuxCredentialPaths()),
-      workspace: context.workspace
-    };
-    Object.assign(environment, {
-      SUNABOT_WEBFETCH_RUNTIME_ISOLATION: "linux-bubblewrap"
-    });
-    return {
-      args: [
-        ...linuxRendererBubblewrapPrefix(bubblewrapOptions),
-        process.execPath,
-        installation.supervisorEntry
-      ],
-      environment,
-      executable: "/usr/bin/bwrap",
-      isolationProbe: {
-        args: linuxRendererBubblewrapPrefix(bubblewrapOptions),
-        executable: "/usr/bin/bwrap"
-      },
-      logPath,
-      runRoot,
-      runtimeIsolation: "linux-bubblewrap"
-    };
-  }
-
-  throw new Error(`WEBFETCH_NATIVE_PLATFORM_UNSUPPORTED:${process.platform}`);
+  return value;
 }
 
 export async function verifyNativeWebfetchRendererIsolation(context, launch, command) {
@@ -159,7 +147,7 @@ export async function verifyNativeWebfetchRendererIsolation(context, launch, com
   }
   await command(launch.isolationProbe.executable, [
     ...launch.isolationProbe.args,
-    process.execPath,
+    launch.isolationProbe.nodeExecutable,
     "-e",
     probe,
     path.join(context.root, "package.json"),
@@ -175,16 +163,16 @@ export function rendererProcessEnvironment(options) {
   return {
     HOME: options.home,
     LANG: "C.UTF-8",
+    LIGHTPANDA_DISABLE_TELEMETRY: "true",
     NODE_ENV: "production",
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-    PLAYWRIGHT_BROWSERS_PATH: options.browserRoot,
-    SUNABOT_WEBFETCH_CHROMIUM_EXECUTABLE: options.browserExecutable,
-    SUNABOT_WEBFETCH_CHROMIUM_SANDBOX: "1",
+    SUNABOT_WEBFETCH_LIGHTPANDA_EXECUTABLE: options.lightpandaExecutable,
     SUNABOT_WEBFETCH_RENDERER_ENTRY: options.entry,
     SUNABOT_WEBFETCH_RENDERER_HOST: "127.0.0.1",
     SUNABOT_WEBFETCH_RENDERER_PORT: String(options.port),
     SUNABOT_WEBFETCH_RENDERER_TOKEN_FD: "3",
     SUNABOT_WEBFETCH_RENDERER_WORKSPACE_ID: options.workspaceId,
+    SUNABOT_WEBFETCH_RUNTIME_ISOLATION: "linux-bubblewrap",
     TMPDIR: options.runtime,
     XDG_CACHE_HOME: options.cache,
     XDG_RUNTIME_DIR: options.runtime
@@ -216,8 +204,8 @@ export function linuxRendererBubblewrapPrefix(options) {
     "--unshare-uts",
     "--unshare-ipc",
     "--unshare-cgroup-try",
-    "--uid", "65534",
-    "--gid", "65534",
+    "--uid", "0",
+    "--gid", "0",
     "--cap-drop", "ALL",
     "--ro-bind", "/", "/",
     ...masks.flatMap((value) => ["--tmpfs", value]),
@@ -259,10 +247,10 @@ async function ensureRendererDependencies(options) {
     await fs.cp(source, destination, { recursive: true, dereference: true });
   }
   await fs.writeFile(path.join(stage, "package.json"), '{"private":true,"type":"module"}\n', { mode: 0o600 });
-  await fs.writeFile(path.join(stage, "installation.json"), JSON.stringify({
+  await fs.writeFile(path.join(stage, "installation.json"), `${JSON.stringify({
     schema: INSTALL_MARKER,
     packages: [...packages].sort()
-  }, null, 2) + "\n", { mode: 0o600 });
+  }, null, 2)}\n`, { mode: 0o600 });
   await fs.mkdir(path.dirname(options.dependenciesRoot), { recursive: true, mode: 0o700 });
   await fs.rename(stage, options.dependenciesRoot).catch(async (error) => {
     if (error.code !== "EEXIST" && error.code !== "ENOTEMPTY") throw error;
@@ -276,11 +264,7 @@ async function ensureRendererApplication(options) {
   const stage = `${options.applicationRoot}.${process.pid}.${Date.now()}.tmp`;
   await fs.rm(stage, { recursive: true, force: true });
   await fs.mkdir(stage, { recursive: true, mode: 0o700 });
-  for (const relative of [
-    "dist/apps/webfetch-renderer",
-    "dist/adapters/webfetch",
-    "dist/services/webfetch"
-  ]) {
+  for (const relative of ["dist/apps/webfetch-renderer", "dist/adapters/webfetch", "dist/services/webfetch"]) {
     await fs.cp(path.join(options.projectRoot, relative), path.join(stage, relative), {
       recursive: true,
       dereference: true
@@ -291,9 +275,7 @@ async function ensureRendererApplication(options) {
   await fs.copyFile(path.join(options.projectRoot, supervisorRelative), path.join(stage, supervisorRelative));
   await fs.writeFile(path.join(stage, "package.json"), '{"private":true,"type":"module"}\n', { mode: 0o600 });
   await fs.symlink(path.join(options.dependenciesRoot, "node_modules"), path.join(stage, "node_modules"), "dir");
-  await fs.writeFile(path.join(stage, "installation.json"), JSON.stringify({
-    schema: INSTALL_MARKER
-  }, null, 2) + "\n", { mode: 0o600 });
+  await fs.writeFile(path.join(stage, "installation.json"), `${JSON.stringify({ schema: INSTALL_MARKER }, null, 2)}\n`, { mode: 0o600 });
   await fs.mkdir(path.dirname(options.applicationRoot), { recursive: true, mode: 0o700 });
   await fs.rename(stage, options.applicationRoot).catch(async (error) => {
     if (error.code !== "EEXIST" && error.code !== "ENOTEMPTY") throw error;
@@ -301,45 +283,21 @@ async function ensureRendererApplication(options) {
   });
 }
 
-async function ensureNativeChromium(options) {
-  const marker = await readJson(options.markerPath);
-  if (marker?.schema === BROWSER_MARKER) {
-    if (typeof marker.executable !== "string" || !await regularExecutable(marker.executable)) {
-      if (!options.repair) throw new Error("WEBFETCH_BROWSER_MISSING");
-    } else {
-      return marker.executable;
-    }
+async function cacheExecutable(cacheRoot, name, source) {
+  const digest = await sha256File(source);
+  const directory = path.join(cacheRoot, "engines", digest);
+  const target = path.join(directory, name);
+  if (!await regularExecutable(target)) {
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+    await fs.copyFile(source, temporary);
+    await fs.chmod(temporary, 0o700);
+    await fs.rename(temporary, target).catch(async (error) => {
+      if (error.code !== "EEXIST") throw error;
+      await fs.rm(temporary, { force: true });
+    });
   }
-  await fs.mkdir(options.browserRoot, { recursive: true, mode: 0o700 });
-  const projectRoot = path.resolve(path.dirname(options.playwrightCli), "../..");
-  await options.command(process.execPath, [options.playwrightCli, "install", "chromium"], {
-    cwd: projectRoot,
-    env: {
-      HOME: os.homedir(),
-      PATH: process.env.PATH,
-      PLAYWRIGHT_BROWSERS_PATH: options.browserRoot
-    },
-    timeoutMs: 15 * 60_000
-  });
-  const executable = (await options.command(process.execPath, [
-    "--input-type=module",
-    "-e",
-    "import { chromium } from 'playwright'; process.stdout.write(chromium.executablePath());"
-  ], {
-    capture: true,
-    cwd: projectRoot,
-    env: {
-      HOME: os.homedir(),
-      PATH: process.env.PATH,
-      PLAYWRIGHT_BROWSERS_PATH: options.browserRoot
-    }
-  })).trim();
-  if (!await regularExecutable(executable)) throw new Error("WEBFETCH_BROWSER_INSTALL_INVALID");
-  await fs.writeFile(options.markerPath, JSON.stringify({
-    schema: BROWSER_MARKER,
-    executable
-  }, null, 2) + "\n", { mode: 0o600 });
-  return executable;
+  return target;
 }
 
 function dependencyClosure(packageLock, roots) {
@@ -379,12 +337,9 @@ async function existingDirectories(inputs) {
 
 async function hashPath(hash, target, base) {
   const stat = await fs.lstat(target);
-  const relative = path.relative(base, target);
-  hash.update(relative);
+  hash.update(path.relative(base, target));
   if (stat.isDirectory()) {
-    for (const entry of (await fs.readdir(target)).sort()) {
-      await hashPath(hash, path.join(target, entry), base);
-    }
+    for (const entry of (await fs.readdir(target)).sort()) await hashPath(hash, path.join(target, entry), base);
     return;
   }
   if (!stat.isFile()) throw new Error(`WEBFETCH_INSTALL_INPUT_INVALID:${target}`);
@@ -394,9 +349,7 @@ async function hashPath(hash, target, base) {
 function assertRendererCacheBoundary(cacheRoot, context) {
   const resolved = path.resolve(cacheRoot);
   for (const forbidden of [context.root, context.workspace]) {
-    if (isWithin(resolved, path.resolve(forbidden))) {
-      throw new Error("WEBFETCH_NATIVE_CACHE_BOUNDARY_INVALID");
-    }
+    if (isWithin(resolved, path.resolve(forbidden))) throw new Error("WEBFETCH_NATIVE_CACHE_BOUNDARY_INVALID");
   }
 }
 
@@ -406,14 +359,10 @@ function isWithin(target, root) {
 }
 
 async function markerMatches(markerPath, schema) {
-  return (await readJson(markerPath))?.schema === schema;
-}
-
-async function readJson(filePath) {
   try {
-    return JSON.parse(await fs.readFile(filePath, "utf8"));
+    return JSON.parse(await fs.readFile(markerPath, "utf8"))?.schema === schema;
   } catch (error) {
-    if (error.code === "ENOENT") return null;
+    if (error.code === "ENOENT") return false;
     throw error;
   }
 }
@@ -427,6 +376,10 @@ async function regularExecutable(filePath) {
   } catch {
     return false;
   }
+}
+
+async function sha256File(filePath) {
+  return sha256(await fs.readFile(filePath));
 }
 
 function sha256(value) {

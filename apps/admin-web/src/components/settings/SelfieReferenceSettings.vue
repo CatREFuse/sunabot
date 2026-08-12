@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, watch } from "vue";
 import { activeAgentIdState } from "../../composables/agentScope";
 import { useSelfieReferences } from "../../composables/useSelfieReferences";
 import SelfieReferenceManager from "./SelfieReferenceManager.vue";
-import type { WorkbenchBackend } from "../../types/workbench";
 
 const references = useSelfieReferences();
 const agentId = computed(() => activeAgentIdState.value || "plana");
@@ -17,12 +16,12 @@ function upload(entries: Parameters<typeof references.upload>[1]) {
   return references.upload(agentId.value, entries);
 }
 
-function updateNote(id: string, note: string, workbench: WorkbenchBackend) {
-  return references.updateNote(agentId.value, id, note, workbench);
+function updateNote(id: string, note: string) {
+  return references.updateNote(agentId.value, id, note);
 }
 
-function remove(id: string, workbench: WorkbenchBackend) {
-  return references.remove(agentId.value, id, workbench);
+function remove(id: string) {
+  return references.remove(agentId.value, id);
 }
 </script>
 

@@ -40,6 +40,7 @@ describe("admin API smoke", () => {
       agentExtensions: {
         workspaceRoot: temporaryDirectory
       },
+      runtimeProbeClient: false,
       ...options
     };
   }

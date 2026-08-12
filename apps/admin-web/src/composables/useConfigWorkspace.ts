@@ -109,7 +109,6 @@ const emptyConfig: AppConfig = {
     },
     bash: {
       enabled: false,
-      adminPrivateBackend: "docker",
       auditModel: "gpt-5.4-mini",
       strictMode: true,
       allowGroup: false,

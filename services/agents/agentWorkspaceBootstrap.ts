@@ -26,26 +26,7 @@ const WORKBENCH_INDEX = [
   "- `skills/`：Skills，入口 `index.json`。",
   "- `knowledge/`：知识库，入口 `index.json`。",
   "",
-  "进入目录后先读取对应管理入口。入口缺失、损坏或引用不存在时停止猜测，并报告具体目录。",
-  "",
-  "Docker Bash 在 `native-workbench/` 中只读访问本目录；Native Bash 可通过环境变量 `SUNABOT_DOCKER_WORKBENCH` 寻址独立 Docker 工作区。",
-  ""
-].join("\n");
-const DOCKER_WORKBENCH_INDEX = [
-  "# Docker 文件工作区",
-  "",
-  "本目录用于保存 Docker Bash 的计划、下载、转存文件和任务产物。",
-  "",
-  "本工作区拥有独立的配置与资料目录：",
-  "",
-  "- `selfie/`：自拍参考图，入口 `references.jsonl`。",
-  "- `emoji/`：表情，入口 `emojis.jsonl`。",
-  "- `skills/`：Skills，入口 `index.json`。",
-  "- `knowledge/`：知识库，入口 `index.json`。",
-  "",
-  "Native workbench 只读投影位于 `native-workbench/`，其中包含另一套同名目录和入口。",
-  "",
-  "进入目录后先读取当前目录的管理入口；需要同时取用两套资源时，再读取 `native-workbench/` 下的对应入口。只读投影不可修改。",
+  "进入目录后读取对应管理入口。入口缺失、损坏或引用不存在时停止猜测，并报告具体目录。",
   ""
 ].join("\n");
 const EMPTY_EXTENSION_REVISION = createHash("sha256").update("[]").digest("hex");
@@ -67,7 +48,6 @@ export function initialAgentWorkspaceFiles(
     ...fragments,
     [WORKING_MEMORY_FILE, renderWorkingMemoryMarkdown([])] as const,
     [`${AGENT_RESOURCE_LAYOUT.workbench}/index.md`, WORKBENCH_INDEX] as const,
-    [`${AGENT_RESOURCE_LAYOUT.dockerWorkbench}/index.md`, DOCKER_WORKBENCH_INDEX] as const,
     [`${AGENT_RESOURCE_LAYOUT.selfie}/references.jsonl`, ""] as const,
     [`${AGENT_RESOURCE_LAYOUT.emoji}/emojis.jsonl`, ""] as const,
     [`${AGENT_RESOURCE_LAYOUT.skills}/index.json`, `${JSON.stringify({
@@ -76,23 +56,6 @@ export function initialAgentWorkspaceFiles(
       skills: []
     }, null, 2)}\n`] as const,
     [`${AGENT_RESOURCE_LAYOUT.knowledge}/index.json`, `${JSON.stringify({
-      schemaVersion: 1,
-      ok: true,
-      root: "knowledge",
-      documents: [],
-      fileCount: 0,
-      chunkCount: 0,
-      errorCount: 0,
-      indexedAt: manifest.createdAt
-    }, null, 2)}\n`] as const,
-    [`${AGENT_RESOURCE_LAYOUT.dockerSelfie}/references.jsonl`, ""] as const,
-    [`${AGENT_RESOURCE_LAYOUT.dockerEmoji}/emojis.jsonl`, ""] as const,
-    [`${AGENT_RESOURCE_LAYOUT.dockerSkills}/index.json`, `${JSON.stringify({
-      schemaVersion: 1,
-      revision: EMPTY_EXTENSION_REVISION,
-      skills: []
-    }, null, 2)}\n`] as const,
-    [`${AGENT_RESOURCE_LAYOUT.dockerKnowledge}/index.json`, `${JSON.stringify({
       schemaVersion: 1,
       ok: true,
       root: "knowledge",

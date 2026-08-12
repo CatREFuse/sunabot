@@ -2,15 +2,15 @@
 
 ## Goal
 
-The current Agent administrator can add one image to the Docker Workbench emoji catalog and add a second image to the Docker Workbench selfie-reference catalog from a group message. Both controlled imports must succeed without Native Bash, and the Agent must confirm only the completed resource updates.
+The current Agent administrator can add one image to the canonical Workbench emoji catalog and add a second image to the canonical Workbench selfie-reference catalog from a group message. Both controlled imports must succeed without Bash, and the Agent must confirm only the completed resource updates.
 
 ## Preconditions
 
-Use a fresh isolated workspace with an enabled administrator group conversation. The Agent has separate Native and Docker Workbenches, both with `emoji/emojis.jsonl` and `selfie/references.jsonl`. The Docker Workbench is writable for the controlled resource import services, while the Native Workbench is visible inside Docker only through the read-only `native-workbench/` projection. Seed two bounded inline PNG images in the raw OneBot event.
+Use a fresh isolated workspace with an enabled administrator group conversation. The Agent has one canonical Workbench with `emoji/emojis.jsonl` and `selfie/references.jsonl`. Seed two bounded inline PNG images in the raw OneBot event.
 
 ## Mechanical review
 
-Confirm that `import_chat_emoji` and `import_chat_selfie` are both available and succeed. The emoji record and bytes must be written only below the current Agent Docker Workbench `emoji/` directory. The selfie record and bytes must be written only below the same Docker Workbench `selfie/` directory with the exact supplied note. Native Bash, generic file mutation tools and direct Native resource writes must not occur. The resulting Docker catalogs must survive a repository reload and remain independently addressable alongside the Native catalogs.
+Confirm that `import_chat_emoji` and `import_chat_selfie` are both available and succeed. The emoji record and bytes must be written only below the current Agent canonical Workbench `emoji/` directory. The selfie record and bytes must be written only below the same Workbench `selfie/` directory with the exact supplied note. Native Bash and generic file mutation tools must not occur. The resulting catalogs must survive a repository reload and remain addressable through the canonical Workbench.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
@@ -19,7 +19,7 @@ Confirm that `import_chat_emoji` and `import_chat_selfie` are both available and
   "id": "workbench-resources.admin-group-imports",
   "title": "Administrator group Workbench resource imports",
   "kind": "conversation",
-  "goal": "An administrator adds a group image to the Docker emoji catalog and another group image to the Docker selfie-reference catalog.",
+  "goal": "An administrator adds a group image to the canonical emoji catalog and another group image to the canonical selfie-reference catalog.",
   "input": {
     "actor": "admin_group",
     "accountId": "primary",
@@ -40,7 +40,7 @@ Confirm that `import_chat_emoji` and `import_chat_selfie` are both available and
         {
           "type": "text",
           "data": {
-            "text": "把第一张图用 import_chat_emoji 加入当前群聊使用的表情库，key 是“双工作区”；把第二张图用 import_chat_selfie 加入当前群聊使用的自拍参考图库，备注是“群聊新增的正面角色参考”。两项都成功后简短告诉我结果。"
+            "text": "把第一张图用 import_chat_emoji 加入当前群聊使用的表情库，key 是“群聊表情”；把第二张图用 import_chat_selfie 加入当前群聊使用的自拍参考图库，备注是“群聊新增的正面角色参考”。两项都成功后简短告诉我结果。"
           }
         },
         {
@@ -59,7 +59,7 @@ Confirm that `import_chat_emoji` and `import_chat_selfie` are both available and
           }
         }
       ],
-      "raw_message": "把第一张图用 import_chat_emoji 加入当前群聊使用的表情库，key 是“双工作区”；把第二张图用 import_chat_selfie 加入当前群聊使用的自拍参考图库，备注是“群聊新增的正面角色参考”。两项都成功后简短告诉我结果。[表情图片：表情夹具][内容图片：自拍参考夹具]"
+      "raw_message": "把第一张图用 import_chat_emoji 加入当前群聊使用的表情库，key 是“群聊表情”；把第二张图用 import_chat_selfie 加入当前群聊使用的自拍参考图库，备注是“群聊新增的正面角色参考”。两项都成功后简短告诉我结果。[表情图片：表情夹具][内容图片：自拍参考夹具]"
     }
   },
   "expected": {
@@ -76,10 +76,9 @@ Confirm that `import_chat_emoji` and `import_chat_selfie` are both available and
     "requiredAvailableTools": [
       "import_chat_emoji",
       "import_chat_selfie",
-      "docker_bash"
+      "native_bash"
     ],
     "forbiddenAvailableTools": [
-      "native_bash",
       "read_file",
       "write_file"
     ],
@@ -109,7 +108,7 @@ Confirm that `import_chat_emoji` and `import_chat_selfie` are both available and
       },
       {
         "id": "group-boundary",
-        "description": "The operation stays within the current Agent Docker Workbench resources and does not claim Native write access.",
+        "description": "The operation stays within the current Agent canonical Workbench resources and does not claim a Bash write.",
         "minimumScore": 5
       },
       {

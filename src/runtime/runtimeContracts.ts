@@ -19,7 +19,6 @@ import type { AgentPersona } from "../../services/agent/persona.js";
 import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
 import type { BashAuditInput, BashAuditResult } from "../../services/tools/bashAudit.js";
-import type { WorkspaceBashRuntimePort } from "../../services/tools/bashRuntime.js";
 import type { BashSkillRepositoryPort } from "../../services/tools/bashSkillRepository.js";
 import type { SystemConfigRuntimePort } from "../../services/tools/systemConfigTool.js";
 import type { ReplyTaskGate } from "../../services/orchestration/broadcastStormDetector.js";
@@ -229,7 +228,6 @@ export interface SunaRuntimeOptions {
   codexRunner?: CodexRunner;
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
   bashAudit?: RuntimeBashAuditPort;
-  bashRuntime?: WorkspaceBashRuntimePort;
   bashSkillRepository?: BashSkillRepositoryPort;
   systemConfig?: SystemConfigRuntimePort;
   agentExtensions?: RuntimeAgentExtensionsPort;

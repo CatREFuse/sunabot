@@ -585,7 +585,7 @@ function validateToolOverrides(input: unknown): NonNullable<BotToolSettings["ove
     const override = object(rawOverride, field);
     const extra = Object.keys(override).find((key) => key !== "enabled" && key !== "description");
     if (extra) badRequest("CONFIG_UNKNOWN_FIELD", "包含不支持的字段。", `${field}.${extra}`);
-    const enabled = name === "native_bash" || name === "docker_bash" || name === "codex" || override.enabled == null
+    const enabled = name === "native_bash" || name === "codex" || override.enabled == null
       ? undefined
       : boolean(override.enabled, `${field}.enabled`);
     let description: string | undefined;
@@ -608,15 +608,11 @@ function validateToolOverrides(input: unknown): NonNullable<BotToolSettings["ove
 function validateBash(input: unknown): BotConfig["bash"] {
   const value = object(input, "bash");
   exactKeys(value, [
-    "enabled", "adminPrivateBackend", "auditModel", "strictMode",
+    "enabled", "auditModel", "strictMode",
     "allowGroup", "adminOnly", "workspaceOnly", "blockedKeywords"
   ], "bash");
-  if (value.adminPrivateBackend !== "docker") {
-    badRequest("CONFIG_INVALID", "Bash 仅支持 Docker 隔离。", "bash.adminPrivateBackend");
-  }
   return {
     enabled: boolean(value.enabled, "bash.enabled"),
-    adminPrivateBackend: value.adminPrivateBackend,
     auditModel: requiredString(value.auditModel, "bash.auditModel", { trim: true, min: 1, max: 200 }),
     strictMode: boolean(value.strictMode, "bash.strictMode"),
     allowGroup: boolean(value.allowGroup, "bash.allowGroup"),

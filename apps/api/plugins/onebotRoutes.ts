@@ -287,11 +287,9 @@ function createNapcatLoginControl(accountId: string, webuiPort?: number) {
   const accountRoot = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, accountId);
   return new NapcatLoginControl({
     webuiConfigPath: path.join(accountRoot, "config-full", "webui.json"),
-    webuiBaseUrl: process.env.SUNABOT_RUNTIME_MODE === "docker"
-      ? `http://napcat-${accountId}:6099`
-      : typeof webuiPort === "number" && Number.isInteger(webuiPort) && webuiPort > 0
-        ? `http://127.0.0.1:${webuiPort}`
-        : undefined,
+    webuiBaseUrl: typeof webuiPort === "number" && Number.isInteger(webuiPort) && webuiPort > 0
+      ? `http://127.0.0.1:${webuiPort}`
+      : undefined,
     qrCodePath: path.join(accountRoot, "qrcode.png"),
     manualLoginMarkerPath: path.join(accountRoot, "manual-login-required"),
     runtimeEnvPath: path.join(accountRoot, "account.env")

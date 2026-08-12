@@ -1,17 +1,17 @@
 # 多 Agent 与多 QQ 信息架构
 
-版本：2026-07-13
+版本：2026-08-12（v0.3.0）
 
 ## 目标
 
-Sunabot Core 运行多个相互隔离的 Agent。每个 Agent 可以绑定多个 QQ 账号，每个 QQ 账号由独立 NapCat 容器承载。Provider、模型目录、管理员安全、运行资源限制、平台开关和公共系统提示词继续全局共用；人格、回复行为、可选系统提示词覆盖、记忆、工具覆盖、图片历史和工作目录归 Agent 所有。
+Sunabot Native Core 运行多个相互隔离的 Agent。每个 Agent 可以绑定多个 QQ 账号，每个 QQ 账号由独立 NapCat 容器承载；NapCat 是 v0.3.0 唯一 Docker 例外。Provider、模型目录、管理员安全、运行资源限制、平台开关和公共系统提示词继续全局共用；人格、回复行为、可选系统提示词覆盖、记忆、工具覆盖、图片历史和工作目录归 Agent 所有。
 
 首批 Agent 为普拉娜与阿罗娜。新增 Agent 由管理台创建，创建完成后立即拥有独立目录、默认人格、空记忆、公共系统提示词继承关系和可绑定的 QQ 账号列表。
 
 ## 运行拓扑
 
 ```text
-Sunabot Core
+Sunabot Native Core
 ├── SharedConfig
 │   ├── Provider 与模型
 │   ├── 管理员安全
@@ -80,8 +80,14 @@ workspace/
 │   │   │   ├── system-prompts/   # 仅开启覆盖后存在
 │   │   │   ├── assets/
 │   │   │   │   └── avatar.*
-│   │   │   ├── selfie/
-│   │   │   └── files/
+│   │   │   ├── workbench/        # 唯一可写工作台
+│   │   │   │   ├── index.md
+│   │   │   │   ├── selfie/references.jsonl
+│   │   │   │   ├── emoji/emojis.jsonl
+│   │   │   │   ├── skills/index.json
+│   │   │   │   └── knowledge/index.json
+│   │   │   └── extensions/
+│   │   │       └── mcp/servers.json
 │   │   └── arona/
 │   │       └── ...
 │   ├── data/
@@ -100,6 +106,8 @@ workspace/
 ```
 
 `agent.json` 是可人工维护的小型 manifest，保存名称、头像相对路径、`prompts.overrideSystem` 和 Agent 级设置。增长型数据进入各 Agent 的 SQLite。现有主库与 session queue 继续归普拉娜使用，避免搬动在线数据；新增 Agent 在自己的 `data/` 中创建双库。主库同时保存 Agent 与 QQ 账号注册关系，供 Core 在启动时发现所有 Agent。现有普拉娜目录前向补齐 manifest，不复制或重建已有记忆；公共最终提示词复制到 `business/prompts/`，人格文件与 `selfie_prompt_rewrite.json` 继续留在 Plana 工作区。
+
+每个 Agent 只有一个 canonical `workbench/`。Native Bash、Codex、聊天媒体、自拍、表情、知识库和 Skill 都从该目录寻址；Skill 与 MCP 的入口文件分别为 `workbench/skills/index.json` 和 `extensions/mcp/servers.json`。v0.2 的 `docker-workbench/` 只由 0.2→0.3 迁移器识别并合并，当前运行时和管理台不得继续创建、读取或展示它。
 
 ## 管理台结构
 
@@ -147,7 +155,7 @@ Agent 列表行只显示头像、名称、在线账号数和启用状态。详�
 | --- | --- |
 | Agent 设置 | 身份、回复行为、记忆、群聊编排、Agent 工具、命令执行 |
 | 系统设置 | Provider、模型、管理员安全、通知、OneBot listener |
-| Agent 提示词 | 六个人格文件和自拍提示词改写；可开启覆盖并编辑当前 Agent 的完整系统提示词 |
+| Agent 提示词 | 六个人格文件和自拍提示词改写；可开启覆盖并编辑当前 Agent 的完整系统提示词；导出、预览并导入 `.sunabot-soul.json` 灵魂文件 |
 | 系统提示词 | 所有 Agent 默认继承的完整系统提示词 |
 
 页面标题和保存请求始终携带明确 Agent，切换 Agent 前若有未保存内容，继续使用现有离开确认流程。
@@ -203,6 +211,9 @@ AppShell
 | `GET` | `/api/agents/:agentId/accounts/:accountId/login/status` | 登录状态 |
 | `GET/PUT` | `/api/agent-files/:id` | 当前 Agent 的人格或已开启的系统提示词覆盖 |
 | `GET/PUT` | `/api/system-prompt-files/:id` | 公共系统提示词 |
+| `GET` | `/api/agents/:agentId/soul/export` | 导出当前 Agent 灵魂文件 |
+| `POST` | `/api/agents/:agentId/soul/preview` | 校验包并预览差异与冲突 |
+| `POST` | `/api/agents/:agentId/soul/import` | 按已确认策略事务导入灵魂文件 |
 
 现有 Agent 级接口增加必填 `agentId` 查询参数或路由参数。兼容期内缺失值映射到 `plana`，新管理台不依赖该兼容行为。
 
@@ -220,5 +231,7 @@ AppShell
 - 未运行账号显示“运行”；启动请求只创建或启动目标账号的 Compose project，其他 QQ 容器保持运行。
 - 新增 Agent 后目录和 SQLite 注册信息同时创建，任一步失败时事务性回滚。
 - 全局 Token 等于各 Agent Token 之和，单 Agent 筛选不包含其他 Agent。
-- Native Core 与 Docker Core 均能连接多个独立 NapCat 容器。
+- Linux、WSL 与 macOS Native Core 均能连接多个独立 NapCat 容器，Core、Bash、MCP、Skill 和 WebFetch 不产生额外业务容器。
+- 当前 Agent 的灵魂文件可在 WebUI 与 CLI 导出、预览并导入；冲突策略明确，失败时六个人格文件保持原状。
+- Native 工具与全部资源入口只解析当前 Agent 的 canonical `workbench/`；运行时不再访问 `docker-workbench/`。
 - 管理台通过单元、E2E、视觉与浅色/深色检查。

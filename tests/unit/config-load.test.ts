@@ -281,10 +281,9 @@ describe("tool configuration", () => {
     expect(config.providers.items.map((provider) => provider.modelSource)).toEqual(["remote", "custom"]);
   });
 
-  it("defaults workspace Bash to disabled with a Docker strict backend", () => {
+  it("defaults native Bash to disabled in strict mode", () => {
     expect(defaultConfig().bot.bash).toMatchObject({
       enabled: false,
-      adminPrivateBackend: "docker",
       auditModel: "gpt-5.4-mini",
       strictMode: true
     });
@@ -292,12 +291,11 @@ describe("tool configuration", () => {
     expect(defaultConfig().bot.bash.enabled).toBe(false);
   });
 
-  it("loads the administrator private Bash backend from sparse legacy-compatible config", async () => {
+  it("loads sparse native Bash settings", async () => {
     await fs.writeFile(configPath, JSON.stringify({
       bot: {
         bash: {
           enabled: true,
-          adminPrivateBackend: "docker",
           auditModel: "gpt-5.5",
           strictMode: false
         }
@@ -308,7 +306,6 @@ describe("tool configuration", () => {
       bot: {
         bash: {
           enabled: true,
-          adminPrivateBackend: "docker",
           auditModel: "gpt-5.5",
           strictMode: false,
           allowGroup: false,
@@ -438,7 +435,7 @@ describe("tool configuration", () => {
     expect(config.bot.tools.overrides).toEqual({
       websearch: { enabled: false, description: "Search only when explicitly enabled." },
       codex: { description: "Delegate long work." },
-      docker_bash: { description: "Run workspace commands." }
+      native_bash: { description: "Run workspace commands." }
     });
     expect(config.bot.tools.codex.enabled).toBe(false);
   });

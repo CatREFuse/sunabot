@@ -5,11 +5,9 @@ import { inboundImageUrls, replaceInboundImageUrls } from "../../packages/contra
 import { isAdminSender, isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
 import { generateImgMediaHandle, type GenerateImgReferenceContext } from "../../services/tools/generateImgTool.js";
 import {
-  extractConfirmedBashApprovalId,
-  type BashExecutionBackend
+  extractConfirmedBashApprovalId
 } from "../../services/tools/bashAudit.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
-import type { WorkspaceBashRuntimePort } from "../../services/tools/bashRuntime.js";
 import type { BashSkillRepositoryPort } from "../../services/tools/bashSkillRepository.js";
 import {
   resolveConversationWorkbench,
@@ -42,7 +40,6 @@ interface RuntimeReplyContextHost extends RuntimeConfigPort {
   readonly conversationRecords: ReadonlyMap<string, ConversationRecord>;
   readonly attachmentService: Pick<AttachmentService, "cache">;
   readonly bashAudit?: RuntimeBashAuditPort;
-  readonly bashRuntime?: WorkspaceBashRuntimePort;
   readonly bashSkillRepository?: BashSkillRepositoryPort;
   adminIdentity(): AdminIdentity;
   contextMessageLimit(): number;
@@ -263,7 +260,6 @@ export async function runtime_resolveProviderBashHandle(
   incoming: ParsedIncomingMessage,
   promptOverride: string | undefined,
   capabilityResolver?: RuntimeToolCapabilityResolver,
-  backend: BashExecutionBackend = "docker",
   capability?: Readonly<ConversationCapabilityContextV1>
 ): Promise<ProviderBashOptions | undefined> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -275,7 +271,6 @@ export async function runtime_resolveProviderBashHandle(
       config,
       incoming,
       promptOverride,
-      backend,
       capability
     );
     if (!candidate || !auditPort || !capabilityResolver) return undefined;
@@ -294,7 +289,6 @@ export async function runtime_resolveProviderBashHandle(
     try {
       const capabilities = await capabilityResolver({
         workspacePath: candidate.workspacePath,
-        workspaceBashBackend: candidate.backend,
         workspaceBashAuditAvailable: true
       });
       capabilityAvailable = capabilities.workspaceBash === true;
@@ -325,8 +319,7 @@ export async function runtime_resolveProviderBashHandle(
         if (this.configEpoch !== epoch) throw new Error("BASH_AUDIT_UNAVAILABLE");
         return result;
       },
-      ...(this.bashRuntime ? { runtime: this.bashRuntime } : {}),
-      ...(candidate.backend === "native" && this.bashSkillRepository
+      ...(this.bashSkillRepository && candidate.accessMode === "admin"
         ? { skillRepository: this.bashSkillRepository }
         : {}),
       ...(candidate.confirmedApprovalId ? { confirmedApprovalId: candidate.confirmedApprovalId } : {})
@@ -341,7 +334,6 @@ function resolveProviderBashCandidate(
   config: Readonly<AppConfig>,
   incoming: ParsedIncomingMessage,
   promptOverride: string | undefined,
-  backend: BashExecutionBackend,
   capability?: Readonly<ConversationCapabilityContextV1>
 ) {
   const bash = config.bot.bash;
@@ -365,9 +357,9 @@ function resolveProviderBashCandidate(
     try {
       const plan = resolveConversationWorkbench(
         capability,
-        backend === "native" ? "bash_native" : "bash_docker"
+        "bash_native"
       );
-      if (plan.primaryBackend !== backend) return undefined;
+      if (plan.primaryBackend !== "native") return undefined;
     } catch {
       return undefined;
     }
@@ -381,7 +373,8 @@ function resolveProviderBashCandidate(
     || !isReplySenderAllowed(incoming.userId)
     || senderId !== String(incoming.userId)
     || (!webAdministratorPrivate && !oneBotConversation)
-    || (backend === "native" && !(webAdministratorPrivate || (administrator && privateConversation)))
+    || (process.platform !== "linux" && process.platform !== "darwin")
+    || (process.platform === "darwin" && !(webAdministratorPrivate || (administrator && privateConversation)))
   ) return undefined;
 
   const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
@@ -389,7 +382,7 @@ function resolveProviderBashCandidate(
   const accountId = webAdministratorPrivate ? "web-admin" : incoming.accountId!.trim();
 
   const approvalContext = Object.freeze({
-    backend,
+    backend: "native" as const,
     agentId: config.persona.defaultAgentId,
     accountId,
     transport: webAdministratorPrivate ? "web" : "onebot",
@@ -400,8 +393,10 @@ function resolveProviderBashCandidate(
   const confirmedApprovalId = extractConfirmedBashApprovalId(incoming.text);
   return Object.freeze({
     workspacePath,
-    backend,
-    accessMode: backend === "native" ? "admin" as const : "isolated" as const,
+    backend: "native" as const,
+    accessMode: webAdministratorPrivate || (administrator && privateConversation)
+      ? "admin" as const
+      : "isolated" as const,
     strictMode: bash.strictMode,
     isAdmin: administrator,
     userRequest: incoming.text,

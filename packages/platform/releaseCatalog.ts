@@ -17,12 +17,44 @@ export interface ReleaseCatalog {
   releases: readonly ReleaseRecord[];
 }
 
-export const CURRENT_RELEASE_VERSION = "0.2.0";
+export const CURRENT_RELEASE_VERSION = "0.3.0";
 
 export const RELEASE_CATALOG: ReleaseCatalog = {
   schemaVersion: 1,
   currentVersion: CURRENT_RELEASE_VERSION,
   releases: [
+    {
+      version: "0.3.0",
+      releasedAt: "2026-08-12",
+      title: "原生发行与灵魂文件",
+      summary: "核心服务、网页抓取与扩展工具统一原生运行，并提供灵魂文件迁移和离线安装。",
+      groups: [
+        {
+          title: "原生运行",
+          items: [
+            "Core、WebFetch、Bash、MCP 与 Skill Script 统一在宿主原生运行。",
+            "每个 Agent 只保留一个 Workbench，配置与资源使用同一份权威目录。",
+            "NapCat 保持独立容器运行，账号数据继续按 Agent 隔离。"
+          ]
+        },
+        {
+          title: "网页与灵魂",
+          items: [
+            "动态 WebFetch 改用 Lightpanda，无需 Chrome 或 Chromium。",
+            "管理台支持灵魂文件导出、预览和冲突保护导入。",
+            "命令行支持灵魂文件导出、检查和导入。"
+          ]
+        },
+        {
+          title: "安装与启动",
+          items: [
+            "Linux 与 WSL 发行包内置 Node.js、应用依赖、Lightpanda 与 Bubblewrap。",
+            "安装脚本完成校验、NapCat 镜像准备和原子版本切换。",
+            "首次启动在命令行设置管理员名称和密码，后续启动不再下载依赖。"
+          ]
+        }
+      ]
+    },
     {
       version: "0.2.0",
       releasedAt: "2026-07-29",

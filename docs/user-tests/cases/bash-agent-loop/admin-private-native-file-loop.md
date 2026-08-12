@@ -2,15 +2,15 @@
 
 ## Goal
 
-An administrator sends one private OneBot message and receives a verified `inventory-summary.tar.gz` produced in the Native workbench. The loop must use the strict inline file tools for the initial document, use Native Bash for the conversion and archive, and return the final archive to the same mocked conversation.
+An administrator sends one private OneBot message and receives a verified `inventory-summary.tar.gz` produced in the canonical Workbench. The loop must use the strict inline file tools for the initial document, use Native Bash for the conversion and archive, and return the final archive to the same mocked conversation.
 
 ## Preconditions
 
-Use a disposable isolated workspace whose administrator QQ is `10001`. The current Agent Native workbench must contain its normal `index.md` and must support the Native Bash approval path. `send_file` must be available for the fixture account. Do not run this case on a live workspace or real QQ transport.
+Use a disposable isolated workspace whose administrator QQ is `10001`. The current Agent canonical Workbench must contain its normal `index.md` and must support the Native Bash approval path. `send_file` must be available for the fixture account. Do not run this case on a live workspace or real QQ transport.
 
 ## Mechanical review
 
-Confirm successful `write_file`, `read_file`, `native_bash`, and `send_file` calls in that order or a causally equivalent order. Confirm the read result exactly matches the written source; Native Bash must exit successfully, run from the Native workbench, create `inventory-summary.md`, and package it with the source in `inventory-summary.tar.gz`. Inspect both regular files, compute their SHA-256 values, list the archive contents, and bind the captured asset to the private source conversation. The final user-facing reply must not disclose a host path, credentials, rendered prompt text, or tool diagnostics.
+Confirm successful `write_file`, `read_file`, `native_bash`, and `send_file` calls in that order or a causally equivalent order. Confirm the read result exactly matches the written source; Native Bash must exit successfully, run from the canonical Workbench, create `inventory-summary.md`, and package it with the source in `inventory-summary.tar.gz`. Inspect both regular files, compute their SHA-256 values, list the archive contents, and bind the captured asset to the private source conversation. The final user-facing reply must not disclose a host path, credentials, rendered prompt text, or tool diagnostics.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
@@ -19,7 +19,7 @@ Confirm successful `write_file`, `read_file`, `native_bash`, and `send_file` cal
   "id": "bash-agent-loop.admin-private-native-file-loop",
   "title": "Administrator private Native file loop",
   "kind": "conversation",
-  "goal": "An administrator receives a verified archive created through the Native workbench file loop.",
+  "goal": "An administrator receives a verified archive created through the canonical Workbench file loop.",
   "input": {
     "actor": "admin_private",
     "accountId": "primary",
@@ -45,9 +45,6 @@ Confirm successful `write_file`, `read_file`, `native_bash`, and `send_file` cal
       "read_file",
       "native_bash",
       "send_file"
-    ],
-    "forbiddenTools": [
-      "docker_bash"
     ],
     "forbiddenText": [
       "/Users/",

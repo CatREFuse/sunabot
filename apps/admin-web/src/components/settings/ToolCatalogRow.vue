@@ -42,10 +42,6 @@ const availability = computed(() => toolAvailabilityPresentation(props.tool));
               <i class="bx mr-1" :class="tool.bashEnvironments.native.available ? 'bx-check-circle' : 'bx-error-circle'" aria-hidden="true"></i>
               Native Bash {{ tool.bashEnvironments.native.available ? "可用" : "不可用" }}
             </span>
-            <span v-if="tool.bashEnvironments.docker" class="inline-state" :data-kind="tool.bashEnvironments.docker.started ? 'success' : 'error'">
-              <i class="bx mr-1" :class="tool.bashEnvironments.docker.started ? 'bx-check-circle' : 'bx-error-circle'" aria-hidden="true"></i>
-              Docker Bash {{ tool.bashEnvironments.docker.started ? "已启动" : "未启动" }}
-            </span>
           </template>
           <span v-if="availability.kind === 'runtime' && !tool.bashEnvironments" class="inline-state" data-kind="error">
             <i class="bx bx-error-circle mr-1" aria-hidden="true"></i>{{ availability.label }}

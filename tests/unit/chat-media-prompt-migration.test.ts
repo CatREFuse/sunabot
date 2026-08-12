@@ -24,7 +24,8 @@ describe("chat media system prompt contract", () => {
       expect(system.content).toContain("不得猜测");
       expect(system.content).toContain("管理员 QQ 私聊或群聊");
       expect(system.content).toContain("`emoji/emojis.jsonl`");
-      expect(system.content).toContain("管理员群聊写入 Docker Workbench");
+      expect(system.content).toContain("所有会话都写入当前 Agent 的唯一 Workbench");
+      expect(system.content).not.toContain("docker-workbench");
     }
   );
 
@@ -84,7 +85,7 @@ describe("chat media system prompt contract", () => {
 
     expect(content).toContain("管理员前置规则");
     expect(content).toContain("管理员后置规则");
-    expect(content).toContain('<chat_media_export_contract version="4">');
+    expect(content).toContain('<chat_media_export_contract version="5">');
     expect(content).not.toContain('<chat_media_export_contract version="1">');
     expect(migrateConversationChatMediaTemplate(migrated)).toBe(migrated);
   });

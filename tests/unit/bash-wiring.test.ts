@@ -64,7 +64,7 @@ describe("workspace Bash runtime wiring", () => {
     temporaryRoots = [];
   });
 
-  it("binds an administrator OneBot private call to Docker Bash and the current approval context", async () => {
+  it("binds an administrator OneBot private call to native_bash and the current approval context", async () => {
     const harness = createRuntimeHarness();
     const incoming = adminPrivateIncoming(harness.config, {
       accountId: "secondary",
@@ -75,12 +75,12 @@ describe("workspace Bash runtime wiring", () => {
 
     expect(bash).toMatchObject({
       enabled: true,
-      backend: "docker",
-      accessMode: "isolated",
+      backend: "native",
+      accessMode: "admin",
       strictMode: true,
       confirmedApprovalId: "bash-1234567890abcdef12345678",
       approvalContext: {
-        backend: "docker",
+        backend: "native",
         agentId: "plana",
         accountId: "secondary",
         transport: "onebot",
@@ -90,7 +90,6 @@ describe("workspace Bash runtime wiring", () => {
     });
     expect(harness.capabilityProbe).toHaveBeenCalledWith({
       workspacePath: harness.config.persona.agentWorkspace,
-      workspaceBashBackend: "docker",
       workspaceBashAuditAvailable: true
     });
     expect(Object.isFrozen(bash)).toBe(true);
@@ -102,8 +101,8 @@ describe("workspace Bash runtime wiring", () => {
 
     const auditInput: BashAuditInput = {
       command: "pwd",
-      backend: "docker",
-      accessMode: "isolated",
+      backend: "native",
+      accessMode: "admin",
       strictMode: true,
       isAdmin: false,
       userRequest: "forged request"
@@ -118,29 +117,19 @@ describe("workspace Bash runtime wiring", () => {
     harness.close();
   });
 
-  it("binds native_bash only for an administrator private conversation", async () => {
+  it("uses only the native backend for an administrator private conversation", async () => {
     const harness = createRuntimeHarness();
     const admin = adminPrivateIncoming(harness.config);
 
-    await expect(harness.runtime.resolveProviderBashHandle(admin, undefined, "native")).resolves.toMatchObject({
+    await expect(harness.runtime.resolveProviderBashHandle(admin, undefined)).resolves.toMatchObject({
       backend: "native",
       accessMode: "admin",
       approvalContext: { backend: "native", transport: "onebot", userId: "171419991" }
     });
-    await expect(harness.runtime.resolveProviderBashHandle(
-      adminPrivateIncoming(harness.config, { userId: 20002, senderId: "20002" }),
-      undefined,
-      "native"
-    )).resolves.toBeUndefined();
-    await expect(harness.runtime.resolveProviderBashHandle(
-      adminGroupIncoming(harness.config),
-      undefined,
-      "native"
-    )).resolves.toBeUndefined();
     harness.close();
   });
 
-  it("binds the managed Skill repository only to the Native Bash handle", async () => {
+  it("binds the managed Skill repository to the native_bash handle", async () => {
     const skillRepository = {
       install: vi.fn(),
       review: vi.fn(),
@@ -150,17 +139,13 @@ describe("workspace Bash runtime wiring", () => {
     const harness = createRuntimeHarness(undefined, skillRepository);
     const incoming = adminPrivateIncoming(harness.config);
 
-    const [native, docker] = await Promise.all([
-      harness.runtime.resolveProviderBashHandle(incoming, undefined, "native"),
-      harness.runtime.resolveProviderBashHandle(incoming, undefined, "docker")
-    ]);
+    const native = await harness.runtime.resolveProviderBashHandle(incoming, undefined);
 
     expect(native?.skillRepository).toBe(skillRepository);
-    expect(docker).not.toHaveProperty("skillRepository");
     harness.close();
   });
 
-  it("gives authenticated administrator Web Chat both Native and Docker Bash handles", async () => {
+  it("gives authenticated administrator Web Chat one native_bash handle", async () => {
     const harness = createRuntimeHarness();
     const incoming = adminPrivateIncoming(harness.config, {
       transport: "web",
@@ -169,19 +154,11 @@ describe("workspace Bash runtime wiring", () => {
       agentId: undefined
     });
 
-    const [native, docker] = await Promise.all([
-      harness.runtime.resolveProviderBashHandle(incoming, undefined, "native"),
-      harness.runtime.resolveProviderBashHandle(incoming, undefined, "docker")
-    ]);
+    const native = await harness.runtime.resolveProviderBashHandle(incoming, undefined);
     expect(native).toMatchObject({
       backend: "native",
       accessMode: "admin",
       approvalContext: { backend: "native", accountId: "web-admin", transport: "web", conversationId: "web:admin" }
-    });
-    expect(docker).toMatchObject({
-      backend: "docker",
-      accessMode: "isolated",
-      approvalContext: { backend: "docker", accountId: "web-admin", transport: "web", conversationId: "web:admin" }
     });
     harness.close();
   });
@@ -189,20 +166,27 @@ describe("workspace Bash runtime wiring", () => {
   it.each([
     ["private", adminPrivateIncoming] as const,
     ["group", adminGroupIncoming] as const
-  ])("routes an ordinary QQ %s conversation to isolated Docker Bash", async (_scope, incomingFor) => {
+  ])("routes an ordinary QQ %s conversation through platform-scoped native_bash", async (_scope, incomingFor) => {
     const harness = createRuntimeHarness();
     const incoming = incomingFor(harness.config, { userId: 20002, senderId: "20002" });
 
     const bash = await harness.runtime.resolveProviderBashHandle(incoming, undefined);
 
+    if (process.platform !== "linux") {
+      expect(bash).toBeUndefined();
+      expect(harness.auditPort.available).not.toHaveBeenCalled();
+      expect(harness.capabilityProbe).not.toHaveBeenCalled();
+      harness.close();
+      return;
+    }
     expect(bash).toMatchObject({
-      backend: "docker",
+      backend: "native",
       accessMode: "isolated",
       strictMode: true,
       isAdmin: false,
       userRequest: incoming.text,
       approvalContext: {
-        backend: "docker",
+        backend: "native",
         agentId: "plana",
         accountId: "primary",
         transport: "onebot",
@@ -211,12 +195,11 @@ describe("workspace Bash runtime wiring", () => {
     });
     expect(harness.auditPort.available).toHaveBeenCalledOnce();
     expect(harness.capabilityProbe).toHaveBeenCalledWith(expect.objectContaining({
-      workspaceBashBackend: "docker",
       workspaceBashAuditAvailable: true
     }));
     await expect(bash!.audit({
       command: "find /workbench -maxdepth 2 -type f",
-      backend: "docker",
+      backend: "native",
       accessMode: "isolated",
       strictMode: true,
       isAdmin: true,
@@ -229,18 +212,21 @@ describe("workspace Bash runtime wiring", () => {
     harness.close();
   });
 
-  it("routes an administrator QQ group conversation to audited isolated Docker Bash", async () => {
+  it("routes an administrator QQ group conversation according to the native platform boundary", async () => {
     const harness = createRuntimeHarness();
 
     const bash = await harness.runtime.resolveProviderBashHandle(adminGroupIncoming(harness.config), undefined);
 
-    expect(bash).toMatchObject({ backend: "docker", accessMode: "isolated" });
-    expect(harness.capabilityProbe).toHaveBeenCalledWith(expect.objectContaining({
-      workspaceBashBackend: "docker"
-    }));
+    if (process.platform !== "linux") {
+      expect(bash).toBeUndefined();
+      expect(harness.capabilityProbe).not.toHaveBeenCalled();
+      harness.close();
+      return;
+    }
+    expect(bash).toMatchObject({ backend: "native", accessMode: "isolated" });
     await expect(bash!.audit({
       command: "pwd",
-      backend: "docker",
+      backend: "native",
       accessMode: "isolated",
       strictMode: true,
       isAdmin: true,
@@ -250,7 +236,7 @@ describe("workspace Bash runtime wiring", () => {
     harness.close();
   });
 
-  it("routes a valid ordinary QQ conversation to Docker when administrator QQ is not configured", async () => {
+  it("routes a valid ordinary QQ conversation through isolated native_bash on Linux", async () => {
     const harness = createRuntimeHarness();
     harness.config.bot.adminQq = "";
 
@@ -259,10 +245,13 @@ describe("workspace Bash runtime wiring", () => {
       undefined
     );
 
-    expect(bash).toMatchObject({ backend: "docker", accessMode: "isolated" });
-    expect(harness.capabilityProbe).toHaveBeenCalledWith(expect.objectContaining({
-      workspaceBashBackend: "docker"
-    }));
+    if (process.platform === "linux") {
+      expect(bash).toMatchObject({ backend: "native", accessMode: "isolated" });
+      expect(harness.capabilityProbe).toHaveBeenCalledOnce();
+    } else {
+      expect(bash).toBeUndefined();
+      expect(harness.capabilityProbe).not.toHaveBeenCalled();
+    }
     harness.close();
   });
 
@@ -284,13 +273,13 @@ describe("workspace Bash runtime wiring", () => {
     const executor = new RegistryProviderToolExecutor();
     const staleDefinitions = [{ type: "function", name: "docker_bash", parameters: {}, strict: true }];
     const [output] = await executor.execute(
-      [bashCall({ command: "pwd", timeoutMs: null })],
-      { bash: { ...(bash ? { docker: bash } : {}) } } as ProviderCompleteOptions,
+      [legacyDockerBashCall({ command: "pwd", timeoutMs: null })],
+      {} as ProviderCompleteOptions,
       staleDefinitions
     );
     expect(JSON.parse(String(output?.output))).toEqual({
       ok: false,
-      error: "Tool docker_bash is unavailable."
+      error: "Unsupported tool: docker_bash"
     });
     expect(runWorkspaceBashMock).not.toHaveBeenCalled();
     harness.close();
@@ -332,27 +321,20 @@ describe("workspace Bash runtime wiring", () => {
     runtime.close();
   });
 
-  it.each(["native", "docker"] as const)(
-    "reports the selected %s isolation backend when its capability probe fails",
-    async (backend) => {
-      const capabilityProbe = vi.fn(async () => ({ codex: true, workspaceBash: false }));
-      const harness = createRuntimeHarness(capabilityProbe);
-      harness.config.bot.bash.adminPrivateBackend = backend;
+  it("reports native isolation unavailable when its capability probe fails", async () => {
+    const capabilityProbe = vi.fn(async () => ({ codex: true, workspaceBash: false }));
+    const harness = createRuntimeHarness(capabilityProbe);
 
-      await expect(harness.runtime.resolveToolCapabilities(backend)).resolves.toEqual({
-        workspaceBash: false,
-        workspaceBashReason: backend === "native"
-          ? "BASH_NATIVE_ISOLATION_UNAVAILABLE"
-          : "BASH_DOCKER_ISOLATION_UNAVAILABLE",
-        codex: true
-      });
-      expect(capabilityProbe).toHaveBeenCalledWith(expect.objectContaining({
-        workspaceBashBackend: backend,
-        workspaceBashAuditAvailable: true
-      }));
-      harness.close();
-    }
-  );
+    await expect(harness.runtime.resolveToolCapabilities()).resolves.toEqual({
+      workspaceBash: false,
+      workspaceBashReason: "BASH_NATIVE_ISOLATION_UNAVAILABLE",
+      codex: true
+    });
+    expect(capabilityProbe).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceBashAuditAvailable: true
+    }));
+    harness.close();
+  });
 
   it("retries runtime capabilities with one stable backend and workspace snapshot", async () => {
     const firstProbe = deferred<{ codex: boolean; workspaceBash: boolean }>();
@@ -371,32 +353,27 @@ describe("workspace Bash runtime wiring", () => {
 
     await expect(capabilitiesPromise).resolves.toEqual({
       workspaceBash: false,
-      workspaceBashReason: "BASH_DOCKER_ISOLATION_UNAVAILABLE",
+      workspaceBashReason: "BASH_NATIVE_ISOLATION_UNAVAILABLE",
       codex: true
     });
     expect(capabilityProbe.mock.calls.map(([context]) => context)).toEqual([
       expect.objectContaining({
-        workspacePath: harness.config.persona.agentWorkspace,
-        workspaceBashBackend: "docker"
+        workspacePath: harness.config.persona.agentWorkspace
       }),
       expect.objectContaining({
-        workspacePath: "/tmp/sunabot-bash-wiring-capability-b",
-        workspaceBashBackend: "docker"
+        workspacePath: "/tmp/sunabot-bash-wiring-capability-b"
       })
     ]);
     expect(vi.mocked(harness.auditPort.available).mock.calls.map(([config]) => ({
       workspacePath: config.persona.agentWorkspace,
-      backend: config.bot.bash.adminPrivateBackend,
       frozen: Object.isFrozen(config) && Object.isFrozen(config.bot.bash)
     }))).toEqual([
       {
         workspacePath: harness.config.persona.agentWorkspace,
-        backend: "docker",
         frozen: true
       },
       {
         workspacePath: "/tmp/sunabot-bash-wiring-capability-b",
-        backend: "docker",
         frozen: true
       }
     ]);
@@ -427,7 +404,7 @@ describe("workspace Bash runtime wiring", () => {
 
     await expect(capabilitiesPromise).resolves.toEqual({
       workspaceBash: false,
-      workspaceBashReason: "BASH_DOCKER_ISOLATION_UNAVAILABLE",
+      workspaceBashReason: "BASH_NATIVE_ISOLATION_UNAVAILABLE",
       codex: false
     });
     expect(capabilityProbe).toHaveBeenCalledTimes(2);
@@ -456,17 +433,15 @@ describe("workspace Bash runtime wiring", () => {
     firstProbe.resolve({ codex: true, workspaceBash: true });
 
     await expect(handlePromise).resolves.toMatchObject({
-      backend: "docker",
+      backend: "native",
       workspacePath: "/tmp/sunabot-bash-wiring-runtime-b"
     });
     expect(capabilityProbe.mock.calls.map(([context]) => context)).toEqual([
       expect.objectContaining({
-        workspacePath: harness.config.persona.agentWorkspace,
-        workspaceBashBackend: "docker"
+        workspacePath: harness.config.persona.agentWorkspace
       }),
       expect.objectContaining({
-        workspacePath: "/tmp/sunabot-bash-wiring-runtime-b",
-        workspaceBashBackend: "docker"
+        workspacePath: "/tmp/sunabot-bash-wiring-runtime-b"
       })
     ]);
     expect(harness.auditPort.available).toHaveBeenCalledTimes(2);
@@ -496,7 +471,7 @@ describe("workspace Bash runtime wiring", () => {
     expect(epochB).toBeGreaterThan(epochA);
     expect(restoredEpochA).toBeGreaterThan(epochB);
     expect(capabilityProbe).toHaveBeenCalledTimes(2);
-    expect(handle).toMatchObject({ backend: "docker" });
+    expect(handle).toMatchObject({ backend: "native" });
     expect(handle?.isCurrent()).toBe(true);
     harness.close();
   });
@@ -540,7 +515,7 @@ describe("workspace Bash runtime wiring", () => {
       undefined
     );
     const executor = new RegistryProviderToolExecutor();
-    const options = { bash: { ...(handle ? { docker: handle } : {}) } } satisfies ProviderCompleteOptions;
+    const options = { ...(handle ? { bash: handle } : {}) } satisfies ProviderCompleteOptions;
     const definitions = executor.resolveDefinitions(options);
     vi.mocked(harness.auditPort.run).mockClear();
 
@@ -551,8 +526,8 @@ describe("workspace Bash runtime wiring", () => {
     expect(handle?.isCurrent()).toBe(false);
     await expect(handle!.audit({
       command: "pwd",
-      backend: "docker",
-      accessMode: "isolated",
+      backend: "native",
+      accessMode: "admin",
       strictMode: true,
       isAdmin: true,
       userRequest: "pwd"
@@ -835,9 +810,16 @@ const negativeCases: Array<{
 function bashCall(args: Record<string, unknown>) {
   return {
     type: "function_call" as const,
-    name: "docker_bash",
+    name: "native_bash",
     call_id: "call-bash",
     arguments: JSON.stringify(args)
+  };
+}
+
+function legacyDockerBashCall(args: Record<string, unknown>) {
+  return {
+    ...bashCall(args),
+    name: "docker_bash"
   };
 }
 

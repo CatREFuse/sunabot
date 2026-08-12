@@ -140,8 +140,9 @@ describe("tool call timeout", () => {
     expect(processState.calls[0]?.killSignal).toBe("SIGKILL");
     expect(processState.calls[0]?.file).toBe("/fixture/prlimit");
     expect(processState.calls[0]?.args).toEqual(expect.arrayContaining([
-      "--nproc=64:64", "/fixture/bwrap", "--die-with-parent", "--tmpfs", "/", "--cap-drop", "ALL", "--unshare-net"
+      "--nproc=64:64", "/fixture/bwrap", "--die-with-parent", "--tmpfs", "/", "--cap-drop", "ALL"
     ]));
+    expect(processState.calls[0]?.args).not.toContain("--unshare-net");
     expect(processState.calls[0]?.args).toEqual(expect.arrayContaining([
       "--bind", workbenchRoot, "/workbench", "--chdir", "/workbench",
       "--setenv", "HOME", "/workbench", "--setenv", "PWD", "/workbench",
@@ -168,7 +169,6 @@ describe("tool call timeout", () => {
       audit,
       sandbox: {
         platform: "darwin",
-        runtimeMode: "macos",
         effectiveUid: 501,
         access: async () => undefined,
         probe
@@ -185,7 +185,6 @@ describe("tool call timeout", () => {
       signal: expect.any(AbortSignal)
     });
     const workbenchRoot = await fs.realpath(path.join(temporaryRoot, "workbench"));
-    const dockerWorkbenchRoot = await fs.realpath(path.join(temporaryRoot, "docker-workbench"));
     const skillsRoot = await fs.realpath(path.join(temporaryRoot, "workbench/skills"));
     const mcpRoot = await fs.realpath(path.join(temporaryRoot, "extensions/mcp"));
     expect(probe).toHaveBeenCalledWith("/bin/bash", ["--noprofile", "--norc", "-lc", ":"]);
@@ -199,12 +198,9 @@ describe("tool call timeout", () => {
         HOME: workbenchRoot,
         PWD: workbenchRoot,
         SUNABOT_SKILLS: skillsRoot,
-        SUNABOT_MCP_CONFIG: mcpRoot,
-        SUNABOT_DOCKER_WORKBENCH: dockerWorkbenchRoot,
-        SUNABOT_NATIVE_WORKBENCH: workbenchRoot
+        SUNABOT_MCP_CONFIG: mcpRoot
       }
     });
-    expect(processState.calls[0]?.env).not.toHaveProperty("DOCKER_HOST");
     expect(result).toMatchObject({
       ok: true,
       backend: "native",
@@ -212,45 +208,6 @@ describe("tool call timeout", () => {
       cwd: workbenchRoot,
       stdout: `${workbenchRoot}\n`
     });
-  });
-
-  it("treats the same Agent Docker workbench as a writable Native Bash boundary", async () => {
-    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-native-dual-workbench-"));
-    await fs.mkdir(path.join(temporaryRoot, "docker-workbench"), { recursive: true });
-    const dockerWorkbenchRoot = await fs.realpath(path.join(temporaryRoot, "docker-workbench"));
-    const target = path.join(dockerWorkbenchRoot, "result.txt");
-    const audit = async () => ({
-      decision: "allow" as const,
-      risk: "medium" as const,
-      outsideWorkbench: true,
-      outsideAccesses: [{ path: target, access: "write" as const }],
-      violations: [],
-      summary: "same Agent Docker workbench write"
-    });
-
-    const result = await runWorkspaceBash({
-      command: `touch "${target}"`,
-      timeoutMs: null
-    }, temporaryRoot, {
-      backend: "native",
-      accessMode: "admin",
-      audit,
-      sandbox: {
-        platform: "darwin",
-        runtimeMode: "macos",
-        effectiveUid: 501,
-        access: async () => undefined,
-        probe: async () => undefined
-      }
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      backend: "native"
-    });
-    expect(result.approvalRequired).toBeUndefined();
-    expect(processState.calls).toHaveLength(1);
-    expect(processState.calls[0]?.env?.SUNABOT_DOCKER_WORKBENCH).toBe(dockerWorkbenchRoot);
   });
 
   it("does not execute plain Bash when isolation is unavailable", async () => {
@@ -262,7 +219,7 @@ describe("tool call timeout", () => {
         platform: "linux",
         effectiveUid: 1_000,
         access: async () => {
-          throw Object.assign(new Error("unix:///Users/alice/.docker/run/docker.sock /outside/secret"), { code: "ENOENT" });
+          throw Object.assign(new Error("missing /Users/alice/private/runtime /outside/secret"), { code: "ENOENT" });
         }
       }
     });
@@ -278,7 +235,7 @@ describe("tool call timeout", () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-audit-"));
 
     const result = await runWorkspaceBash({ command: "echo must-not-run", timeoutMs: null }, temporaryRoot, {
-      audit: async () => { throw new Error("DOCKER_HOST=unix:///Users/alice/.docker/run/docker.sock"); }
+      audit: async () => { throw new Error("private runtime diagnostic at /Users/alice/private"); }
     });
 
     expect(result.stderr).toContain("BASH_AUDIT_UNAVAILABLE");
@@ -315,26 +272,20 @@ describe("tool call timeout", () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-"));
 
     const result = await runWorkspaceBash({ command: "ls -la", timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
+      backend: "native",
       accessMode: "restricted",
       audit: allowedAudit,
       sandbox: {
         platform: "darwin",
-        runtimeMode: "native",
         effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
         access: async () => undefined,
         probe: async () => undefined
       }
     });
 
     expect(result.ok).toBe(true);
-    expect(processState.calls[0]?.file).toBe("/fixture/docker");
-    expect(processState.calls[0]?.args).toEqual(expect.arrayContaining([
-      "--pull", "never", "--entrypoint", "/usr/bin/env", "sunabot-bash:test", "-i"
-    ]));
-    expect(processState.calls[0]?.args.slice(-2)).toEqual(["/usr/bin/ls", "-la"]);
+    expect(processState.calls[0]?.file).toBe("/usr/bin/ls");
+    expect(processState.calls[0]?.args).toEqual(["-la"]);
     expect(processState.calls[0]?.args).not.toContain("-lc");
   });
 
@@ -346,7 +297,7 @@ describe("tool call timeout", () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-spoof-"));
 
     const result = await runWorkspaceBash({ command, timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
+      backend: "native",
       accessMode: "restricted",
       audit: allowedAudit
     });
@@ -365,7 +316,7 @@ describe("tool call timeout", () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-stdin-mode-"));
 
     const result = await runWorkspaceBash({ command, timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
+      backend: "native",
       accessMode: "restricted",
       audit: allowedAudit
     });
@@ -381,24 +332,20 @@ describe("tool call timeout", () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-mkdir-terminator-"));
 
     const result = await runWorkspaceBash({ command, timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
+      backend: "native",
       accessMode: "restricted",
       audit: allowedAudit,
       sandbox: {
         platform: "darwin",
-        runtimeMode: "native",
         effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
         access: async () => undefined,
         probe: async () => undefined
       }
     });
 
     expect(result.ok).toBe(true);
-    expect(processState.calls[0]?.args).toEqual(expect.arrayContaining([
-      "/usr/bin/mkdir", "--mode=700", "--"
-    ]));
+    expect(processState.calls[0]?.file).toBe("/usr/bin/mkdir");
+    expect(processState.calls[0]?.args).toEqual(expect.arrayContaining(["--mode=700", "--"]));
   });
 
   it.each([
@@ -409,7 +356,7 @@ describe("tool call timeout", () => {
     "rm leak"
   ])("refuses a restricted operand symlink before execution: %s", async (command) => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-link-"));
-    const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
+    const workbenchRoot = path.join(temporaryRoot, "workbench");
     const outsideRoot = await makeSecureScratch("restricted-link-outside");
     const outsideFile = path.join(outsideRoot, "secret");
     await fs.writeFile(outsideFile, "secret");
@@ -417,7 +364,7 @@ describe("tool call timeout", () => {
     await fs.symlink(outsideFile, path.join(workbenchRoot, "leak"));
 
     const result = await runWorkspaceBash({ command, timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
+      backend: "native",
       accessMode: "restricted",
       audit: allowedAudit
     });
@@ -430,7 +377,7 @@ describe("tool call timeout", () => {
     "refuses a restricted hardlink operand before read, write, or delete: %s",
     async (command) => {
       temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-hardlink-"));
-      const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
+      const workbenchRoot = path.join(temporaryRoot, "workbench");
       const outsideRoot = await makeSecureScratch("restricted-hardlink-outside");
       const outsideFile = path.join(outsideRoot, "secret");
       await fs.writeFile(outsideFile, "secret");
@@ -438,7 +385,7 @@ describe("tool call timeout", () => {
       await fs.link(outsideFile, path.join(workbenchRoot, "leak"));
 
       const result = await runWorkspaceBash({ command, timeoutMs: null }, temporaryRoot, {
-        backend: "docker",
+        backend: "native",
         accessMode: "restricted",
         audit: allowedAudit
       });
@@ -452,7 +399,7 @@ describe("tool call timeout", () => {
     "refuses a restricted intermediate symlink: %s",
     async (command) => {
       temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-parent-link-"));
-      const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
+      const workbenchRoot = path.join(temporaryRoot, "workbench");
       const outsideRoot = await makeSecureScratch("restricted-parent-outside");
       await fs.writeFile(path.join(outsideRoot, "secret"), "secret");
       await fs.mkdir(workbenchRoot);
@@ -460,7 +407,7 @@ describe("tool call timeout", () => {
       await fs.symlink(outsideRoot, path.join(workbenchRoot, "linked"));
 
       const result = await runWorkspaceBash({ command, timeoutMs: null }, temporaryRoot, {
-        backend: "docker",
+        backend: "native",
         accessMode: "restricted",
         audit: allowedAudit
       });
@@ -474,14 +421,14 @@ describe("tool call timeout", () => {
     "refuses a restricted path with a group/world-writable %s directory",
     async (kind) => {
       temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-mode-"));
-      const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
+      const workbenchRoot = path.join(temporaryRoot, "workbench");
       const sharedRoot = path.join(workbenchRoot, "shared");
       await fs.mkdir(sharedRoot, { recursive: true });
       await fs.writeFile(path.join(sharedRoot, "report.txt"), "safe");
       await fs.chmod(kind === "workbench" ? workbenchRoot : sharedRoot, 0o777);
 
       const result = await runWorkspaceBash({ command: "cat shared/report.txt", timeoutMs: null }, temporaryRoot, {
-        backend: "docker",
+        backend: "native",
         accessMode: "restricted",
         audit: allowedAudit
       });
@@ -493,14 +440,14 @@ describe("tool call timeout", () => {
 
   it("refuses a restricted path owned by a different Core uid", async () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-owner-"));
-    const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
+    const workbenchRoot = path.join(temporaryRoot, "workbench");
     await fs.mkdir(workbenchRoot);
     await fs.writeFile(path.join(workbenchRoot, "report.txt"), "safe");
     const currentUid = typeof process.getuid === "function" ? process.getuid() : 1_000;
     const getuid = vi.spyOn(process, "getuid").mockReturnValue(currentUid + 1);
     try {
       const result = await runWorkspaceBash({ command: "cat report.txt", timeoutMs: null }, temporaryRoot, {
-        backend: "docker",
+        backend: "native",
         accessMode: "restricted",
         audit: allowedAudit
       });
@@ -514,7 +461,7 @@ describe("tool call timeout", () => {
 
   it("revalidates restricted operand identity after the sandbox capability probe", async () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-race-"));
-    const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
+    const workbenchRoot = path.join(temporaryRoot, "workbench");
     const reportPath = path.join(workbenchRoot, "report.txt");
     const outsideRoot = await makeSecureScratch("restricted-race-outside");
     const outsideFile = path.join(outsideRoot, "secret");
@@ -523,15 +470,12 @@ describe("tool call timeout", () => {
     await fs.writeFile(reportPath, "safe");
 
     const result = await runWorkspaceBash({ command: "cat report.txt", timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
+      backend: "native",
       accessMode: "restricted",
       audit: allowedAudit,
       sandbox: {
         platform: "darwin",
-        runtimeMode: "native",
         effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
         access: async () => undefined,
         probe: async () => {
           await fs.rename(reportPath, `${reportPath}.old`);
@@ -546,21 +490,18 @@ describe("tool call timeout", () => {
 
   it("revalidates restricted directory ownership and mode after the sandbox probe", async () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-mode-race-"));
-    const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
+    const workbenchRoot = path.join(temporaryRoot, "workbench");
     const sharedRoot = path.join(workbenchRoot, "shared");
     await fs.mkdir(sharedRoot, { recursive: true });
     await fs.writeFile(path.join(sharedRoot, "report.txt"), "safe");
 
     const result = await runWorkspaceBash({ command: "cat shared/report.txt", timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
+      backend: "native",
       accessMode: "restricted",
       audit: allowedAudit,
       sandbox: {
         platform: "darwin",
-        runtimeMode: "native",
         effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
         access: async () => undefined,
         probe: async () => { await fs.chmod(sharedRoot, 0o777); }
       }
@@ -849,91 +790,19 @@ describe("tool call timeout", () => {
     expect(processState.calls).toHaveLength(0);
   });
 
-  it("refuses execution when the addressable Docker workbench identity changes after audit", async () => {
-    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-addressable-workbench-change-"));
-    const dockerWorkbenchRoot = path.join(temporaryRoot, "docker-workbench");
-    await fs.mkdir(dockerWorkbenchRoot);
-    const audit = async () => {
-      await fs.rename(dockerWorkbenchRoot, `${dockerWorkbenchRoot}-old`);
-      await fs.mkdir(dockerWorkbenchRoot);
-      return allowedAudit();
-    };
-
-    const result = await runWorkspaceBash({ command: "pwd", timeoutMs: null }, temporaryRoot, { audit });
-
-    expect(result).toMatchObject({ ok: false, cwd: "/workbench" });
-    expect(result.stderr).toContain("BASH_WORKBENCH_CHANGED");
-    expect(JSON.stringify(result)).not.toContain(temporaryRoot);
-    expect(processState.calls).toHaveLength(0);
-  });
-
-  it.each([
-    Object.assign(new Error("timed out"), { killed: true, signal: "SIGTERM" }),
-    Object.assign(new Error("stdout maxBuffer length exceeded"), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }),
-    Object.assign(new Error("aborted"), { signal: "SIGKILL" })
-  ])("force-removes a named Docker container after execution error: %s", async (executionError) => {
-    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-docker-cleanup-"));
-    processState.errors = [executionError, null];
-
-    const result = await runWorkspaceBash({ command: "echo ok", timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
-      accessMode: "admin",
-      audit: allowedAudit,
-      sandbox: {
-        platform: "darwin",
-        runtimeMode: "native",
-        effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
-        dockerEnvironment: {
-          PATH: "/fixture/bin",
-          HOME: "/fixture/home",
-          DOCKER_HOST: "unix:///fixture/docker.sock",
-          SUNABOT_SECRET: "must-not-leak"
-        },
-        access: async () => undefined,
-        probe: async () => undefined
-      }
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result).toMatchObject({ timedOut: false, cleanupAttempted: true, cleanupSucceeded: true });
-    expect(result.stderr).toContain("BASH_EXECUTION_FAILED");
-    expect(JSON.stringify(result)).not.toContain("docker.sock");
-    expect(processState.calls).toHaveLength(2);
-    const containerName = processState.calls[0]?.args[processState.calls[0]?.args.indexOf("--name") + 1];
-    expect(containerName).toMatch(/^sunabot-bash-[a-f0-9]{32}$/);
-    expect(processState.calls[1]).toMatchObject({
-      file: "/fixture/docker",
-      args: ["rm", "-f", containerName]
-    });
-    expect(processState.calls[0]?.env).toEqual(processState.calls[1]?.env);
-    expect(processState.calls[0]?.killSignal).toBe("SIGKILL");
-    expect(processState.calls[1]?.killSignal).toBe("SIGKILL");
-    expect(processState.calls[1]?.env).toMatchObject({
-      PATH: "/fixture/bin",
-      HOME: "/fixture/home",
-      DOCKER_HOST: "unix:///fixture/docker.sock"
-    });
-    expect(processState.calls[1]?.env).not.toHaveProperty("SUNABOT_SECRET");
-  });
-
-  it("SIGKILLs an attached Docker launcher on abort and cleans it without waiting for its callback", async () => {
-    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-docker-abort-"));
+  it("SIGKILLs an attached native Bash process on abort without waiting for its callback", async () => {
+    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-native-abort-"));
     const controller = new AbortController();
-    processState.suppressCallbacks = [true, false];
+    processState.suppressCallbacks = [true];
 
     const pending = runWorkspaceBash({ command: "echo ok", timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
+      backend: "native",
       accessMode: "admin",
       audit: allowedAudit,
       abortSignal: controller.signal,
       sandbox: {
         platform: "darwin",
-        runtimeMode: "native",
         effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
         access: async () => undefined,
         probe: async () => undefined
       }
@@ -948,98 +817,26 @@ describe("tool call timeout", () => {
     expect(result).toMatchObject({
       ok: false,
       timedOut: false,
-      signal: "SIGKILL",
-      cleanupAttempted: true,
-      cleanupSucceeded: true
+      signal: "SIGKILL"
     });
     expect(result.stderr).toContain("BASH_EXECUTION_ABORTED");
-    const containerName = processState.calls[0]?.args[processState.calls[0]?.args.indexOf("--name") + 1];
-    expect(processState.calls[1]).toMatchObject({ args: ["rm", "-f", containerName] });
+    expect(processState.calls).toHaveLength(1);
   });
 
-  it("uses the injected Docker runtime without a per-command capability container", async () => {
-    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-docker-runtime-"));
-    const probe = vi.fn(async () => undefined);
-    const execute = vi.fn(async () => ({
-      ok: true,
-      exitCode: 0,
-      signal: null,
-      timedOut: false,
-      stdout: "ok",
-      stderr: "",
-      cleanupAttempted: true,
-      cleanupSucceeded: true
-    }));
-
-    const result = await runWorkspaceBash({ command: "printf ok", timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
-      accessMode: "isolated",
-      audit: allowedAudit,
-      runtime: { capability: vi.fn(async () => ({ available: true })), execute },
-      sandbox: {
-        platform: "darwin",
-        runtimeMode: "native",
-        effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
-        access: async () => undefined,
-        probe
-      }
-    });
-
-    expect(result).toMatchObject({ ok: true, stdout: "ok", cleanupSucceeded: true });
-    expect(probe).not.toHaveBeenCalled();
-    expect(processState.calls).toHaveLength(0);
-    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
-      execution: { kind: "shell", command: "printf ok" },
-      image: "sunabot-bash:test",
-      timeoutMs: WORKSPACE_BASH_EXECUTION_TIMEOUT_MS
-    }));
-  });
-
-  it("hard-stops a Docker capability probe whose launcher callback never returns", async () => {
+  it("uses its own deadline as the only timeout source for native Bubblewrap", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-docker-probe-timeout-"));
-    processState.suppressCallbacks = [true, false];
-
-    const pending = runWorkspaceBash({ command: "printf must-not-run", timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
-      accessMode: "isolated",
-      audit: allowedAudit,
-      sandbox: {
-        platform: "darwin",
-        runtimeMode: "native",
-        effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
-        access: async () => undefined
-      }
-    });
-    await waitForProcessCalls(1);
-    await vi.advanceTimersByTimeAsync(2_000);
-    const result = await pending;
-
-    expect(result).toMatchObject({ ok: false, exitCode: null });
-    expect(result.stderr).toContain("BASH_ISOLATION_UNAVAILABLE");
-    expect(processState.kills).toContainEqual({ callIndex: 0, signal: "SIGKILL" });
-    expect(processState.calls).toHaveLength(2);
-  });
-
-  it("uses its own deadline as the only timeout source and force-cleans the container", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    temporaryRoot = await makeSecureScratch("docker-deadline");
-    processState.suppressCallbacks = [true, false];
+    temporaryRoot = await makeSecureScratch("native-deadline");
+    processState.suppressCallbacks = [true];
 
     const pending = runWorkspaceBash({ command: "echo ok", timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
+      backend: "native",
       accessMode: "admin",
       audit: allowedAudit,
       sandbox: {
-        platform: "darwin",
-        runtimeMode: "native",
+        platform: "linux",
         effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
+        executable: "/fixture/bwrap",
+        resourceLimiter: "/fixture/prlimit",
         access: async () => undefined,
         probe: async () => undefined
       }
@@ -1053,136 +850,13 @@ describe("tool call timeout", () => {
     expect(result).toMatchObject({
       ok: false,
       timedOut: true,
-      signal: "SIGKILL",
-      cleanupAttempted: true,
-      cleanupSucceeded: true
+      signal: "SIGKILL"
     });
     expect(result.stderr).toContain("BASH_EXECUTION_TIMEOUT");
-    expect(processState.calls).toHaveLength(2);
-    const containerName = processState.calls[0]?.args[processState.calls[0]?.args.indexOf("--name") + 1];
-    expect(processState.calls[1]?.args).toEqual(["rm", "-f", containerName]);
+    expect(processState.calls).toHaveLength(1);
+    expect(processState.calls[0]?.file).toBe("/fixture/prlimit");
   });
 
-  it("bounds abort cleanup even when Docker run and rm callbacks never return", async () => {
-    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-docker-bounded-cleanup-"));
-    const controller = new AbortController();
-    processState.suppressCallbacks = [true, true];
-
-    const pending = runWorkspaceBash({ command: "echo ok", timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
-      accessMode: "admin",
-      audit: allowedAudit,
-      abortSignal: controller.signal,
-      sandbox: {
-        platform: "darwin",
-        runtimeMode: "native",
-        effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
-        access: async () => undefined,
-        probe: async () => undefined
-      }
-    });
-    await waitForProcessCalls(1);
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    controller.abort();
-    await vi.advanceTimersByTimeAsync(10_000);
-    const result = await pending;
-
-    expect(processState.calls).toHaveLength(2);
-    expect(processState.kills).toEqual(expect.arrayContaining([
-      { callIndex: 0, signal: "SIGKILL" },
-      { callIndex: 1, signal: "SIGKILL" }
-    ]));
-    expect(result).toMatchObject({
-      ok: false,
-      timedOut: false,
-      cleanupAttempted: true,
-      cleanupSucceeded: false,
-      cleanupError: "BASH_DOCKER_CLEANUP_FAILED"
-    });
-    expect(result.stderr).toContain("BASH_EXECUTION_ABORTED");
-    expect(result.stderr).toContain("BASH_DOCKER_CLEANUP_FAILED");
-  });
-
-  it.each([
-    [Object.assign(new Error("cleanup callback failed"), { code: 1 }), ""],
-    [Object.assign(new Error("cleanup timed out"), { killed: true, signal: "SIGKILL" }), ""]
-  ])("reports a stable cleanup failure when docker rm fails: %s", async (cleanupError, cleanupStderr) => {
-    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-docker-cleanup-failure-"));
-    processState.errors = [new Error("execution failed"), cleanupError];
-    processState.stderr = ["", cleanupStderr];
-
-    const result = await runWorkspaceBash({ command: "echo ok", timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
-      accessMode: "admin",
-      audit: allowedAudit,
-      sandbox: {
-        platform: "darwin",
-        runtimeMode: "native",
-        effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
-        access: async () => undefined,
-        probe: async () => undefined
-      }
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      cleanupAttempted: true,
-      cleanupSucceeded: false,
-      cleanupError: "BASH_DOCKER_CLEANUP_FAILED"
-    });
-    expect(result.stderr).toContain("BASH_DOCKER_CLEANUP_FAILED");
-  });
-
-  it("reports cleanup failure when docker rm throws synchronously", async () => {
-    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-docker-cleanup-throw-"));
-    processState.errors = [new Error("execution failed")];
-    processState.synchronousErrors = [null, new Error("cleanup threw")];
-
-    const result = await runWorkspaceBash({ command: "echo ok", timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
-      accessMode: "admin",
-      audit: allowedAudit,
-      sandbox: {
-        platform: "darwin",
-        runtimeMode: "native",
-        effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
-        access: async () => undefined,
-        probe: async () => undefined
-      }
-    });
-
-    expect(result).toMatchObject({ cleanupAttempted: true, cleanupSucceeded: false });
-    expect(result.stderr).toContain("BASH_DOCKER_CLEANUP_FAILED");
-  });
-
-  it("treats an already absent Docker container as verified cleanup", async () => {
-    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-docker-already-absent-"));
-    processState.errors = [new Error("execution failed"), new Error("No such container")];
-
-    const result = await runWorkspaceBash({ command: "echo ok", timeoutMs: null }, temporaryRoot, {
-      backend: "docker",
-      accessMode: "admin",
-      audit: allowedAudit,
-      sandbox: {
-        platform: "darwin",
-        runtimeMode: "native",
-        effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
-        access: async () => undefined,
-        probe: async () => undefined
-      }
-    });
-
-    expect(result).toMatchObject({ cleanupAttempted: true, cleanupSucceeded: true });
-    expect(result.cleanupError).toBeUndefined();
-  });
 });
 
 async function waitForProcessCalls(expected: number) {

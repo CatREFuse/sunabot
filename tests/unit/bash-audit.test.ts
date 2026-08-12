@@ -10,7 +10,7 @@ import {
 
 const auditInput = {
   command: "cat report.txt",
-  backend: "docker" as const,
+  backend: "native" as const,
   accessMode: "restricted" as const,
   strictMode: true,
   isAdmin: false,
@@ -34,19 +34,19 @@ describe("independent Bash audit", () => {
     expect(request.messages[1]?.content).toContain('"isAdmin":false');
     expect(request.messages[1]?.content).toContain('"userRequest":"把聊天里的报告整理成压缩包"');
     expect(buildBashAuditRequest({ ...auditInput, accessMode: "isolated" }).messages[0]?.content)
-      .toContain("read-only access to the Native workbench projection");
+      .toContain("writable access only inside /workbench");
     expect(request.messages[0]?.content).toContain("Skill and MCP configuration are exposed through SUNABOT_SKILLS and SUNABOT_MCP_CONFIG");
-    const nativeRequest = buildBashAuditRequest({ ...auditInput, backend: "native", accessMode: "admin" });
+    const nativeRequest = buildBashAuditRequest({ ...auditInput, accessMode: "admin" });
     expect(nativeRequest.messages[0]?.content)
-      .toContain("Native Bash may write both the current Agent Native workbench and the same Agent Docker workbench");
+      .toContain("Native Bash may write only the current Agent workbench");
     expect(nativeRequest.messages[0]?.content)
-      .toContain("native backend runs as the Sunabot runtime OS user after approval");
+      .toContain("Native Bash runs as the Sunabot runtime OS user after approval");
     expect(nativeRequest.messages[0]?.content)
       .toContain("outsideAccesses must list only absolute paths outside every declared workbench");
     expect(nativeRequest.messages[0]?.content)
       .toContain("sunabot-skill is a host-managed current-Agent Skill repository command");
-    expect(nativeRequest.messages[1]?.content).toContain('"docker":{"path":"$SUNABOT_DOCKER_WORKBENCH","access":"read-write"}');
-    expect(request.messages[1]?.content).toContain('"native":{"path":"/workbench/native-workbench","access":"read-only"}');
+    expect(nativeRequest.messages[1]?.content).toContain('"native":{"path":"/workbench","access":"read-write"}');
+    expect(nativeRequest.messages[1]?.content).not.toContain('"docker"');
   });
 
   it("parses the auditor response and rejects incomplete outside-path reports", async () => {
@@ -104,7 +104,6 @@ describe("independent Bash audit", () => {
     expect(store.consume(approval.id, "cat /fixture/file", { ...context, conversationId: "private:other" })).toBeUndefined();
     expect(store.consume(approval.id, "cat /fixture/file", { ...context, accountId: "qq-bot-b" })).toBeUndefined();
     expect(store.consume(approval.id, "cat /fixture/file", { ...context, transport: "web" })).toBeUndefined();
-    expect(store.consume(approval.id, "cat /fixture/file", { ...context, backend: "docker" })).toBeUndefined();
     expect(store.consume(approval.id, "cat /fixture/file", context)).toEqual([frozenAccess]);
     expect(store.consume(approval.id, "cat /fixture/file", context)).toBeUndefined();
 

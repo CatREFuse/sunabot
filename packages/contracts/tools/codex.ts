@@ -47,7 +47,6 @@ export interface CodexResultArtifactV1 {
   sizeBytes: number;
   mimeType?: string;
   handle?: string;
-  backend?: "native" | "docker";
 }
 
 export interface CodexToolError {

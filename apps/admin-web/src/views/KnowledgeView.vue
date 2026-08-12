@@ -7,7 +7,6 @@ import KnowledgeSearchPanel from "../components/knowledge/KnowledgeSearchPanel.v
 import KnowledgeUploadDialog from "../components/knowledge/KnowledgeUploadDialog.vue";
 import PageHeader from "../components/ui/PageHeader.vue";
 import type { KnowledgeDocument } from "../types/knowledge";
-import { workbenchResourceKey } from "../types/workbench";
 
 const data = useKnowledgeBase();
 const agentId = computed(() => activeAgentIdState.value || "plana");
@@ -67,7 +66,7 @@ async function upload(input: { path: string; content: string }) {
 }
 
 async function remove(document: KnowledgeDocument) {
-  const key = workbenchResourceKey(document.workbench ?? "native", document.path);
+  const key = document.path;
   if (pendingDelete.value !== key) {
     pendingDelete.value = key;
     return;

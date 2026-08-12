@@ -32,7 +32,7 @@ const selectedTool = computed(() => catalog.tools.value.find((tool) => tool.name
 onMounted(() => void catalog.load());
 
 function toolEnabled(tool: SunaTool) {
-  if (tool.name === "native_bash" || tool.name === "docker_bash") return bash.value.enabled;
+  if (tool.name === "native_bash") return bash.value.enabled;
   if (tool.name === "codex") return draft.value.codex.enabled;
   return draft.value.overrides[tool.name]?.enabled ?? tool.enabled;
 }
@@ -51,8 +51,8 @@ function hasDescriptionOverride(tool: SunaTool) {
 }
 
 function setEnabled(tool: SunaTool, enabled: boolean) {
-  if (tool.name === "native_bash" || tool.name === "docker_bash" || tool.name === "codex") {
-    if (tool.name === "native_bash" || tool.name === "docker_bash") bash.value.enabled = enabled;
+  if (tool.name === "native_bash" || tool.name === "codex") {
+    if (tool.name === "native_bash") bash.value.enabled = enabled;
     else draft.value.codex.enabled = enabled;
     updateOverride(tool.name, (override) => { delete override.enabled; });
     emit("commit");

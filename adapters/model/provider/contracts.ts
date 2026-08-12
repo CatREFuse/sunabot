@@ -34,10 +34,7 @@ export interface ProviderCompleteOptions {
   allowNoReply?: boolean;
   workbenchFiles?: ProviderWorkbenchFileOptions;
   chatMedia?: ChatMediaToolPort;
-  bash?: {
-    native?: ProviderBashOptions;
-    docker?: ProviderBashOptions;
-  };
+  bash?: ProviderBashOptions;
   bot?: BotConfig;
   generateImage?: GenerateImageRunner;
   onAssistantText?: (text: string, source?: ProviderAssistantTextSource) => void | Promise<void>;

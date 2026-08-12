@@ -20,91 +20,12 @@ describe("workspace Bash capability probe", () => {
     const probe = vi.fn(async () => undefined);
     const capability = createWorkspaceBashCapabilityProbe({
       platform: "darwin",
-      backend: "native",
       sandbox: { effectiveUid: 501, access, probe }
     });
 
     await expect(capability(await createAgentWorkspace())).resolves.toEqual({ available: true });
     expect(access).toHaveBeenCalledWith("/bin/bash", expect.any(Number));
     expect(probe).toHaveBeenCalledWith("/bin/bash", ["--noprofile", "--norc", "-lc", ":"]);
-  });
-
-  it("reports macOS Docker Bash only after its image probe succeeds", async () => {
-    const probe = vi.fn(async () => undefined);
-    const capability = createWorkspaceBashCapabilityProbe({
-      platform: "darwin",
-      backend: "docker",
-      runtimeMode: "native",
-      sandbox: {
-        effectiveUid: 1_000,
-        dockerExecutable: "/fixture/docker",
-        dockerImage: "sunabot-bash:test",
-        access: async () => undefined,
-        probe
-      }
-    });
-
-    await expect(capability(await createAgentWorkspace())).resolves.toEqual({ available: true });
-    expect(probe).toHaveBeenCalledOnce();
-    expect(probe.mock.calls[0]?.[0]).toBe("/fixture/docker");
-    const probeArgs = probe.mock.calls[0]?.[1] ?? [];
-    expect(probeArgs).toEqual(expect.arrayContaining([
-      "run", "--rm", "--pull", "never", "--network", "bridge",
-      "--entrypoint", "/usr/bin/env", "sunabot-bash:test", "-i",
-      "PATH=/usr/local/bin:/usr/bin:/bin", "/bin/bash", "--noprofile", "--norc", "-ec"
-    ]));
-    expect(probeArgs.at(-1)).toContain("/usr/bin/env");
-    expect(probeArgs.at(-1)).toContain("/bin/bash");
-    expect(probeArgs.at(-1)).toContain("/usr/bin/base64");
-    expect(probe.mock.calls[0]?.[2]).toEqual({ env: expect.any(Object) });
-  });
-
-  it("delegates macOS Docker health to the shared runtime without container reprobes", async () => {
-    const capabilityRuntime = vi.fn(async () => ({ available: true }));
-    const probe = vi.fn(async () => undefined);
-    const capability = createWorkspaceBashCapabilityProbe({
-      platform: "darwin",
-      backend: "docker",
-      runtimeMode: "native",
-      runtime: {
-        capability: capabilityRuntime,
-        execute: vi.fn(async () => ({
-          ok: true,
-          exitCode: 0,
-          signal: null,
-          timedOut: false,
-          stdout: "",
-          stderr: ""
-        }))
-      },
-      sandbox: {
-        effectiveUid: 1_000,
-        dockerImage: "sunabot-bash:test",
-        probe
-      }
-    });
-    const workspace = await createAgentWorkspace();
-
-    await expect(capability(workspace)).resolves.toEqual({ available: true });
-    await expect(capability(workspace)).resolves.toEqual({ available: true });
-    expect(capabilityRuntime).toHaveBeenCalledTimes(2);
-    expect(probe).not.toHaveBeenCalled();
-  });
-
-  it("reports Docker Bash unavailable for a root Core process", async () => {
-    const probe = vi.fn(async () => undefined);
-    const capability = createWorkspaceBashCapabilityProbe({
-      platform: "darwin",
-      backend: "docker",
-      runtimeMode: "native",
-      sandbox: { effectiveUid: 0, probe }
-    });
-
-    await expect(capability(await createAgentWorkspace())).resolves.toEqual({
-      available: false,
-      reason: "BASH_DOCKER_ISOLATION_UNAVAILABLE"
-    });
-    expect(probe).not.toHaveBeenCalled();
   });
 
   it("keeps a successful namespace lease without periodic reprobes", async () => {
@@ -114,7 +35,6 @@ describe("workspace Bash capability probe", () => {
       .mockRejectedValueOnce(new Error("namespace unavailable"));
     const capability = createWorkspaceBashCapabilityProbe({
       platform: "linux",
-      backend: "native",
       ttlMs: 30_000,
       now: () => currentTime,
       sandbox: {
@@ -142,7 +62,6 @@ describe("workspace Bash capability probe", () => {
       .mockResolvedValueOnce(undefined);
     const capability = createWorkspaceBashCapabilityProbe({
       platform: "linux",
-      backend: "native",
       ttlMs: 3_000,
       now: () => currentTime,
       sandbox: {
@@ -166,7 +85,6 @@ describe("workspace Bash capability probe", () => {
     const probe = vi.fn(async () => undefined);
     const capability = createWorkspaceBashCapabilityProbe({
       platform: "linux",
-      backend: "native",
       sandbox: {
         effectiveUid: 1_000,
         executable: "/fixture/bwrap",
@@ -185,35 +103,10 @@ describe("workspace Bash capability probe", () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
-  it("reports Docker Core Bash unavailable when a restricted fixed executable is missing", async () => {
-    const probe = vi.fn(async () => undefined);
-    const capability = createWorkspaceBashCapabilityProbe({
-      platform: "linux",
-      backend: "docker",
-      runtimeMode: "docker",
-      sandbox: {
-        effectiveUid: 1_000,
-        executable: "/fixture/bwrap",
-        resourceLimiter: "/fixture/prlimit",
-        access: async (file) => {
-          if (file === "/usr/bin/base64") throw Object.assign(new Error("missing"), { code: "ENOENT" });
-        },
-        probe
-      }
-    });
-
-    await expect(capability(await createAgentWorkspace())).resolves.toEqual({
-      available: false,
-      reason: "BASH_DOCKER_ISOLATION_UNAVAILABLE"
-    });
-    expect(probe).not.toHaveBeenCalled();
-  });
-
   it("reports Linux Native Bash unavailable for a root Core process", async () => {
     const probe = vi.fn(async () => undefined);
     const capability = createWorkspaceBashCapabilityProbe({
       platform: "linux",
-      backend: "native",
       sandbox: {
         effectiveUid: 0,
         access: async () => undefined,
@@ -237,7 +130,6 @@ describe("workspace Bash capability probe", () => {
 
     const context = {
       workspacePath: "/fixture/agent-workspace",
-      workspaceBashBackend: "docker" as const,
       workspaceBashAuditAvailable: true
     };
     await expect(resolve(context)).resolves.toEqual({ codex: true, workspaceBash: true });
@@ -252,7 +144,6 @@ describe("workspace Bash capability probe", () => {
 
     await expect(resolve({
       workspacePath: "/fixture/agent-workspace",
-      workspaceBashBackend: "native",
       workspaceBashAuditAvailable: true
     })).resolves.toEqual({
       codex: false,
@@ -270,7 +161,6 @@ describe("workspace Bash capability probe", () => {
 
     await expect(resolve({
       workspacePath: "/fixture/agent-workspace",
-      workspaceBashBackend: "docker",
       workspaceBashAuditAvailable: false
     })).resolves.toEqual({
       codex: true,
@@ -288,7 +178,6 @@ describe("workspace Bash capability probe", () => {
     const probe = vi.fn(async () => undefined);
     const capability = createWorkspaceBashCapabilityProbe({
       platform: "linux",
-      backend: "native",
       sandbox: { probe }
     });
 

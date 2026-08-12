@@ -48,6 +48,7 @@ describe("empty workspace first-run flow", () => {
       providerRequestsBeforeEnable: number;
       providerRequestsForDisabledInbound: number;
       providerRequestsForEnabledInbound: number;
+      journalRetainedForLauncher: boolean;
     };
     expect(report).toMatchObject({
       adminAuthenticated: true,
@@ -60,7 +61,7 @@ describe("empty workspace first-run flow", () => {
       repliesBeforeEnable: 0,
       firstReplyDelivered: 1,
       providerRequestsForDisabledInbound: 0,
-      journalCompleted: true
+      journalRetainedForLauncher: true
     });
     expect(report.providerRequestsForEnabledInbound).toBeGreaterThan(0);
     expect(report.providerRequests).toBeGreaterThan(report.providerRequestsBeforeEnable);

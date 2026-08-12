@@ -10,39 +10,28 @@ describe("Codex control policy", () => {
     expect(codexControlAvailable({
       isAdmin: true,
       scope: "private",
-      platform: "darwin",
-      runtimeMode: "native"
+      platform: "darwin"
     })).toBe(true);
     expect(codexControlAvailable({
       isAdmin: false,
       scope: "private",
-      platform: "darwin",
-      runtimeMode: "native"
+      platform: "darwin"
     })).toBe(false);
     expect(codexControlAvailable({
       isAdmin: true,
       scope: "user_group",
-      platform: "darwin",
-      runtimeMode: "native"
+      platform: "darwin"
     })).toBe(false);
     expect(codexControlAvailable({
       isAdmin: true,
       scope: "private",
-      platform: "darwin",
-      runtimeMode: "docker"
-    })).toBe(false);
-    expect(codexControlAvailable({
-      isAdmin: true,
-      scope: "private",
-      platform: "linux",
-      runtimeMode: "native"
+      platform: "linux"
     })).toBe(false);
     expect(codexControlAvailable({
       isAdmin: true,
       scope: "private",
       promptOverride: "scheduled callback",
-      platform: "darwin",
-      runtimeMode: "native"
+      platform: "darwin"
     })).toBe(false);
   });
 

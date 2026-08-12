@@ -1,6 +1,6 @@
 # Bash Resource Operations
 
-Use these modules after reading `workbench-addressing.md`. They are command patterns, not extra permissions. Run them only through the Bash backend exposed in the current turn.
+Use these modules after reading `workbench-addressing.md`. They are command patterns, not extra permissions. Run them only through `native_bash` when it is exposed in the current turn.
 
 ## Contents
 
@@ -27,25 +27,14 @@ test -f index.md
 sed -n '1,220p' index.md
 ```
 
-Choose the authoritative resource root from the backend:
+Use the current directory as the only authoritative resource root:
 
 ```bash
-case "$(pwd -P)" in
-  /workbench)
-    resource_root="$(pwd -P)"
-    other_resource_root="${SUNABOT_NATIVE_WORKBENCH:-/workbench/native-workbench}"
-    resource_mode=writable
-    ;;
-  *)
-    resource_root="$(pwd -P)"
-    other_resource_root="${SUNABOT_DOCKER_WORKBENCH:?Docker Workbench path is unavailable}"
-    resource_mode=writable
-    ;;
-esac
+resource_root="$(pwd -P)"
 test -f "$resource_root/index.md"
 ```
 
-Do not infer a host path from the Agent name. Both roots belong to the same Agent. In Docker, `other_resource_root` remains read-only even if a command proposes another path.
+Do not infer a host path from the Agent name, search for a second Workbench, or use a legacy environment variable to widen the current root.
 
 ## 2. Resolve a safe relative target
 
@@ -136,18 +125,7 @@ For JSON or JSONL, run the corresponding validator before `mv`. Preserve a previ
 
 ## 5. Manage task artifacts
 
-Native Bash writes task artifacts in the authoritative Native cwd. Docker Bash writes them under `/workbench`; use Docker for downloads, conversion, archives, code, and other isolated processing.
-
-To reuse a Native resource in Docker:
-
-```bash
-source_file="${SUNABOT_NATIVE_WORKBENCH:-/workbench/native-workbench}/path/from/index"
-test -f "$source_file"
-test ! -L "$source_file"
-cp -- "$source_file" ./working-copy
-```
-
-Modify only the Docker copy. Use `send_file` for a final Docker artifact when the current conversation exposes it.
+Write task artifacts inside the authoritative cwd. Use `send_file` for a final artifact when the current conversation exposes it.
 
 ## 6. Manage knowledge
 
@@ -195,7 +173,7 @@ The filename extension may be `.png` or `.gif`; the basename digest must match t
 
 Use Bash directly when the source is already a validated local PNG/GIF and the active root is writable. Build the complete candidate JSONL, validate every line and referenced asset, compare the old catalog digest, then atomically replace `emojis.jsonl` and read it back.
 
-Use `import_chat_emoji` when the source is a current chat media handle, requires JPEG/WebP normalization, or the conversation has only Docker Bash. The tool writes Native in private chat and Docker in group chat.
+Use `import_chat_emoji` when the source is a current chat media handle or requires JPEG/WebP normalization. The tool writes the current Agent's canonical emoji catalog.
 
 ## 9. Maintain Skill source packages
 
@@ -212,6 +190,6 @@ Finish with all applicable evidence:
 - fixed entry reread after publication;
 - content-specific checks such as image dimensions or JSONL schema;
 - consumer readback through emoji selection, selfie selection, Skill catalog, or `knowledge_search`;
-- exact backend used and whether the result is authoritative or a Docker task artifact.
+- confirmation that `native_bash` used the current Agent's authoritative Workbench.
 
-Do not report success from a temporary file, copied Docker artifact, stale index, or command exit code alone.
+Do not report success from a temporary file, stale index, or command exit code alone.

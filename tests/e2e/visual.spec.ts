@@ -143,8 +143,7 @@ async function runKnowledgeVisualScenario(page: Page, testInfo: TestInfo) {
     await page.getByLabel("检索知识库").fill("火星基地供电");
     await page.getByRole("button", { name: "检索", exact: true }).click();
     await expect(page.getByText("火星基地采用核能供电，水循环系统保持独立冗余。", { exact: true })).toBeVisible();
-    await expect(page.getByText("Native", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("Docker", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("运行记录确认供电、网络和数据恢复点。", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "knowledge-search");
 
     await page.getByRole("button", { name: "添加 Markdown", exact: true }).first().click();
@@ -462,10 +461,11 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.getByLabel("搜索请求日志").fill("Beta");
     const matchedRequestLog = page.getByLabel("请求日志列表").locator("article");
     await expect(matchedRequestLog).toHaveCount(1);
-    await matchedRequestLog.getByText("响应体", { exact: true }).click();
-    await matchedRequestLog.locator("summary").filter({ hasText: /^payload/ }).click();
-    await expect(page.getByText("模型返回正文 Beta", { exact: true })).toBeVisible();
+    await matchedRequestLog.getByRole("button", { name: "查看Responses 模型调用请求详情" }).click();
+    const requestDetail = page.getByRole("dialog", { name: "请求详情" });
+    await expect(requestDetail).toContainText("模型返回正文 Beta");
     await capture(page, viewport.name, theme, "conversations-request-log-search");
+    await requestDetail.getByRole("button", { name: "关闭请求详情" }).click();
     await page.getByRole("button", { name: "关闭", exact: true }).click();
     await page.getByRole("button", { name: "会话设置", exact: true }).click();
     await expect(page.getByRole("heading", { name: "会话设置", exact: true })).toBeVisible();
@@ -540,10 +540,10 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     const selfieHeading = page.getByRole("heading", { name: "自拍参考图" });
     const selfieManager = page.getByRole("region", { name: "自拍参考图" });
     await expect(selfieHeading).toBeVisible();
-    await expect(page.getByText("Native 3 / 9 · Docker 1 / 9", { exact: true })).toBeVisible();
+    await expect(page.getByText("4 / 9", { exact: true })).toBeVisible();
     await selfieHeading.evaluate((element) => element.scrollIntoView({ block: "start", behavior: "auto" }));
     await capture(page, viewport.name, theme, "images-selfie");
-    await selfieManager.getByRole("button", { name: "编辑备注 Native 常服正面" }).click();
+    await selfieManager.getByRole("button", { name: "编辑备注 常服正面" }).click();
     const selfieNoteDialog = page.getByRole("dialog", { name: "编辑图片备注" });
     await expect(selfieNoteDialog.getByLabel("01-neutral-face.png 的备注")).toHaveValue("常服正面");
     await capture(page, viewport.name, theme, "images-selfie-note");
@@ -571,7 +571,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
       await page.goto("/releases");
       await expect(page.getByRole("heading", { name: "版本更新", exact: true })).toBeVisible();
-      await expect(page.getByRole("heading", { name: "v0.2.0", exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "v0.3.0", exact: true })).toBeVisible();
       await capture(page, viewport.name, theme, "releases");
     }
 
@@ -720,12 +720,12 @@ test("自拍素材与备注四视口矩阵", async ({ page }, testInfo) => {
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/images");
-    await expect(page.getByText("Native 3 / 9 · Docker 1 / 9", { exact: true })).toBeVisible();
+    await expect(page.getByText("4 / 9", { exact: true })).toBeVisible();
     const manager = page.getByRole("region", { name: "自拍参考图" });
     await expect(manager.getByText("常服正面", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "selfie-manager-inline");
 
-    await manager.getByRole("button", { name: "编辑备注 Native 常服正面" }).click();
+    await manager.getByRole("button", { name: "编辑备注 常服正面" }).click();
     const noteDialog = page.getByRole("dialog", { name: "编辑图片备注" });
     await expect(noteDialog.getByLabel("01-neutral-face.png 的备注")).toHaveValue("常服正面");
     await capture(page, viewport.name, theme, "selfie-note");
@@ -815,7 +815,7 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/tools");
     await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByLabel("搜索工具")).toBeVisible();
-    await expect(page.getByLabel(/^启用 /)).toHaveCount(25);
+    await expect(page.getByLabel(/^启用 /)).toHaveCount(24);
     await expect(page.getByText("read_air", { exact: true })).toBeVisible();
     await expect(page.getByText("import_chat_selfie", { exact: true })).toBeVisible();
     await expect(page.getByText("cron", { exact: true })).toBeVisible();
@@ -858,22 +858,22 @@ test("Bash 权限与会话状态四视口矩阵", async ({ page }, testInfo) => 
     await expect(page.getByRole("heading", { name: "命令执行" })).toBeVisible();
     await expect(page.getByText("对抗审批 Agent", { exact: true })).toBeVisible();
     await expect(page.getByLabel("严格审批")).toBeVisible();
-    await expect(page.getByText("Native Bash · Docker Bash", { exact: true })).toHaveCount(2);
-    await expect(page.getByText("Docker Bash", { exact: true })).toBeVisible();
+    await expect(page.getByText("Native Bash", { exact: true })).toHaveCount(2);
+    await expect(page.getByText("Bubblewrap", { exact: true })).toBeVisible();
     await expect(page.getByText("Skill 与 MCP · 只读", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-bash-permissions");
 
     await page.goto("/agent-settings/tools");
-    await page.getByLabel("搜索工具").fill("docker_bash");
-    const bashRow = page.locator("article").filter({ has: page.getByText("docker_bash", { exact: true }) });
-    await expect(bashRow.getByText("全部允许会话可用", { exact: true })).toBeVisible();
-    await expect(bashRow.getByText("Docker Bash 已启动", { exact: true })).toBeVisible();
+    await page.getByLabel("搜索工具").fill("native_bash");
+    const bashRow = page.locator("article").filter({ has: page.getByText("native_bash", { exact: true }) });
+    await expect(bashRow.getByText("按平台授权会话", { exact: true })).toBeVisible();
+    await expect(bashRow.getByText("Native Bash 可用", { exact: true })).toBeVisible();
     await expect(bashRow.getByText("运行环境异常", { exact: true })).toHaveCount(0);
     await capture(page, viewport.name, theme, "settings-bash-session-scope");
-    await bashRow.getByRole("button", { name: "查看 Docker Bash 详情" }).click();
-    const dialog = page.getByRole("dialog", { name: "Docker Bash" });
+    await bashRow.getByRole("button", { name: "查看 Native Bash 详情" }).click();
+    const dialog = page.getByRole("dialog", { name: "Native Bash" });
     await expect(dialog.getByText("适用会话", { exact: true })).toBeVisible();
-    await expect(dialog.locator("dt").filter({ hasText: /^Docker Bash$/ })).toBeVisible();
+    await expect(dialog.locator("dt").filter({ hasText: /^Native Bash$/ })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-bash-detail");
     await dialog.getByRole("button", { name: "关闭工具详情" }).click();
   }

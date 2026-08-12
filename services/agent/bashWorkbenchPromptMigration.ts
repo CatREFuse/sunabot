@@ -8,6 +8,7 @@ import {
 import { resolveSafePromptFilePath } from "./promptWorkspace.js";
 
 const LEGACY_CONTRACT_MARKERS = [
+  '<bash_workbench_contract version="8">',
   '<bash_workbench_contract version="7">',
   '<bash_workbench_contract version="6">',
   '<bash_workbench_contract version="5">',
@@ -16,22 +17,23 @@ const LEGACY_CONTRACT_MARKERS = [
   '<bash_workbench_contract version="2">',
   '<bash_workbench_contract version="1">'
 ];
-const CONTRACT_MARKER = '<bash_workbench_contract version="8">';
+const CONTRACT_MARKER = '<bash_workbench_contract version="9">';
 const LEGACY_CONFIGURATION_INDEX_MARKERS = [
+  '<configuration_directory_index_contract version="5">',
   '<configuration_directory_index_contract version="4">',
   '<configuration_directory_index_contract version="3">',
   '<configuration_directory_index_contract version="2">',
   '<configuration_directory_index_contract version="1">'
 ];
-const CONFIGURATION_INDEX_MARKER = '<configuration_directory_index_contract version="5">';
+const CONFIGURATION_INDEX_MARKER = '<configuration_directory_index_contract version="6">';
 
 export const BASH_WORKBENCH_CONTRACT = [
   CONTRACT_MARKER,
-  "你可以使用本轮实际提供的 `native_bash` 或 `docker_bash` 在当前 Agent 的 Workbench 中读取、创建、修改、移动和删除文件；具体可写范围以工具本轮授予的后端和文件系统权限为准。",
-  "`native_bash` 和 `docker_bash` 都从各自当前工作目录（cwd）开始执行。Native Bash 的默认 cwd 固定为当前 Agent 的 `workbench/`，并以宿主机真实绝对路径呈现；环境变量 `SUNABOT_DOCKER_WORKBENCH` 指向同一 Agent 的独立 `docker-workbench/`，两处都属于可寻址工作区。Docker Bash 的 cwd 是 `docker-workbench/`，在容器内固定映射为 `/workbench`；Native workbench 以整体只读投影映射到 `/workbench/native-workbench`，也可由 `SUNABOT_NATIVE_WORKBENCH` 寻址。",
-  "`native_bash` 仅管理员私聊和已认证管理员 Web Chat 可用。`docker_bash` 使用隔离工作区，真实 QQ 会话均可按本轮工具权限使用；它可以在 `/workbench` 内读取、创建、修改、移动和删除文件，也可以从网络下载业务所需文件，但 Native workbench 投影、Skill 和 MCP 始终只读，且不能访问 Docker socket 或其他宿主路径。不得借此扩大工具实际授予的会话权限或路径权限。",
-  "`generate_img` 和 `selfie` 的 `referenceImagePaths` 可以直接接收 Bash 返回的当前 Agent 授权 Workbench 图片路径；相对路径或该 Workbench 内的绝对路径都可原样传入。Native Bash 使用宿主真实绝对路径，Docker Bash 使用 `/workbench/...`，Native 只读投影使用 `/workbench/native-workbench/...`。不得改写为 URL、Base64、媒体句柄，也不得猜测或传入其他宿主路径。",
-  "任务涉及制定或维护计划文件、聊天文件、网络下载、文件转换、压缩打包或其他需要文件系统落盘的工作时，优先使用本轮可用的 Bash 工具在该 cwd 内完成。聊天文件先用 `export_chat_media` 导出，Docker Bash 如需修改则从 `native-workbench/` 复制到 `/workbench`；完成后使用 `send_file` 把当前会话 workbench 内的成品返回当前单聊或群聊，不要把应交付的文件只留在临时目录、聊天正文或其他路径。",
+  "你可以使用本轮实际提供的 `native_bash` 在当前 Agent 的 Workbench 中读取、创建、修改、移动和删除文件；具体可写范围以工具本轮授予的文件系统权限为准。",
+  "`native_bash` 从当前 Agent 的 `workbench/` 开始执行。Linux 与 WSL 使用 Bubblewrap 和资源上限，cwd 在隔离环境内呈现为 `/workbench`；macOS 仅管理员 QQ 私聊和已认证管理员 Web Chat 可运行经审批的宿主 Bash，cwd 使用宿主机真实绝对路径。",
+  "Linux 与 WSL 的授权 QQ 会话可以使用隔离 Native Bash；macOS 的管理员群聊、其他群聊和其他私聊不可用。Skill 与 MCP 配置始终只读，不得扩大工具实际授予的会话权限或路径权限。",
+  "`generate_img` 和 `selfie` 的 `referenceImagePaths` 可以直接接收 Bash 返回的当前 Agent 授权 Workbench 图片路径；相对路径或该 Workbench 内的绝对路径都可原样传入。不得改写为 URL、Base64、媒体句柄，也不得猜测或传入其他宿主路径。",
+  "任务涉及计划文件、聊天文件、网络下载、文件转换、压缩打包或其他需要文件系统落盘的工作时，使用本轮可用的 Bash 工具在该 cwd 内完成。聊天文件用 `export_chat_media` 导出，完成后使用 `send_file` 把当前会话 workbench 内的成品返回当前单聊或群聊。",
   "管理员要求安装 Skill 时，在 `native_bash` 的当前 Native workbench 内准备并检查来源，把包含 `SKILL.md` 的 Skill 目录打成 ZIP，然后依次运行 `sunabot-skill install --archive <relative-zip>`、`sunabot-skill review --skill <skill-id> --approve`、`sunabot-skill enable --skill <skill-id>` 和 `sunabot-skill status --skill <skill-id>`。替换同 ID Skill 时只在管理员明确要求后给 install 增加 `--replace`。每一步都使用前一步返回的真实 `skillId`，失败时停止并报告错误码，不得直接编辑 `skills/index.json` 或声称只能完成源码准备。",
   "`sunabot-skill` 是 Native Bash 中当前 Agent 的受管 Skill 仓库命令，只对管理员私聊和已认证管理员 Web Chat 开放；安装只读取 Native workbench 内无符号链接、无多硬链接且不超过 16 MiB 的相对 ZIP，审查会独立检查完整内容并把批准绑定到摘要，启用后从下一轮通过 `activate_skill` 使用。当前轮的 Skill 目录与工具定义已冻结，不能把本轮刚安装的 Skill 当成本轮已经激活。",
   "开始文件工作前，先检查 cwd 根目录是否存在 `index.md`；存在时优先读取，并把它作为当前文件工作区的入口说明。",
@@ -40,8 +42,8 @@ export const BASH_WORKBENCH_CONTRACT = [
 
 export const CONFIGURATION_DIRECTORY_INDEX_CONTRACT = [
   CONFIGURATION_INDEX_MARKER,
-  "本轮 Bash 可直接访问的每个配置或资源目录都必须有一个固定管理入口。进入目录后先读取入口，再按其中的文件名、状态和说明取用内容；入口缺失或损坏时停止猜测目录内容，并报告具体目录。",
-  "固定入口为：两个工作目录各自的 `index.md`，以及两套独立的 Skills `skills/index.json`、自拍参考图 `selfie/references.jsonl`、表情 `emoji/emojis.jsonl`、知识库 `knowledge/index.json`；MCP 入口仍是 `servers.json`。Native Bash 从 `workbench/` 直接寻址 Native 资源，并通过 `SUNABOT_DOCKER_WORKBENCH` 寻址 Docker 资源；Docker Bash 从 `/workbench` 寻址 Docker 资源，并从只读 `native-workbench/` 寻址 Native 资源。运行时同时取用两套表情、自拍和知识入口，管理 API 可选择目标 Workbench；Skill 激活仍要求 Native `workbench/skills/` 内经过审查的仓库记录。只有本轮实际暴露的目录才可读取，入口文件不能扩大 Bash 的会话、路径或写入权限。",
+  "本轮 Bash 可直接访问的每个配置或资源目录都必须有一个固定管理入口。进入目录时读取入口，再按其中的文件名、状态和说明取用内容；入口缺失或损坏时停止猜测目录内容，并报告具体目录。",
+  "固定入口为：Workbench `index.md`、Skills `skills/index.json`、自拍参考图 `selfie/references.jsonl`、表情 `emoji/emojis.jsonl`、知识库 `knowledge/index.json` 与 MCP `servers.json`。只有本轮实际暴露的目录可读取，入口文件不能扩大 Bash 的会话、路径或写入权限。",
   "</configuration_directory_index_contract>"
 ].join("\n");
 

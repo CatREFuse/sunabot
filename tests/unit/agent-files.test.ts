@@ -1,4 +1,5 @@
 // @vitest-environment node
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,8 +16,13 @@ vi.mock("../../src/config.js", () => ({
   resolveProjectPath: (inputPath: string | undefined) => inputPath
 }));
 
-import { AGENT_FILE_DEFINITIONS, AgentFileRepository } from "../../src/admin/agentFiles.js";
-import { AdminMutationMutex } from "../../src/admin/mutation.js";
+import {
+  AGENT_FILE_BATCH_TRANSACTION_FILE,
+  AGENT_FILE_DEFINITIONS,
+  AgentFileRepository,
+  recoverAgentFileBatchTransactions
+} from "../../src/admin/agentFiles.js";
+import { AdminMutationMutex, AdminRecoveryState } from "../../src/admin/mutation.js";
 import { defaultPromptContent } from "../../services/agent/promptDefaults.js";
 
 let rootDir = "";
@@ -142,6 +148,242 @@ describe("AgentFileRepository", () => {
       latestRevision: saved.revision
     });
     expect(await fs.readFile(filePath, "utf8")).toBe("updated soul\n");
+  });
+
+  it("commits a persona batch with one reload and rejects a stale batch revision", async () => {
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "old soul\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "old user\n", "utf8");
+    const snapshot = await repository.readBatch(currentConfig(), "persona");
+
+    const saved = await repository.putBatch([
+      { id: "persona.soul", content: "new soul\n" },
+      { id: "persona.user", content: "new user\n" }
+    ], snapshot.revision, currentConfig(), "persona");
+
+    expect(saved.revision).not.toBe(snapshot.revision);
+    expect(reloadPrompts).toHaveBeenCalledOnce();
+    expect(await fs.readFile(path.join(workspaceDir, "SOUL.md"), "utf8")).toBe("new soul\n");
+    expect(await fs.readFile(path.join(workspaceDir, "USER.md"), "utf8")).toBe("new user\n");
+    expect((await fs.readdir(workspaceDir)).filter((fileName) => fileName.includes("admin-backup") || fileName.endsWith(".tmp"))).toEqual([]);
+
+    await expect(repository.putBatch([
+      { id: "persona.soul", content: "stale soul\n" }
+    ], snapshot.revision, currentConfig(), "persona")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "AGENT_FILE_BATCH_REVISION_CONFLICT"
+    });
+  });
+
+  it("rolls back every persona file when the batch reload fails", async () => {
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "old soul\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "old user\n", "utf8");
+    const snapshot = await repository.readBatch(currentConfig(), "persona");
+    reloadPrompts.mockRejectedValueOnce(new Error("reload failed")).mockResolvedValueOnce(undefined);
+
+    await expect(repository.putBatch([
+      { id: "persona.soul", content: "new soul\n" },
+      { id: "persona.user", content: "new user\n" }
+    ], snapshot.revision, currentConfig(), "persona")).rejects.toThrow("reload failed");
+
+    expect(reloadPrompts).toHaveBeenCalledTimes(2);
+    expect(await fs.readFile(path.join(workspaceDir, "SOUL.md"), "utf8")).toBe("old soul\n");
+    expect(await fs.readFile(path.join(workspaceDir, "USER.md"), "utf8")).toBe("old user\n");
+    expect((await fs.readdir(workspaceDir)).filter((fileName) => fileName.includes("admin-backup") || fileName.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("rolls back an earlier persona rename when a later rename fails", async () => {
+    const soulPath = path.join(workspaceDir, "SOUL.md");
+    const userPath = path.join(workspaceDir, "USER.md");
+    await fs.writeFile(soulPath, "old soul\n", "utf8");
+    await fs.writeFile(userPath, "old user\n", "utf8");
+    const snapshot = await repository.readBatch(currentConfig(), "persona");
+    const rename = fs.rename.bind(fs);
+    let failed = false;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (!failed && String(source).includes(".tmp") && String(destination).endsWith(`${path.sep}USER.md`)) {
+        failed = true;
+        throw new Error("rename failed");
+      }
+      return rename(source, destination);
+    });
+
+    try {
+      await expect(repository.putBatch([
+        { id: "persona.soul", content: "new soul\n" },
+        { id: "persona.user", content: "new user\n" }
+      ], snapshot.revision, currentConfig(), "persona")).rejects.toThrow("rename failed");
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    expect(reloadPrompts).toHaveBeenCalledOnce();
+    expect(await fs.readFile(soulPath, "utf8")).toBe("old soul\n");
+    expect(await fs.readFile(userPath, "utf8")).toBe("old user\n");
+    expect((await fs.readdir(workspaceDir)).filter((fileName) => fileName.includes("admin-backup") || fileName.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("leaves every persona file untouched when backup preparation fails", async () => {
+    const soulPath = path.join(workspaceDir, "SOUL.md");
+    const userPath = path.join(workspaceDir, "USER.md");
+    await fs.writeFile(soulPath, "old soul\n", "utf8");
+    await fs.writeFile(userPath, "old user\n", "utf8");
+    const snapshot = await repository.readBatch(currentConfig(), "persona");
+    const open = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+      if (String(file).includes("USER.md") && String(file).endsWith(".admin-backup")) {
+        throw new Error("backup failed");
+      }
+      return open(file, flags, mode);
+    });
+
+    try {
+      await expect(repository.putBatch([
+        { id: "persona.soul", content: "new soul\n" },
+        { id: "persona.user", content: "new user\n" }
+      ], snapshot.revision, currentConfig(), "persona")).rejects.toThrow("backup failed");
+    } finally {
+      openSpy.mockRestore();
+    }
+
+    expect(reloadPrompts).not.toHaveBeenCalled();
+    expect(await fs.readFile(soulPath, "utf8")).toBe("old soul\n");
+    expect(await fs.readFile(userPath, "utf8")).toBe("old user\n");
+    expect((await fs.readdir(workspaceDir)).filter((fileName) => fileName.includes("admin-backup") || fileName.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("preserves an external edit detected after the batch journal is durable", async () => {
+    const soulPath = path.join(workspaceDir, "SOUL.md");
+    await fs.writeFile(soulPath, "old soul\n", "utf8");
+    const snapshot = await repository.readBatch(currentConfig(), "persona");
+    const rename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      await rename(source, destination);
+      if (String(destination).endsWith(AGENT_FILE_BATCH_TRANSACTION_FILE)) {
+        await fs.writeFile(soulPath, "external edit\n", "utf8");
+      }
+    });
+
+    try {
+      await expect(repository.putBatch([
+        { id: "persona.soul", content: "new soul\n" }
+      ], snapshot.revision, currentConfig(), "persona")).rejects.toMatchObject({
+        code: "AGENT_FILE_BATCH_REVISION_CONFLICT",
+        statusCode: 409
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    expect(await fs.readFile(soulPath, "utf8")).toBe("external edit\n");
+    expect(reloadPrompts).not.toHaveBeenCalled();
+    expect((await fs.readdir(workspaceDir)).filter((fileName) => (
+      fileName.includes("admin-backup")
+      || fileName.endsWith(".tmp")
+      || fileName === AGENT_FILE_BATCH_TRANSACTION_FILE
+    ))).toEqual([]);
+  });
+
+  it("restores a prepared persona transaction after an interrupted partial rename", async () => {
+    const transactionId = "0123456789abcdef01234567";
+    const soulPath = path.join(workspaceDir, "SOUL.md");
+    const userPath = path.join(workspaceDir, "USER.md");
+    await fs.writeFile(soulPath, "new soul\n", "utf8");
+    await fs.writeFile(userPath, "old user\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, `.SOUL.md.${transactionId}.admin-backup`), "old soul\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, `.USER.md.${transactionId}.admin-backup`), "old user\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, `.USER.md.${transactionId}.tmp`), "new user\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, AGENT_FILE_BATCH_TRANSACTION_FILE), `${JSON.stringify({
+      schema: "sunabot.agent-files-transaction",
+      version: 1,
+      transactionId,
+      phase: "prepared",
+      scope: "persona",
+      targets: [
+        {
+          id: "persona.soul",
+          fileName: "SOUL.md",
+          existed: true,
+          originalSha256: digest("old soul\n"),
+          nextSha256: digest("new soul\n")
+        },
+        {
+          id: "persona.user",
+          fileName: "USER.md",
+          existed: true,
+          originalSha256: digest("old user\n"),
+          nextSha256: digest("new user\n")
+        }
+      ]
+    })}\n`, "utf8");
+
+    await expect(recoverAgentFileBatchTransactions(currentConfig())).resolves.toBeUndefined();
+
+    expect(await fs.readFile(soulPath, "utf8")).toBe("old soul\n");
+    expect(await fs.readFile(userPath, "utf8")).toBe("old user\n");
+    expect(reloadPrompts).not.toHaveBeenCalled();
+    expect((await fs.readdir(workspaceDir)).filter((fileName) => (
+      fileName.includes(transactionId) || fileName === AGENT_FILE_BATCH_TRANSACTION_FILE
+    ))).toEqual([]);
+  });
+
+  it("keeps a committed persona transaction while cleaning crash artifacts", async () => {
+    const transactionId = "89abcdef0123456789abcdef";
+    const soulPath = path.join(workspaceDir, "SOUL.md");
+    await fs.writeFile(soulPath, "new soul\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, `.SOUL.md.${transactionId}.admin-backup`), "old soul\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, AGENT_FILE_BATCH_TRANSACTION_FILE), `${JSON.stringify({
+      schema: "sunabot.agent-files-transaction",
+      version: 1,
+      transactionId,
+      phase: "committed",
+      scope: "persona",
+      targets: [{
+        id: "persona.soul",
+        fileName: "SOUL.md",
+        existed: true,
+        originalSha256: digest("old soul\n"),
+        nextSha256: digest("new soul\n")
+      }]
+    })}\n`, "utf8");
+
+    await expect(repository.readBatch(currentConfig(), "persona")).resolves.toBeDefined();
+
+    expect(await fs.readFile(soulPath, "utf8")).toBe("new soul\n");
+    expect(reloadPrompts).toHaveBeenCalledOnce();
+    expect((await fs.readdir(workspaceDir)).filter((fileName) => (
+      fileName.includes(transactionId) || fileName === AGENT_FILE_BATCH_TRANSACTION_FILE
+    ))).toEqual([]);
+  });
+
+  it("enters recovery state when the restored persona batch cannot reload", async () => {
+    const recoveryState = new AdminRecoveryState();
+    const failingReload = vi.fn(async () => {
+      throw new Error("runtime unavailable");
+    });
+    const guardedRepository = new AgentFileRepository({
+      runtime: { reloadPrompts: failingReload },
+      mutex: new AdminMutationMutex(),
+      recoveryState
+    });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "old soul\n", "utf8");
+    const snapshot = await guardedRepository.readBatch(currentConfig(), "persona");
+
+    await expect(guardedRepository.putBatch([
+      { id: "persona.soul", content: "new soul\n" }
+    ], snapshot.revision, currentConfig(), "persona")).rejects.toMatchObject({
+      statusCode: 503,
+      code: "CONFIG_RECOVERY_REQUIRED"
+    });
+
+    expect(failingReload).toHaveBeenCalledTimes(2);
+    expect(await fs.readFile(path.join(workspaceDir, "SOUL.md"), "utf8")).toBe("old soul\n");
+    expect(recoveryState.get()).toContain("人格文件批量提交失败且自动恢复失败");
+    await expect(guardedRepository.putBatch([
+      { id: "persona.soul", content: "another soul\n" }
+    ], snapshot.revision, currentConfig(), "persona")).rejects.toMatchObject({
+      statusCode: 503,
+      code: "CONFIG_RECOVERY_REQUIRED"
+    });
   });
 
   it("rolls back a persona file when its lifecycle is aborted after the atomic rename", async () => {
@@ -350,4 +592,8 @@ function finalPrompt(system: string) {
     tools: [],
     response_format: { type: "text" }
   }, null, 2)}\n`;
+}
+
+function digest(content: string) {
+  return crypto.createHash("sha256").update(content, "utf8").digest("hex");
 }

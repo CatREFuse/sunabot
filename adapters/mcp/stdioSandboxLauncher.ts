@@ -35,6 +35,19 @@ const BWRAP = "/usr/bin/bwrap";
 const PRLIMIT = "/usr/bin/prlimit";
 const FIXED_PATH = "/usr/local/bin:/usr/bin:/bin";
 
+export function resolveMcpBubblewrapExecutable(
+  environment: Readonly<Record<string, string | undefined>> = process.env
+): string {
+  const configured = environment.SUNABOT_BWRAP_EXECUTABLE?.trim();
+  if (!configured) {
+    if (environment.SUNABOT_PACKAGED_RELEASE === "1") {
+      throw stableError("MCP_STDIO_ISOLATION_UNAVAILABLE");
+    }
+    return BWRAP;
+  }
+  return validateBubblewrapExecutable(configured);
+}
+
 export class BubblewrapMcpStdioLauncher implements HardenedStdioProcessLauncher {
   private launched = false;
 
@@ -61,7 +74,7 @@ export class BubblewrapMcpStdioLauncher implements HardenedStdioProcessLauncher 
       if (clearError) throw clearError;
       throw stableError("MCP_STDIO_ISOLATION_UNAVAILABLE");
     }
-    const bwrap = this.options.bwrap ?? BWRAP;
+    const bwrap = this.options.bwrap ?? resolveMcpBubblewrapExecutable();
     const prlimit = this.options.prlimit ?? PRLIMIT;
     let launchProjection: McpStdioLaunchProjection | undefined;
     try {
@@ -201,8 +214,15 @@ export function buildMcpBubblewrapInvocation(
 }
 
 async function assertExecutable(file: string) {
-  if (!path.isAbsolute(file)) throw stableError("MCP_STDIO_ISOLATION_UNAVAILABLE");
+  validateBubblewrapExecutable(file);
   await fs.access(file, 1).catch(() => { throw stableError("MCP_STDIO_ISOLATION_UNAVAILABLE"); });
+}
+
+function validateBubblewrapExecutable(file: string) {
+  if (!path.isAbsolute(file) || /[\u0000\r\n]/u.test(file) || path.resolve(file) !== file) {
+    throw stableError("MCP_STDIO_ISOLATION_UNAVAILABLE");
+  }
+  return file;
 }
 
 function requiredExecutableManifest(projection: Pick<McpSandboxProjection, "executableManifest">) {

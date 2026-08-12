@@ -69,9 +69,8 @@ describe("user test harness", () => {
       workingMemory: [],
       longTerm: [],
       userProfiles: [],
-      resetKnowledge: ["native", "docker"],
+      resetKnowledge: true,
       workbenchFiles: [{
-        backend: "native",
         path: "tool-fixtures/input.txt",
         content: "fixture input\n"
       }],
@@ -112,12 +111,21 @@ describe("user test harness", () => {
     expect(() => parseUserTestCaseDocument(document(traversal)))
       .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_PATH_INVALID");
 
-    const duplicateReset = structuredClone(testCase);
-    if (duplicateReset.kind !== "conversation" || !duplicateReset.input.fixture) {
+    const legacyBackend = structuredClone(testCase);
+    if (legacyBackend.kind !== "conversation" || !legacyBackend.input.fixture?.workbenchFiles) {
       throw new Error("conversation fixture required");
     }
-    duplicateReset.input.fixture.resetKnowledge = ["native", "native"];
-    expect(() => parseUserTestCaseDocument(document(duplicateReset)))
+    (legacyBackend.input.fixture.workbenchFiles[0] as unknown as Record<string, unknown>)
+      .backend = "native";
+    expect(() => parseUserTestCaseDocument(document(legacyBackend)))
+      .toThrow("USER_TEST_CASE_EXTRA_FIELD");
+
+    const invalidReset = structuredClone(testCase);
+    if (invalidReset.kind !== "conversation" || !invalidReset.input.fixture) {
+      throw new Error("conversation fixture required");
+    }
+    invalidReset.input.fixture.resetKnowledge = ["native"] as never;
+    expect(() => parseUserTestCaseDocument(document(invalidReset)))
       .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_RESET_KNOWLEDGE_INVALID");
 
     const invalidBase64 = structuredClone(testCase);
@@ -1172,11 +1180,10 @@ describe("user test harness", () => {
       expect(copySpy.mock.calls.some(([copiedSource]) => (
         path.resolve(String(copiedSource)) === path.resolve(agentSource)
       ))).toBe(false);
-      const dockerWorkbench = await resolveAgentWorkbench(
-        path.join(destination, "business/agents/koharu"),
-        "docker"
+      const canonicalWorkbench = await resolveAgentWorkbench(
+        path.join(destination, "business/agents/koharu")
       );
-      expect(await fs.readdir(dockerWorkbench)).toEqual([]);
+      expect(await fs.readdir(canonicalWorkbench)).toContain("skills");
       const preparedConfig = JSON.parse(await fs.readFile(
         path.join(destination, "business/config/sunabot.json"),
         "utf8"
@@ -1799,9 +1806,8 @@ describe("user test harness", () => {
         (_, index) => `${prefix}_${String(index + 2).padStart(2, "0")}`
       );
       runtimeCase.input.fixture = {
-        resetKnowledge: ["native"],
+        resetKnowledge: true,
         workbenchFiles: [{
-          backend: "native",
           path: "knowledge/fixture-only.md",
           content: "fixture input\n"
         }],
@@ -2395,73 +2401,54 @@ describe("user test harness", () => {
     }).verdict).toBe("blocked");
   });
 
-  it("binds the release gate to the current revision, case digest, run, and reviewer", async () => {
+  it("binds the v0.3.0 release gate to the complete canonical case set, revision, run, and reviewer", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-release-"));
-    const casePath = path.join(root, "case.md");
-    const reportPath = path.join(root, "report.json");
     const manifestPath = path.join(root, "manifest.json");
     const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: process.cwd(),
       encoding: "utf8"
     }).trim();
-    const testCase = conversationCase("user_private", "private", 20002);
-    await fs.writeFile(casePath, [
-      "# Release case",
-      USER_TEST_CASE_MARKER,
-      "```json",
-      JSON.stringify(testCase),
-      "```"
-    ].join("\n"));
-    const document = await readUserTestCaseDocument(casePath);
-    const run = {
-      schemaVersion: 1 as const,
-      runId: "release-run-1",
-      caseId: testCase.id,
-      caseDigest: document.digest,
-      sourceRevision,
-      kind: "conversation" as const,
-      startedAt: new Date(0).toISOString(),
-      finishedAt: new Date(1).toISOString(),
-      workspaceMode: "isolated" as const,
-      execution: { status: "passed" as const, assertions: [] },
-      observation: { outbound: [], tools: [], toolCalls: [], requestLogs: [] },
-      quality: {
-        status: "pending_review" as const,
-        criteria: testCase.quality.criteria
-      },
-      verdict: "inconclusive" as const
-    };
-    const sealed = validateAndSealUserTestReport(run, {
-      schemaVersion: 1,
-      runId: run.runId,
-      caseId: run.caseId,
-      reviewer: "fixture-agent-1",
-      reviewedAt: new Date(2).toISOString(),
-      criteria: [{
-        id: "accuracy",
-        score: 5,
-        evidence: "The captured result satisfies the case."
-      }],
-      verdict: "pass",
-      summary: "Pass."
-    });
-    await fs.writeFile(reportPath, JSON.stringify(sealed));
-    const manifest = {
-      schemaVersion: 1,
-      suiteId: "release-suite",
-      sourceRevision,
-      cases: [{
-        caseDocument: "case.md",
-        reports: ["report.json"],
+    const requiredCases = [
+      {
+        caseDocument: path.join(process.cwd(), "docs/user-tests/single-workbench-resource-addressing.md"),
         minimumIndependentRuns: 1
-      }]
-    };
+      },
+      {
+        caseDocument: path.join(process.cwd(), "docs/user-tests/cases/bash-agent-loop/admin-private-native-download.md"),
+        minimumIndependentRuns: 2
+      },
+      {
+        caseDocument: path.join(process.cwd(), "docs/user-tests/webfetch-lightpanda-dynamic.md"),
+        minimumIndependentRuns: 2
+      }
+    ];
+    const manifestCases = [];
+    for (const requiredCase of requiredCases) {
+      const document = await readUserTestCaseDocument(requiredCase.caseDocument);
+      const reports = [];
+      for (let index = 0; index < requiredCase.minimumIndependentRuns; index += 1) {
+        const reportName = `${document.case.id}.${index + 1}.sealed.json`;
+        reports.push(reportName);
+        await fs.writeFile(path.join(root, reportName), JSON.stringify(releaseSealedReport({
+          document,
+          sourceRevision,
+          runId: `${document.case.id}-run-${index + 1}`,
+          reviewer: `${document.case.id}-reviewer-${index + 1}`
+        })));
+      }
+      manifestCases.push({ ...requiredCase, reports });
+    }
+    const manifest = { schemaVersion: 1, suiteId: "release-0.3.0", sourceRevision, cases: manifestCases };
     await fs.writeFile(manifestPath, JSON.stringify(manifest));
     try {
       await expect(gateUserTestReleaseManifest(manifestPath)).resolves.toMatchObject({
-        suiteId: "release-suite",
+        suiteId: "release-0.3.0",
         sourceRevision,
-        cases: [{ caseId: testCase.id, runs: 1, reviewers: 1 }]
+        cases: [
+          { caseId: "workbench-resources.single-addressing", runs: 1, reviewers: 1 },
+          { caseId: "bash-agent-loop.admin-private-native-download", runs: 2, reviewers: 2 },
+          { caseId: "webfetch.admin-private-lightpanda-dynamic", runs: 2, reviewers: 2 }
+        ]
       });
       await fs.writeFile(manifestPath, JSON.stringify({
         ...manifest,
@@ -2469,11 +2456,80 @@ describe("user test harness", () => {
       }));
       await expect(gateUserTestReleaseManifest(manifestPath))
         .rejects.toThrow("USER_TEST_RELEASE_REVISION_MISMATCH");
+
+      await fs.writeFile(manifestPath, JSON.stringify({ ...manifest, suiteId: "release-unrelated" }));
+      await expect(gateUserTestReleaseManifest(manifestPath))
+        .rejects.toThrow("USER_TEST_RELEASE_SUITE_MISMATCH");
+
+      await fs.writeFile(manifestPath, JSON.stringify({ ...manifest, cases: manifest.cases.slice(0, 1) }));
+      await expect(gateUserTestReleaseManifest(manifestPath))
+        .rejects.toThrow("USER_TEST_RELEASE_COVERAGE_MISMATCH");
+
+      await fs.writeFile(manifestPath, JSON.stringify({
+        ...manifest,
+        cases: manifest.cases.map((entry) => entry.minimumIndependentRuns === 2
+          ? { ...entry, minimumIndependentRuns: 1 }
+          : entry)
+      }));
+      await expect(gateUserTestReleaseManifest(manifestPath))
+        .rejects.toThrow("USER_TEST_RELEASE_COVERAGE_MISSING:bash-agent-loop.admin-private-native-download");
+
+      await fs.writeFile(manifestPath, JSON.stringify({
+        ...manifest,
+        cases: [
+          { ...manifest.cases[0], caseDocument: path.join(process.cwd(), "docs/user-tests/template.md") },
+          ...manifest.cases.slice(1)
+        ]
+      }));
+      await expect(gateUserTestReleaseManifest(manifestPath))
+        .rejects.toThrow("USER_TEST_RELEASE_COVERAGE_MISSING:workbench-resources.single-addressing");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 });
+
+function releaseSealedReport({
+  document,
+  sourceRevision,
+  runId,
+  reviewer
+}: {
+  document: Awaited<ReturnType<typeof readUserTestCaseDocument>>;
+  sourceRevision: string;
+  runId: string;
+  reviewer: string;
+}) {
+  const run = {
+    schemaVersion: 1 as const,
+    runId,
+    caseId: document.case.id,
+    caseDigest: document.digest,
+    sourceRevision,
+    kind: document.case.kind,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: new Date(1).toISOString(),
+    workspaceMode: "isolated" as const,
+    execution: { status: "passed" as const, assertions: [] },
+    observation: { outbound: [], tools: [], toolCalls: [], requestLogs: [] },
+    quality: { status: "pending_review" as const, criteria: document.case.quality.criteria },
+    verdict: "inconclusive" as const
+  };
+  return validateAndSealUserTestReport(run, {
+    schemaVersion: 1,
+    runId,
+    caseId: document.case.id,
+    reviewer,
+    reviewedAt: new Date(2).toISOString(),
+    criteria: document.case.quality.criteria.map((criterion) => ({
+      id: criterion.id,
+      score: 5,
+      evidence: "The captured result satisfies this release criterion."
+    })),
+    verdict: "pass",
+    summary: "Pass."
+  });
+}
 
 function conversationCase(
   actor: "admin_private" | "user_private" | "admin_group" | "user_group",

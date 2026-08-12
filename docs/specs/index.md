@@ -1,6 +1,6 @@
 # sunabot 当前系统规范
 
-版本：2026-07-31
+版本：2026-08-12（v0.3.0）
 状态：当前实现的唯一规范入口
 适用范围：sunabot 后端、多 Agent 运行时、OneBot 接入、管理台、持久化、测试和部署
 
@@ -10,14 +10,16 @@
 | --- | --- | --- |
 | [产品范围与运行结构](./01-product-and-runtime.md) | 产品边界、Core/NapCat 运行结构、首次运行、代理、版本与发行约束 | 修改运行模式、启动器、部署、跨平台边界或产品范围前 |
 | [消息接入与会话执行](./02-messaging-and-sessions.md) | OneBot 接入、消息路由、回复门控、广播风暴、会话、outbox 与异步工具 | 修改消息、回复、会话顺序、异步投递或断线恢复前 |
-| [Provider、提示词与工具](./03-providers-prompts-and-tools.md) | Provider 协议、重试、Prompt Cache、Token 统计、最终提示词与工具能力 | 修改模型调用、提示词、工具、Codex、代理或用量口径前 |
-| [记忆、知识库、文件与图片](./04-memory-and-media.md) | 记忆边界、每日 Dream、知识库召回、附件解析、图像生成和跨组件媒体 | 修改记忆、Dream、知识库、附件、图片、自拍或媒体传输前 |
-| [管理台](./05-admin-console.md) | 信息架构、Agent 与 QQ 管理、状态、Web Chat、日志、图片与鉴权交互 | 修改管理 API、管理台页面、账号操作或用户可见行为前 |
+| [Provider、提示词与工具](./03-providers-prompts-and-tools.md) | Provider 协议、重试、Prompt Cache、Token 统计、最终提示词、灵魂包与工具能力 | 修改模型调用、提示词、灵魂包、工具、Codex、代理或用量口径前 |
+| [记忆、知识库、文件与图片](./04-memory-and-media.md) | 记忆边界、每日 Dream、知识库召回、附件解析、图像生成、单一 Workbench 和跨组件媒体 | 修改记忆、Dream、知识库、附件、图片、自拍或媒体传输前 |
+| [管理台](./05-admin-console.md) | 信息架构、Agent 与 QQ 管理、灵魂导入导出、状态、Web Chat、日志、图片与鉴权交互 | 修改管理 API、灵魂导入导出、管理台页面、账号操作或用户可见行为前 |
 | [持久化、迁移与安全](./06-persistence-and-security.md) | SQLite 数据边界、文件边界、恢复点、旧数据迁移和安全要求 | 修改 schema、数据路径、备份恢复、迁移、凭据或路径安全前 |
 | [功能—代码文件索引](./07-code-map.md) | 业务功能到主要代码文件的映射 | 定位实现入口，或新增、移动、删除主要代码文件时 |
 | [验证标准与已知限制](./08-validation.md) | 基础验证、专项验收、跨平台验证和当前待完成的真实环境验收 | 制定验证范围、提交改动或更新验收状态时 |
 
-专题实现遵循 [WebFetch 工具设计](../design/webfetch.md)，其中固定公开参数、静态与动态抓取边界、macOS Docker/Linux Native Renderer 平台选择、一次性 Chromium 同步、进程鉴权与监管、语义匹配、token 预算、资源边界和降级状态。
+专题实现遵循 [WebFetch 工具设计](../design/webfetch.md)，其中固定公开参数、静态与动态抓取边界、Lightpanda 0.3.3、Linux/WSL Bubblewrap 隔离、macOS 动态能力 unavailable、进程鉴权与监管、语义匹配、token 预算、资源边界和降级状态。
+
+当前运行合同固定为 Native Core、Native Bash、Native MCP、Native Skill Script 与 Native WebFetch；每账号 NapCat 是唯一 Docker 例外。每个 Agent 只保留一个 canonical `workbench/`。Linux amd64/arm64 与 WSL2 发行包内置 Node、生产依赖、Codex CLI、Lightpanda 和 Bubblewrap，安装阶段只准备锁定 NapCat 上游镜像，普通启动零下载；NapCat/QQ 的公开再分发授权尚未确认，不进入发行归档。首次 `up` 在命令行完成管理员名称和密码 Landing。人格提示词通过管理台或 `sunabot.sh soul` 导出、预览和原子导入。
 
 在线语音实现遵循 [在线语音合成](../deployment/online-voice-synthesis.md)，其中 OpenAI Audio 兼容协议、逐 Agent 音色 ID、凭据边界、合成响应门禁和真实 QQ 外发构成当前运行合同。
 

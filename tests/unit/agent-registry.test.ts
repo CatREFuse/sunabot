@@ -127,28 +127,24 @@ describe("AgentRegistry", () => {
       .resolves.toContain("普拉娜");
     await expect(fs.readFile(path.join(agentDirectory, "workbench", "index.md"), "utf8"))
       .resolves.toContain("`skills/`：Skills，入口 `index.json`");
-    await expect(fs.readFile(path.join(agentDirectory, "docker-workbench", "index.md"), "utf8"))
-      .resolves.toContain("`knowledge/`：知识库，入口 `index.json`");
     await expect(fs.readFile(
-      path.join(agentDirectory, "docker-workbench", "selfie", "references.jsonl"),
+      path.join(agentDirectory, "workbench", "selfie", "references.jsonl"),
       "utf8"
     )).resolves.toBe("\n");
     await expect(fs.readFile(
-      path.join(agentDirectory, "docker-workbench", "emoji", "emojis.jsonl"),
+      path.join(agentDirectory, "workbench", "emoji", "emojis.jsonl"),
       "utf8"
     )).resolves.toBe("\n");
     expect(JSON.parse(await fs.readFile(
-      path.join(agentDirectory, "docker-workbench", "skills", "index.json"),
+      path.join(agentDirectory, "workbench", "skills", "index.json"),
       "utf8"
     ))).toMatchObject({ schemaVersion: 1, skills: [] });
     expect(JSON.parse(await fs.readFile(
-      path.join(agentDirectory, "docker-workbench", "knowledge", "index.json"),
+      path.join(agentDirectory, "workbench", "knowledge", "index.json"),
       "utf8"
     ))).toMatchObject({ schemaVersion: 1, root: "knowledge", documents: [] });
-    expect((await fs.readFile(
-      path.join(agentDirectory, "workbench/selfie/references.jsonl"),
-      "utf8"
-    )).trim()).toBe("");
+    await expect(fs.access(path.join(agentDirectory, "docker-workbench")))
+      .rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("fills missing default Plana files without overwriting legacy workspace customizations", async () => {
@@ -215,7 +211,6 @@ describe("AgentRegistry", () => {
     delete (manifest.bot as Record<string, unknown>).replyDebounceMs;
     delete (manifest.bot as Record<string, unknown>).quoteGroupReplyExcludedUserIds;
     delete (manifest.bot as Record<string, unknown>).tone;
-    delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).adminPrivateBackend;
     delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).auditModel;
     delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).strictMode;
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -234,7 +229,6 @@ describe("AgentRegistry", () => {
           maxRetries: 2
         },
         bash: {
-          adminPrivateBackend: "docker",
           auditModel: "gpt-5.4-mini",
           strictMode: true
         }

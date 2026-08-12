@@ -40,6 +40,6 @@
 - Profile 启用门禁、旧 Profile 兼容、Agent 隔离与切换迟到响应；
 - WebUI 保存、连接检测、缺少 API Key、桌面与移动端 light/dark；
 - 五种 Provider 协议中的 `send_voice_message` 终止 companion、同源正文与文字/语音自然独立入队；
-- Native Core 和 Docker Core 使用同一在线协议，不依赖本地语音进程、容器、网络别名或共享文件路径。
+- Linux/WSL 与 macOS 源码形态的 Native Core 使用同一在线协议；NapCat 保持每账号独立 Docker 容器，语音合成不依赖本地语音进程、额外语音容器、网络别名或共享文件路径。
 
 真实验收需使用已获授权的在线账号、模型和音色 ID，分别完成至少两个 Agent 的日语合成与 QQ 私聊/群聊 `record` 外发。供应商限额、地区、模型权限、音色授权与数据处理条款由部署者确认；自动化 fixture 不能替代真实在线合成和真实 QQ 发送。

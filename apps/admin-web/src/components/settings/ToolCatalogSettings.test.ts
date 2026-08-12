@@ -37,7 +37,6 @@ function toolsDraft(): BotToolSettingsDraft {
 function bashDraft() {
   return {
     enabled: false,
-    adminPrivateBackend: "native" as const,
     auditModel: "gpt-5.4-mini",
     strictMode: true,
     allowGroup: false,
@@ -90,8 +89,8 @@ const tools = [
 
 const directRuntimeTools = [
   {
-    name: "docker_bash",
-    title: "Docker Bash",
+    name: "native_bash",
+    title: "Native Bash",
     summary: "执行 workspace 命令。",
     execution: "inline",
     configuredEnabled: false,
@@ -213,7 +212,7 @@ describe("ToolCatalogSettings", () => {
     apiRequest.mockResolvedValueOnce({ tools: directRuntimeTools });
     const draft = toolsDraft();
     draft.overrides.codex = { enabled: false, description: "Codex 说明" };
-    draft.overrides.docker_bash = { enabled: true, description: "Bash 说明" };
+    draft.overrides.native_bash = { enabled: true, description: "Bash 说明" };
     const bash = bashDraft();
     const wrapper = mount(ToolCatalogSettings, {
       props: { modelValue: draft, bash },
@@ -221,14 +220,14 @@ describe("ToolCatalogSettings", () => {
     });
     await flushPromises();
 
-    const bashToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 Docker Bash"));
+    const bashToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 Native Bash"));
     const codexToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 Codex"));
     await bashToggle!.get('input[type="checkbox"]').setValue(true);
     await codexToggle!.get('input[type="checkbox"]').setValue(false);
 
     expect(bash.enabled).toBe(true);
     expect(draft.codex.enabled).toBe(false);
-    expect(draft.overrides.docker_bash).toEqual({ description: "Bash 说明" });
+    expect(draft.overrides.native_bash).toEqual({ description: "Bash 说明" });
     expect(draft.overrides.codex).toEqual({ description: "Codex 说明" });
   });
 

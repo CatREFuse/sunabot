@@ -47,7 +47,6 @@ For the same no-media local control contract, `start` and `resume` may also subm
     ],
     "forbiddenTools": [
       "native_bash",
-      "docker_bash",
       "system_config",
       "cron",
       "call_director"

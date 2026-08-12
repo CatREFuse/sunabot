@@ -10,7 +10,6 @@ import type {
   ExportChatMediaInput,
   ExportedChatMedia
 } from "../tools/public.js";
-import type { AgentWorkbenchBackend } from "../../packages/platform/agentResourceLayout.js";
 import type { CacheStore } from "./attachments/cache.js";
 import { attachmentBlobRef } from "./attachments/attachmentServiceSupport.js";
 import { detectAttachmentType, type DetectedAttachmentType } from "./attachments/detect.js";
@@ -39,7 +38,6 @@ export interface ChatMediaExportServiceOptions {
   sources: ReadonlyMap<string, ChatMediaBoundSource>;
   publisher: ChatMediaPublisher;
   isCurrent?: () => boolean;
-  backend?: AgentWorkbenchBackend;
   allowUnsupportedFiles?: boolean;
   contentAddressedNamePrefix?: string;
 }
@@ -87,7 +85,6 @@ export class ChatMediaExportService {
   private readonly sources: ReadonlyMap<string, ChatMediaBoundSource>;
   private readonly publisher: ChatMediaPublisher;
   private readonly isCurrent: () => boolean;
-  private readonly backend: AgentWorkbenchBackend;
   private readonly allowUnsupportedFiles: boolean;
   private readonly contentAddressedNamePrefix: string;
 
@@ -97,7 +94,6 @@ export class ChatMediaExportService {
     this.sources = options.sources;
     this.publisher = options.publisher;
     this.isCurrent = options.isCurrent ?? (() => true);
-    this.backend = options.backend ?? "native";
     this.allowUnsupportedFiles = options.allowUnsupportedFiles === true;
     this.contentAddressedNamePrefix = safeContentAddressedNamePrefix(
       options.contentAddressedNamePrefix ?? "chat-media"
@@ -194,7 +190,7 @@ export class ChatMediaExportService {
   private async exportBound(input: ExportChatMediaInput): Promise<ExportedChatMedia> {
     this.assertCurrent();
     const source = this.requireSource(input.handle);
-    const workbenchRoot = await resolveAgentWorkbench(this.agentWorkspace, this.backend);
+    const workbenchRoot = await resolveAgentWorkbench(this.agentWorkspace);
     const materialized = await this.materialize(source);
     this.assertCurrent();
     const inspected = await copyAndInspect(materialized, workbenchRoot, {

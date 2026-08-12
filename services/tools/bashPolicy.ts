@@ -167,10 +167,10 @@ export function evaluateBashPolicy(input: BashPolicyInput): BashPolicyResult {
     };
   }
 
-  if (input.backend === "docker" || input.accessMode !== "admin") {
+  if (input.accessMode !== "admin") {
     return denied(
       maxRisk(input.audit.risk, "medium"),
-      "Docker Bash 只能写入当前 Agent 的 workbench，并只读访问 Skill 与 MCP 配置。",
+      "隔离 Bash 只能写入当前 Agent 的 workbench，并只读访问 Skill 与 MCP 配置。",
       outsideAccesses
     );
   }

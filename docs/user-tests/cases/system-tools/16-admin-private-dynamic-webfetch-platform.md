@@ -3,7 +3,7 @@
 ## Preconditions
 
 Run this case from a fresh isolated user-test workspace while Sunabot Core uses
-the macOS Native Core runtime and the Docker-isolated
+the Linux/WSL Native Core runtime and the Bubblewrap-isolated Lightpanda
 `webfetch-renderer` reports ready. Use the public HTTP page
 `http://uitestingplayground.com/dynamictable`, whose useful
 table content is populated by browser-side JavaScript. The run must not connect
@@ -15,10 +15,9 @@ rendered table content without any Renderer token, host path, Cookie, request
 header, or browser diagnostic text.
 
 The lifecycle regression for this case runs `./sunabot.sh restart` twice after
-one successful `./sunabot.sh bootstrap`. The second restart must reuse the
-dependency-keyed Renderer browser layer: its build output may validate cached
-layers, but it must not run Playwright browser installation, fetch browser
-archives, or install Chromium operating-system packages.
+one successful `./sunabot.sh bootstrap`. Both restarts must use the bundled
+Lightpanda binary and production dependencies without downloading a browser,
+runtime package, or operating-system dependency.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
@@ -53,7 +52,6 @@ archives, or install Chromium operating-system packages.
     ],
     "forbiddenTools": [
       "native_bash",
-      "docker_bash",
       "system_config"
     ],
     "forbiddenSuccessfulTools": [],

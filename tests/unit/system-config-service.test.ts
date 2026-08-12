@@ -59,19 +59,16 @@ describe("SystemConfigService", () => {
       bash: {
         enabled: false,
         configuredEnabled: false,
-        adminPrivateBackend: "docker",
-        configuredBackend: "docker",
-        routes: { administratorPrivateQq: "docker", administratorGroupQq: "docker", otherQqConversations: "docker" },
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         available: true,
         effectiveEnabled: false,
         unavailableReason: "BASH_CONFIG_DISABLED",
         unavailableMessage: "Bash 未启用。",
-        isolationRequired: "backend_specific",
-        nativeHostExecutionAllowed: false,
+        isolationRequired: "platform_native",
+        nativeHostExecutionAllowed: true,
         rawHostFallbackAllowed: false,
-        dockerSocketAllowed: false
+        bubblewrapRequired: false
       },
       groups: {
         total: 2,
@@ -308,19 +305,16 @@ describe("SystemConfigService", () => {
       bash: {
         enabled: false,
         configuredEnabled: false,
-        adminPrivateBackend: "docker",
-        configuredBackend: "docker",
-        routes: { administratorPrivateQq: "docker", administratorGroupQq: "docker", otherQqConversations: "docker" },
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         available: true,
         effectiveEnabled: false,
         unavailableReason: "BASH_CONFIG_DISABLED",
         unavailableMessage: "Bash 未启用。",
-        isolationRequired: "backend_specific",
-        nativeHostExecutionAllowed: false,
+        isolationRequired: "platform_native",
+        nativeHostExecutionAllowed: true,
         rawHostFallbackAllowed: false,
-        dockerSocketAllowed: false
+        bubblewrapRequired: false
       },
       recovery: { required: true },
       probe: {
@@ -700,17 +694,15 @@ describe("SystemConfigService", () => {
 
   it.each([
     {
-      label: "Docker isolation unavailable",
+      label: "Native isolation unavailable",
       enabled: true,
-      backend: "docker" as const,
       available: false,
-      reason: "BASH_DOCKER_ISOLATION_UNAVAILABLE",
-      message: "Docker 后端未通过强隔离检查；Bash 已安全关闭，不会使用 Docker socket 或宿主 Bash 回退。"
+      reason: "BASH_NATIVE_ISOLATION_UNAVAILABLE",
+      message: "Native Bash 当前不可用。"
     },
     {
       label: "configuration disabled",
       enabled: false,
-      backend: "docker" as const,
       available: true,
       reason: "BASH_CONFIG_DISABLED",
       message: "Bash 未启用。"
@@ -718,35 +710,29 @@ describe("SystemConfigService", () => {
     {
       label: "enabled with isolation",
       enabled: true,
-      backend: "docker" as const,
       available: true,
       reason: null,
       message: null
     }
   ])("reports Bash configured and effective state for $label", async ({
     enabled,
-    backend,
     available,
     reason,
     message
   }) => {
     const harness = createHarness();
     harness.config.bot.bash.enabled = enabled;
-    harness.config.bot.bash.adminPrivateBackend = backend;
     harness.runtime.resolveToolCapabilities = vi.fn(async () => ({ workspaceBash: available }));
 
     for (const operation of ["get_settings", "get_status"] as const) {
       const result = await execute(harness, systemInput(operation));
       expect(result.bash).toMatchObject({
         configuredEnabled: enabled,
-        adminPrivateBackend: "docker",
-        routes: { administratorPrivateQq: "docker", administratorGroupQq: "docker", otherQqConversations: "docker" },
         available,
         effectiveEnabled: enabled && available,
         unavailableReason: reason,
         unavailableMessage: message,
-        rawHostFallbackAllowed: false,
-        dockerSocketAllowed: false
+        rawHostFallbackAllowed: false
       });
     }
   });
@@ -763,7 +749,7 @@ describe("SystemConfigService", () => {
     expect(result.bash).toMatchObject({
       available: false,
       effectiveEnabled: false,
-      unavailableReason: "BASH_DOCKER_ISOLATION_UNAVAILABLE"
+      unavailableReason: "BASH_NATIVE_ISOLATION_UNAVAILABLE"
     });
     expect(JSON.stringify(result)).not.toContain(SECRET_PATH);
   });
@@ -791,33 +777,29 @@ describe("SystemConfigService", () => {
     }
   });
 
-  it("keeps fixed routing even when legacy backend and identity fields differ", async () => {
+  it("keeps native status independent of legacy identity flags", async () => {
     const harness = createHarness();
     harness.config.bot.bash.enabled = true;
     harness.config.bot.bash.adminOnly = false;
-    harness.config.bot.bash.adminPrivateBackend = "docker";
     harness.runtime.resolveToolCapabilities = vi.fn(async () => ({ workspaceBash: true }));
 
     const result = await execute(harness, systemInput("get_settings"));
 
     expect(result.bash).toMatchObject({
       configuredEnabled: true,
-      adminPrivateBackend: "docker",
-      routes: { administratorPrivateQq: "docker", administratorGroupQq: "docker", otherQqConversations: "docker" },
       available: true,
       effectiveEnabled: true
     });
   });
 
-  it("rejects the removed Bash backend mutation and non-null compatibility field", () => {
+  it("rejects the removed Bash backend operation and field", () => {
     expect(parseSystemConfigInput({
       ...systemInput("get_settings"),
-      operation: "set_bash_admin_backend",
-      bashAdminBackend: "docker"
+      operation: "set_bash_admin_backend"
     })).toMatchObject({ ok: false, field: "operation" });
     expect(parseSystemConfigInput({
       ...systemInput("get_settings"),
-      bashAdminBackend: "docker"
+      bashAdminBackend: "native"
     })).toMatchObject({ ok: false, field: "bashAdminBackend" });
   });
 });
@@ -1055,7 +1037,6 @@ function systemInput(
     enabled: null,
     orchestratorEnabled: null,
     searchImplementation: null,
-    bashAdminBackend: null,
     conversationId: null,
     groupCursor: null,
     groupLimit: null,

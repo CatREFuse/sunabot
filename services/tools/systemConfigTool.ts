@@ -17,7 +17,6 @@ export type SystemConfigMutationOperation = Exclude<
 >;
 export type SystemConfigReplyScope = "all" | "private" | "user_group" | "bot_group";
 export type SystemConfigSearchImplementation = "tavily";
-export type SystemConfigBashAdminBackend = "native" | "docker";
 
 export interface SystemConfigInput {
   operation: SystemConfigOperation;
@@ -25,7 +24,6 @@ export interface SystemConfigInput {
   enabled: boolean | null;
   orchestratorEnabled: boolean | null;
   searchImplementation: SystemConfigSearchImplementation | null;
-  bashAdminBackend: SystemConfigBashAdminBackend | null;
   conversationId: string | null;
   groupCursor: string | null;
   groupLimit: number | null;
@@ -94,11 +92,6 @@ export const systemConfigTool = {
         enum: ["tavily", null],
         description: "Search implementation for set_search; null keeps the current implementation."
       },
-      bashAdminBackend: {
-        type: "null",
-        enum: [null],
-        description: "Reserved compatibility field. Always use null; Bash routing is fixed."
-      },
       conversationId: {
         type: ["string", "null"],
         maxLength: 160,
@@ -122,7 +115,6 @@ export const systemConfigTool = {
       "enabled",
       "orchestratorEnabled",
       "searchImplementation",
-      "bashAdminBackend",
       "conversationId",
       "groupCursor",
       "groupLimit"
@@ -150,7 +142,6 @@ export function parseSystemConfigInput(input: unknown):
     "enabled",
     "orchestratorEnabled",
     "searchImplementation",
-    "bashAdminBackend",
     "conversationId",
     "groupCursor",
     "groupLimit"
@@ -173,9 +164,6 @@ export function parseSystemConfigInput(input: unknown):
   }
   if (value.searchImplementation !== null && value.searchImplementation !== "tavily") {
     return invalid("Unsupported search implementation.", "searchImplementation");
-  }
-  if (value.bashAdminBackend !== null) {
-    return invalid("Bash routing is fixed; bashAdminBackend must be null.", "bashAdminBackend");
   }
   const conversationId = value.conversationId === null
     ? null
@@ -213,7 +201,6 @@ export function parseSystemConfigInput(input: unknown):
     enabled: enabled.value,
     orchestratorEnabled: orchestratorEnabled.value,
     searchImplementation: value.searchImplementation as SystemConfigSearchImplementation | null,
-    bashAdminBackend: value.bashAdminBackend as SystemConfigBashAdminBackend | null,
     conversationId,
     groupCursor,
     groupLimit
@@ -228,12 +215,11 @@ function validateOperationShape(input: SystemConfigInput) {
     enabled: boolean | null,
     orchestratorEnabled: boolean | null,
     searchImplementation: SystemConfigSearchImplementation | null,
-    bashAdminBackend: SystemConfigBashAdminBackend | null,
     conversationId: string | null,
     groupCursor: string | null,
     groupLimit: number | null
   ) => replyScope === null && enabled === null && orchestratorEnabled === null &&
-    searchImplementation === null && bashAdminBackend === null && conversationId === null &&
+    searchImplementation === null && conversationId === null &&
     groupCursor === null && groupLimit === null;
 
   if (input.operation === "get_settings" || input.operation === "get_status") {
@@ -242,7 +228,6 @@ function validateOperationShape(input: SystemConfigInput) {
       input.enabled,
       input.orchestratorEnabled,
       input.searchImplementation,
-      input.bashAdminBackend,
       input.conversationId,
       input.groupCursor,
       input.groupLimit
@@ -250,34 +235,34 @@ function validateOperationShape(input: SystemConfigInput) {
   }
   if (input.operation === "list_groups") {
     return input.replyScope === null && input.enabled === null && input.orchestratorEnabled === null &&
-      input.searchImplementation === null && input.bashAdminBackend === null && input.conversationId === null
+      input.searchImplementation === null && input.conversationId === null
       ? undefined
       : invalid("list_groups accepts only groupCursor and groupLimit.", "list_groups");
   }
   if (input.operation === "set_auto_reply") {
     return input.replyScope && input.enabled !== null && input.orchestratorEnabled === null &&
-      input.searchImplementation === null && input.bashAdminBackend === null && input.conversationId === null &&
+      input.searchImplementation === null && input.conversationId === null &&
       input.groupCursor === null && input.groupLimit === null
       ? undefined
       : invalid("set_auto_reply requires replyScope and enabled only.", "set_auto_reply");
   }
   if (input.operation === "set_orchestrator") {
     return input.replyScope === null && input.enabled !== null && input.orchestratorEnabled === null &&
-      input.searchImplementation === null && input.bashAdminBackend === null && input.conversationId === null &&
+      input.searchImplementation === null && input.conversationId === null &&
       input.groupCursor === null && input.groupLimit === null
       ? undefined
       : invalid("set_orchestrator requires enabled only.", "set_orchestrator");
   }
   if (input.operation === "set_search") {
     return input.replyScope === null && input.enabled !== null && input.orchestratorEnabled === null &&
-      input.bashAdminBackend === null && input.conversationId === null && input.groupCursor === null &&
+      input.conversationId === null && input.groupCursor === null &&
       input.groupLimit === null
       ? undefined
       : invalid("set_search accepts enabled and an optional searchImplementation only.", "set_search");
   }
   return input.replyScope === null && input.conversationId !== null &&
     (input.enabled !== null || input.orchestratorEnabled !== null) && input.searchImplementation === null &&
-    input.bashAdminBackend === null && input.groupCursor === null && input.groupLimit === null
+    input.groupCursor === null && input.groupLimit === null
     ? undefined
     : invalid(
       "set_group_reply requires an existing conversationId and at least one group switch.",

@@ -87,7 +87,7 @@ export class CodexAppServerRunner implements CodexControlRunner {
     if (!parsed.ok) {
       return failureResult(context.jobId, "analysis", "failed", parsed.code, parsed.error, false);
     }
-    if (this.platform !== "darwin" || this.environment.SUNABOT_RUNTIME_MODE === "docker") {
+    if (this.platform !== "darwin") {
       return failureResult(
         context.jobId,
         controlKind(parsed.value.action),

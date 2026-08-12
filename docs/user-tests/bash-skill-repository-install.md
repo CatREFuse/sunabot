@@ -2,15 +2,15 @@
 
 ## Goal
 
-Verify that an administrator can ask the Bot to package a Skill source directory in the current Native Workbench, then use the managed `sunabot-skill` commands through `native_bash` to install, independently review, enable, and read back the Skill without editing `skills/index.json` by hand.
+Verify that an administrator can ask the Bot to package a Skill source directory in the current canonical Workbench, then use the managed `sunabot-skill` commands through `native_bash` to install, independently review, enable, and read back the Skill without editing `skills/index.json` by hand.
 
 ## Preconditions
 
-The isolated Native Workbench contains an instruction-only Skill source directory. The configured Bash audit Provider and Native Bash capability are available. The target Agent starts with only the bundled Skills prepared by the harness.
+The isolated canonical Workbench contains an instruction-only Skill source directory. The configured Bash audit Provider and Native Bash capability are available. The target Agent starts with only the bundled Skills prepared by the harness.
 
 ## Expected quality
 
-The Bot follows the repository sequence, reports the installed Skill ID and enabled state from readback, explains that conversation activation starts on the next turn, and does not claim that Sunabot lacks a formal Skill repository interface. It must not use Docker Bash or hand-edit the Skill index.
+The Bot follows the repository sequence, reports the installed Skill ID and enabled state from readback, explains that conversation activation starts on the next turn, and does not claim that Sunabot lacks a formal Skill repository interface. It must use Native Bash and must not hand-edit the Skill index.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
@@ -31,12 +31,10 @@ The Bot follows the repository sequence, reports the installed Skill ID and enab
       "userProfiles": [],
       "workbenchFiles": [
         {
-          "backend": "native",
           "path": "skill-source/SKILL.md",
           "content": "---\nname: fixture-bash-skill\ndescription: Read a fixture note and return its exact value.\n---\n\n# Fixture Bash Skill\n\nRead `references/value.md` when the user asks for the fixture value.\n"
         },
         {
-          "backend": "native",
           "path": "skill-source/references/value.md",
           "content": "fixture-value-20260807\n"
         }
@@ -60,9 +58,7 @@ The Bot follows the repository sequence, reports the installed Skill ID and enab
     "requiredTools": [
       "native_bash"
     ],
-    "forbiddenTools": [
-      "docker_bash"
-    ],
+    "forbiddenTools": [],
     "forbiddenSuccessfulTools": [],
     "requiredAvailableTools": [
       "native_bash"

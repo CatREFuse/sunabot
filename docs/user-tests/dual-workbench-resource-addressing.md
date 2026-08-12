@@ -1,5 +1,9 @@
 # 双 Workbench 资源寻址
 
+## 历史状态
+
+本文冻结 Sunabot 0.2.0 的双 Workbench 行为，仅用于 `upgrade-0.2.0-to-0.3.0` 迁移回归，不进入当前 harness 或 release gate，也不能作为 0.3.0 仍提供双 Workbench 的能力证据。
+
 ## 用户目标
 
 管理员在当前 Agent 中使用表情、自拍参考图和知识资料时，可以同时访问 Native Workbench 与 Docker Workbench 中已经发布的内容。管理台列表显示每项内容所在的 Workbench；新增内容写入 Native，修改和删除保持在原 Workbench。
@@ -33,7 +37,7 @@
 - 页面只显示名称、来源、状态、动作和结果，移动端、浅色与深色主题均无横向溢出。
 - 不改写、复制或迁移现有 Workbench 内容。
 
-<!-- sunabot-user-test-case:v1 -->
+<!-- sunabot-user-test-case:historical-v0.2.0 -->
 ```json
 {
   "schemaVersion": 1,

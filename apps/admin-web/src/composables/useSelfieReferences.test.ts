@@ -31,10 +31,10 @@ describe("useSelfieReferences", () => {
     const empty: SelfieReferencePayload = { images: [], maxImages: 9 };
     const editedImage = { ...image, note: "泳装" };
     apiRequest.mockImplementation((path: string, init?: RequestInit) => {
-      if (path === "/api/selfie-references?agentId=plana&workbench=all" && !init?.method) return Promise.resolve(empty);
-      if (path === "/api/selfie-references?agentId=plana&workbench=native" && init?.method === "POST") return Promise.resolve({ images: [image], maxImages: 9 });
-      if (path === `/api/selfie-references/${image.id}?agentId=plana&workbench=native` && init?.method === "PATCH") return Promise.resolve({ images: [editedImage], maxImages: 9 });
-      if (path === `/api/selfie-references/${image.id}?agentId=plana&workbench=native` && init?.method === "DELETE") return Promise.resolve(undefined);
+      if (path === "/api/selfie-references?agentId=plana" && !init?.method) return Promise.resolve(empty);
+      if (path === "/api/selfie-references?agentId=plana" && init?.method === "POST") return Promise.resolve({ images: [image], maxImages: 9 });
+      if (path === `/api/selfie-references/${image.id}?agentId=plana` && init?.method === "PATCH") return Promise.resolve({ images: [editedImage], maxImages: 9 });
+      if (path === `/api/selfie-references/${image.id}?agentId=plana` && init?.method === "DELETE") return Promise.resolve(undefined);
       throw new Error(`Unexpected request: ${path}`);
     });
     const references = useSelfieReferences();
@@ -57,39 +57,6 @@ describe("useSelfieReferences", () => {
     await references.remove("plana", image.id);
     expect(references.images.value).toEqual([]);
     expect(references.status.value).toEqual({ kind: "success", message: "参考图已删除" });
-  });
-
-  it("keeps both Workbench sources visible and routes Docker mutations back to Docker", async () => {
-    const dockerImage: SelfieReferenceImage = {
-      ...image,
-      id: "b".repeat(64),
-      fileName: "docker.png",
-      note: "Docker 常服",
-      workbench: "docker"
-    };
-    const editedDocker = { ...dockerImage, note: "Docker 泳装" };
-    apiRequest.mockImplementation((path: string, init?: RequestInit) => {
-      if (path === "/api/selfie-references?agentId=plana&workbench=all" && !init?.method) {
-        return Promise.resolve({ images: [image, dockerImage], maxImages: 9 });
-      }
-      if (
-        path === `/api/selfie-references/${dockerImage.id}?agentId=plana&workbench=docker`
-        && init?.method === "PATCH"
-      ) return Promise.resolve({ images: [editedDocker], maxImages: 9 });
-      if (
-        path === `/api/selfie-references/${dockerImage.id}?agentId=plana&workbench=docker`
-        && init?.method === "DELETE"
-      ) return Promise.resolve(undefined);
-      throw new Error(`Unexpected request: ${path}`);
-    });
-    const references = useSelfieReferences();
-
-    await expect(references.load("plana")).resolves.toBe(true);
-    expect(references.images.value).toEqual([image, dockerImage]);
-    await expect(references.updateNote("plana", dockerImage.id, "Docker 泳装", "docker")).resolves.toBe(true);
-    expect(references.images.value).toEqual([image, editedDocker]);
-    await expect(references.remove("plana", dockerImage.id, "docker")).resolves.toBe(true);
-    expect(references.images.value).toEqual([image]);
   });
 
   it("rejects files beyond the remaining slots before sending a request", async () => {
@@ -124,8 +91,8 @@ describe("useSelfieReferences", () => {
     expect(planaSignal.aborted).toBe(true);
     expect(references.images.value).toEqual([]);
     expect(apiRequest.mock.calls.map(([path]) => path)).toEqual([
-      "/api/selfie-references?agentId=plana&workbench=all",
-      "/api/selfie-references?agentId=arona&workbench=all"
+      "/api/selfie-references?agentId=plana",
+      "/api/selfie-references?agentId=arona"
     ]);
 
     aronaResponse.resolve({ images: [aronaImage], maxImages: 9 });
@@ -149,7 +116,7 @@ describe("useSelfieReferences", () => {
     await references.load("plana");
 
     const mutation = references.updateNote("plana", image.id, "已变更");
-    expect(apiRequest.mock.calls[1]?.[0]).toBe(`/api/selfie-references/${image.id}?agentId=plana&workbench=native`);
+    expect(apiRequest.mock.calls[1]?.[0]).toBe(`/api/selfie-references/${image.id}?agentId=plana`);
     const aronaLoad = references.load("arona");
     expect(references.images.value).toEqual([]);
     await expect(aronaLoad).resolves.toBe(true);
@@ -177,7 +144,7 @@ describe("useSelfieReferences", () => {
       { file: new File(["two"], "two.png", { type: "image/png" }), note: "泳装" }
     ]);
     await vi.waitFor(() => expect(apiRequest).toHaveBeenCalledTimes(2));
-    expect(apiRequest.mock.calls[1]?.[0]).toBe("/api/selfie-references?agentId=plana&workbench=native");
+    expect(apiRequest.mock.calls[1]?.[0]).toBe("/api/selfie-references?agentId=plana");
 
     await references.load("arona");
     firstUploadResponse.resolve({ images: [image], maxImages: 9 });
@@ -185,7 +152,7 @@ describe("useSelfieReferences", () => {
 
     const postCalls = apiRequest.mock.calls.filter(([, init]) => init?.method === "POST");
     expect(postCalls).toHaveLength(1);
-    expect(postCalls[0]?.[0]).toBe("/api/selfie-references?agentId=plana&workbench=native");
+    expect(postCalls[0]?.[0]).toBe("/api/selfie-references?agentId=plana");
     expect(references.images.value).toEqual([aronaImage]);
   });
 

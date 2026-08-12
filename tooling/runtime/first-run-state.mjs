@@ -8,11 +8,21 @@ import {
   sha256Json,
   validateMultiAgentWorkspacePath
 } from "../../packages/platform/multiAgentMigrationGate.mjs";
+import { readAdminCredentialRecord } from "../admin/admin-credentials-core.mjs";
 
 export const FIRST_RUN_JOURNAL = "runtime/first-run-bootstrap.json";
 const FIRST_RUN_SIGNING_KEY = "secrets/first-run-bootstrap.key";
 const COMPLETED_REPORT = "runtime/first-run-bootstrap.completed.json";
+const ADMIN_CREDENTIALS = "secrets/admin-credentials.json";
 const BOUNDARIES = ["marker", "main", "queue", "manifest", "registration", "account-runtime"];
+const COMPLETION_READINESS_KEYS = [
+  "coreListening",
+  "onebotListening",
+  "accountRuntimeReady",
+  "napcatReady",
+  "runtimeReady",
+  "stable"
+];
 const MAIN_SCHEMA_VERSION = 17;
 const QUEUE_SCHEMA_VERSION = 5;
 const MAIN_TABLES = [
@@ -83,7 +93,7 @@ export async function inspectFirstRunBootstrap(workspaceInput) {
   return { state: "active", workspace, journal };
 }
 
-export async function completeFirstRunBootstrap(workspaceInput, now = new Date()) {
+export async function inspectFirstRunBootstrapCompletion(workspaceInput) {
   const active = await inspectFirstRunBootstrap(workspaceInput);
   if (active.state !== "active") return active;
   const missing = await missingBoundaries(active.workspace);
@@ -97,20 +107,30 @@ export async function completeFirstRunBootstrap(workspaceInput, now = new Date()
   if (gate.state !== "trusted" || gate.marker?.markerSha256 !== active.journal.markerSha256) {
     throw firstRunError("FIRST_RUN_BOUNDARY_INVALID", "首次运行完整状态未通过多 Agent 门禁。");
   }
-  const signingKey = await readSigningKey(active.workspace);
+  return { ...active, state: "ready" };
+}
+
+export async function completeFirstRunBootstrap(workspaceInput, options = {}) {
+  const ready = await inspectFirstRunBootstrapCompletion(workspaceInput);
+  if (ready.state !== "ready") return ready;
+  const readiness = validateCompletionReadiness(options.readiness);
+  const completedAt = validDate(options.now ?? new Date()).toISOString();
+  const signingKey = await readSigningKey(ready.workspace);
+  await validateAdminCredentials(ready.workspace);
   const reportPayload = {
-    ...active.journal,
+    ...ready.journal,
     state: "completed",
-    completedAt: validDate(now).toISOString()
+    completedAt,
+    readiness: { ...readiness, adminAuthReadable: true }
   };
   const report = {
     ...reportPayload,
     completionHmacSha256: hmacJson(reportPayload, signingKey)
   };
-  await atomicJson(path.join(active.workspace, COMPLETED_REPORT), report);
-  await fs.rm(path.join(active.workspace, FIRST_RUN_JOURNAL));
-  await syncDirectory(path.join(active.workspace, "runtime"));
-  return { state: "completed", workspace: active.workspace, report };
+  await atomicJson(path.join(ready.workspace, COMPLETED_REPORT), report);
+  await fs.rm(path.join(ready.workspace, FIRST_RUN_JOURNAL));
+  await syncDirectory(path.join(ready.workspace, "runtime"));
+  return { state: "completed", workspace: ready.workspace, report };
 }
 
 export async function rollbackFirstRunBootstrap(workspaceInput, now = new Date()) {
@@ -210,6 +230,9 @@ async function validateExistingBoundaries(workspace) {
   }
 
   if (mainPresent) validateRegistration(path.join(workspace, "business/data/sunabot.sqlite"));
+  if (await safePathExists(workspace, ADMIN_CREDENTIALS, "file")) {
+    await validateAdminCredentials(workspace);
+  }
 }
 
 async function missingBoundaries(workspace) {
@@ -218,6 +241,7 @@ async function missingBoundaries(workspace) {
     ["main", "business/data/sunabot.sqlite", "file"],
     ["queue", "business/data/session-queue.sqlite", "file"],
     ["manifest", "business/agents/plana/agent.json", "file"],
+    ["admin-credentials", ADMIN_CREDENTIALS, "file"],
     ["account-runtime", "runtime/napcat/accounts/primary/config-full", "directory"],
     ["account-runtime", "runtime/napcat/accounts/primary/qq", "directory"],
     ["account-runtime", "runtime/napcat/accounts/primary/plugins", "directory"]
@@ -237,6 +261,27 @@ async function missingBoundaries(workspace) {
     missing.push("registration");
   }
   return [...new Set(missing)];
+}
+
+async function validateAdminCredentials(workspace) {
+  try {
+    await readAdminCredentialRecord(path.join(workspace, ADMIN_CREDENTIALS));
+  } catch (error) {
+    throw firstRunError(
+      "FIRST_RUN_BOUNDARY_INVALID",
+      `首次运行的管理员凭据无效：${safeMessage(error)}。`
+    );
+  }
+}
+
+function validateCompletionReadiness(value) {
+  if (!plainObject(value) || COMPLETION_READINESS_KEYS.some((key) => value[key] !== true)) {
+    throw firstRunError(
+      "FIRST_RUN_RUNTIME_NOT_READY",
+      "首次运行的 Core、OneBot、账号运行时或 NapCat 尚未通过完整启动检查。"
+    );
+  }
+  return Object.fromEntries(COMPLETION_READINESS_KEYS.map((key) => [key, true]));
 }
 
 function validateSqlite(filePath, requiredTables, boundary) {

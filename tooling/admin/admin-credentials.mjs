@@ -3,22 +3,32 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { promisify } from "node:util";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
+import {
+  assertMatchingAdminPasswords,
+  createAdminCredentialRecord,
+  normalizeAdminUsername,
+  validateAdminPassword,
+  writeAdminCredentialRecord
+} from "./admin-credentials-core.mjs";
 
-const scrypt = promisify(crypto.scrypt);
 const projectRoot = resolveProjectRoot(import.meta.url);
 const workspace = resolveWorkspace(projectRoot);
 const credentialsPath = path.join(workspace, "secrets/admin-credentials.json");
-const username = String(process.argv[2] ?? "admin").trim();
-
-if (!/^[A-Za-z0-9._-]{1,128}$/.test(username)) {
-  throw new Error("管理员账号只能包含字母、数字、点、下划线和短横线。");
+const landing = process.argv[2] === "--landing";
+if (landing && !process.stdin.isTTY) {
+  throw new Error("首次启动需要交互终端，请在终端中重新执行 ./sunabot.sh up。");
 }
-
-const password = process.stdin.isTTY ? await readHidden("管理员密码（至少 12 个字符）：") : (await readStdin()).trimEnd();
-if (password.length < 12) throw new Error("管理员密码至少需要 12 个字符。");
-if (password.length > 1024) throw new Error("管理员密码过长。");
+const username = landing
+  ? await readLandingUsername()
+  : normalizeAdminUsername(process.argv[2] ?? "admin");
+const password = landing
+  ? await readLandingPassword()
+  : validateAdminPassword(
+      process.stdin.isTTY
+        ? await readHidden("管理员密码（至少 12 个字符）：")
+        : (await readStdin()).trimEnd()
+    );
 
 const now = new Date().toISOString();
 let createdAt = now;
@@ -29,21 +39,74 @@ try {
   if (error.code !== "ENOENT") throw error;
 }
 
-const salt = crypto.randomBytes(16).toString("base64url");
-const keyLength = 64;
-const derived = await scrypt(password, salt, keyLength, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
-const record = {
-  version: 1,
+const record = await createAdminCredentialRecord({
   username,
-  password: { algorithm: "scrypt", salt, hash: Buffer.from(derived).toString("base64url"), keyLength },
-  createdAt,
-  updatedAt: now
-};
-await fs.mkdir(path.dirname(credentialsPath), { recursive: true });
-const temporary = `${credentialsPath}.${process.pid}.${Date.now()}.tmp`;
-await fs.writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-await fs.rename(temporary, credentialsPath);
+  password,
+  previous: { createdAt },
+  now: new Date(now),
+  randomBytes: crypto.randomBytes
+});
+await writeAdminCredentialRecord(credentialsPath, record);
 console.log(`管理员凭据已更新：${credentialsPath}`);
+
+async function readLandingUsername() {
+  while (true) {
+    try {
+      return normalizeAdminUsername(await readVisible("管理员名称："));
+    } catch (error) {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
+}
+
+async function readLandingPassword() {
+  while (true) {
+    let password;
+    try {
+      password = validateAdminPassword(await readHidden("管理员密码（至少 12 个字符）："));
+    } catch (error) {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      continue;
+    }
+    const confirmation = await readHidden("确认管理员密码：");
+    try {
+      assertMatchingAdminPasswords(password, confirmation);
+      return password;
+    } catch (error) {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
+}
+
+function readVisible(prompt) {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(prompt);
+    process.stdin.resume();
+    process.stdin.setEncoding("utf8");
+    let value = "";
+    const cleanup = () => {
+      process.stdin.pause();
+      process.stdin.removeListener("data", onData);
+    };
+    const onData = (chunk) => {
+      for (const character of chunk) {
+        if (character === "\u0003") {
+          cleanup();
+          reject(new Error("已取消。"));
+          return;
+        }
+        if (character === "\r" || character === "\n") {
+          cleanup();
+          resolve(value);
+          return;
+        }
+        if (character === "\u007f" || character === "\b") value = value.slice(0, -1);
+        else if (!/^[\u0000-\u001f]$/.test(character)) value += character;
+      }
+    };
+    process.stdin.on("data", onData);
+  });
+}
 
 async function readStdin() {
   let value = "";

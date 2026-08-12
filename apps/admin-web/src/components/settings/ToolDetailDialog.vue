@@ -93,12 +93,6 @@ function confirmDescription() {
             <i class="bx mr-1" :class="tool.bashEnvironments.native.available ? 'bx-check-circle' : 'bx-error-circle'" aria-hidden="true"></i>{{ tool.bashEnvironments.native.available ? "可用" : "不可用" }}
           </dd>
         </div>
-        <div v-if="tool.bashEnvironments?.docker" class="divider-row">
-          <dt class="field-label">Docker Bash</dt>
-          <dd class="inline-state" :data-kind="tool.bashEnvironments.docker.started ? 'success' : 'error'">
-            <i class="bx mr-1" :class="tool.bashEnvironments.docker.started ? 'bx-check-circle' : 'bx-error-circle'" aria-hidden="true"></i>{{ tool.bashEnvironments.docker.started ? "已启动" : "未启动" }}
-          </dd>
-        </div>
         <div v-if="availability.kind === 'runtime'" class="divider-row sm:col-span-2">
           <dt class="field-label">运行环境</dt>
           <dd class="inline-state text-accent" data-kind="error">

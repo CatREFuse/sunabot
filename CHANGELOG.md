@@ -1,5 +1,25 @@
 # 更新日志
 
+## [0.3.0] - 2026-08-12
+
+### 原生运行
+
+- Core、WebFetch、Bash、MCP 与 Skill Script 统一在宿主原生运行。
+- 每个 Agent 只保留一个 Workbench，配置与资源使用同一份权威目录。
+- NapCat 保持每个账号一个独立 Docker 容器，NapCat 与 QQ 不随 Sunabot 发行归档重分发。
+
+### 网页与灵魂
+
+- 动态 WebFetch 改用 Lightpanda 0.3.3，无需 Chrome 或 Chromium。
+- 管理台支持灵魂文件导出、预览和冲突保护导入。
+- 命令行支持灵魂文件导出、检查和导入。
+
+### 安装与启动
+
+- Linux amd64、Linux arm64 与 WSL2 发行包内置 Node.js、生产依赖、Codex CLI、Lightpanda 与 Bubblewrap。
+- 安装脚本完成发行包校验、锁定 NapCat 镜像准备和原子版本切换；普通启动不再下载依赖。
+- 首次启动在命令行设置管理员名称、密码与密码确认。
+
 ## [0.2.0] - 2026-07-29
 
 ### 动态渲染
@@ -118,6 +138,7 @@ Bot 工作台、资源管理入口与 JSONL 清单完成统一升级。
 - 提示词编辑支持变量补全、搜索、折叠与冲突处理。
 - 新增当前版本与更新日志页面。
 
+[0.3.0]: https://github.com/CatREFuse/sunabot/releases/tag/v0.3.0
 [0.2.0]: https://github.com/CatREFuse/sunabot/releases/tag/v0.2.0
 [0.1.4]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.4
 [0.1.3]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.3

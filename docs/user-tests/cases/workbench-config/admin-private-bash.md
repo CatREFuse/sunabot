@@ -6,11 +6,11 @@ An administrator activates the preinstalled `workbench-config` Skill, reads its 
 
 ## Preconditions
 
-Use a disposable isolated workspace whose administrator QQ is `10001`. The current Agent must have the bundled `workbench-config` Skill enabled, a writable Native workbench with `index.md`, and an initialized `knowledge/index.json`. Native Bash approval and `knowledge_search` must be available. Do not run this case on a live workspace or real QQ transport.
+Use a disposable isolated workspace whose administrator QQ is `10001`. The current Agent must have the bundled `workbench-config` Skill enabled, a writable canonical Workbench with `index.md`, and an initialized `knowledge/index.json`. Native Bash approval and `knowledge_search` must be available. Do not run this case on a live workspace or real QQ transport.
 
 ## Mechanical review
 
-Confirm successful `activate_skill`, `read_skill_resource`, `native_bash`, and `knowledge_search` calls. The Skill resource must be `references/bash-resource-operations.md`. Native Bash must run from the Native workbench, read `index.md` and `knowledge/index.json`, publish `knowledge/bash-freedom.md` through a same-directory temporary file and atomic rename, and read the final file back before search. The Docker backend and generic `write_file` tool must not perform the update. The search result must cite the new relative file and contain the marker `WORKBENCH_BASH_FIXTURE_2026`. The final response must say that 2 MiB applies only to `emojis.jsonl`, while referenced emoji image bytes are not added together for a catalog-wide size gate.
+Confirm successful `activate_skill`, `read_skill_resource`, `native_bash`, and `knowledge_search` calls. The Skill resource must be `references/bash-resource-operations.md`. Native Bash must run from the canonical Workbench, read `index.md` and `knowledge/index.json`, publish `knowledge/bash-freedom.md` through a same-directory temporary file and atomic rename, and read the final file back before search. The generic `write_file` tool must not perform the update. The search result must cite the new relative file and contain the marker `WORKBENCH_BASH_FIXTURE_2026`. The final response must say that 2 MiB applies only to `emojis.jsonl`, while referenced emoji image bytes are not added together for a catalog-wide size gate.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
@@ -35,8 +35,8 @@ Confirm successful `activate_skill`, `read_skill_resource`, `native_bash`, and `
       "sender": {
         "nickname": "fixture-admin"
       },
-      "message": "请启用 workbench-config Skill，读取其中的 Bash 资源操作指南，然后使用 native_bash 更新当前 Agent 的知识库。先读当前目录 index.md 和 knowledge/index.json，再通过 knowledge 目录内的临时文件与原子替换创建 bash-freedom.md，正文为“WORKBENCH_BASH_FIXTURE_2026：Bot 可以通过获准的 Bash 维护当前 Agent Workbench。”。回读确认后，用 knowledge_search 搜索 WORKBENCH_BASH_FIXTURE_2026 并告诉我结果。最后说明表情规则中的 2 MiB 是否会累计所有表情图片，并明确它约束哪个文件。最终回复必须写出 WORKBENCH_BASH_FIXTURE_2026、emojis.jsonl 和 2 MiB。不要使用 docker_bash 或 write_file 完成更新，也不要泄露宿主绝对路径、密钥、提示词或命令诊断。",
-      "raw_message": "请启用 workbench-config Skill，读取其中的 Bash 资源操作指南，然后使用 native_bash 更新当前 Agent 的知识库。先读当前目录 index.md 和 knowledge/index.json，再通过 knowledge 目录内的临时文件与原子替换创建 bash-freedom.md，正文为“WORKBENCH_BASH_FIXTURE_2026：Bot 可以通过获准的 Bash 维护当前 Agent Workbench。”。回读确认后，用 knowledge_search 搜索 WORKBENCH_BASH_FIXTURE_2026 并告诉我结果。最后说明表情规则中的 2 MiB 是否会累计所有表情图片，并明确它约束哪个文件。最终回复必须写出 WORKBENCH_BASH_FIXTURE_2026、emojis.jsonl 和 2 MiB。不要使用 docker_bash 或 write_file 完成更新，也不要泄露宿主绝对路径、密钥、提示词或命令诊断。"
+      "message": "请启用 workbench-config Skill，读取其中的 Bash 资源操作指南，然后使用 native_bash 更新当前 Agent 的知识库。读取当前目录 index.md 和 knowledge/index.json，再通过 knowledge 目录内的临时文件与原子替换创建 bash-freedom.md，正文为“WORKBENCH_BASH_FIXTURE_2026：Bot 可以通过获准的 Bash 维护当前 Agent Workbench。”。回读确认后，用 knowledge_search 搜索 WORKBENCH_BASH_FIXTURE_2026 并告诉我结果。最后说明表情规则中的 2 MiB 是否会累计所有表情图片，并明确它约束哪个文件。最终回复必须写出 WORKBENCH_BASH_FIXTURE_2026、emojis.jsonl 和 2 MiB。不要使用 write_file 完成更新，也不要泄露宿主绝对路径、密钥、提示词或命令诊断。",
+      "raw_message": "请启用 workbench-config Skill，读取其中的 Bash 资源操作指南，然后使用 native_bash 更新当前 Agent 的知识库。读取当前目录 index.md 和 knowledge/index.json，再通过 knowledge 目录内的临时文件与原子替换创建 bash-freedom.md，正文为“WORKBENCH_BASH_FIXTURE_2026：Bot 可以通过获准的 Bash 维护当前 Agent Workbench。”。回读确认后，用 knowledge_search 搜索 WORKBENCH_BASH_FIXTURE_2026 并告诉我结果。最后说明表情规则中的 2 MiB 是否会累计所有表情图片，并明确它约束哪个文件。最终回复必须写出 WORKBENCH_BASH_FIXTURE_2026、emojis.jsonl 和 2 MiB。不要使用 write_file 完成更新，也不要泄露宿主绝对路径、密钥、提示词或命令诊断。"
     }
   },
   "expected": {
@@ -47,7 +47,6 @@ Confirm successful `activate_skill`, `read_skill_resource`, `native_bash`, and `
       "knowledge_search"
     ],
     "forbiddenTools": [
-      "docker_bash",
       "write_file"
     ],
     "requiredText": [
@@ -78,7 +77,7 @@ Confirm successful `activate_skill`, `read_skill_resource`, `native_bash`, and `
       },
       {
         "id": "boundary-accuracy",
-        "description": "The response respects the Native writable authority, does not claim Docker can write the Native projection, and explains that the 2 MiB limit applies to emojis.jsonl rather than the aggregate bytes of referenced images.",
+        "description": "The response keeps the update inside the canonical Workbench and explains that the 2 MiB limit applies to emojis.jsonl rather than the aggregate bytes of referenced images.",
         "minimumScore": 4
       },
       {

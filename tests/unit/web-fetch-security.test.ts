@@ -11,7 +11,8 @@ import {
   WEBFETCH_STATIC_TIMEOUT_MS
 } from "../../adapters/webfetch/safeHttpFetcher.js";
 import { RendererLimiter, RendererQueueFullError } from "../../apps/webfetch-renderer/rendererLimiter.js";
-import { rejectConnect } from "../../apps/webfetch-renderer/safeProxy.js";
+import { rejectConnect, startSafeWebProxy } from "../../apps/webfetch-renderer/safeProxy.js";
+import http from "node:http";
 import { Readable, type Duplex } from "node:stream";
 
 describe("WebFetch URL handling", () => {
@@ -47,14 +48,22 @@ describe("WebFetch URL handling", () => {
     expect(request).toHaveBeenCalledTimes(4);
   });
 
-  it("accepts every HTTP(S) address form", () => {
+  it("accepts credential-free HTTP(S) address forms", () => {
     for (const url of [
       "http://127.0.0.1:19090/file",
-      "https://user:secret@example.com/",
       "https://example.com:8443/",
       "https://example.com./",
       "https://ｅxample.com/"
     ]) expect(() => parseWebUrl(url)).not.toThrow();
+  });
+
+  it("rejects HTTP(S) URLs containing a username or password", () => {
+    for (const url of [
+      "https://user@example.com/",
+      "https://:secret@example.com/",
+      "https://user:secret@example.com/",
+      "https://%75ser:%73ecret@example.com/"
+    ]) expect(() => parseWebUrl(url)).toThrow();
   });
 
   it("rejects only unsupported URL schemes", () => {
@@ -108,9 +117,75 @@ describe("WebFetch renderer resource boundaries", () => {
     limiter.close();
   });
 
-  it("rejects HTTPS CONNECT tunnels", () => {
+  it("rejects unauthenticated HTTPS CONNECT tunnels", () => {
     const end = vi.fn();
     rejectConnect({ end } as unknown as Duplex);
-    expect(end).toHaveBeenCalledWith(expect.stringContaining("405 Method Not Allowed"));
+    expect(end).toHaveBeenCalledWith(expect.stringContaining("407 Proxy Authentication Required"));
+  });
+
+  it("authenticates Lightpanda proxy requests with a bearer budget", async () => {
+    const forwardedHeaders: http.IncomingHttpHeaders[] = [];
+    const upstream = http.createServer((request, response) => {
+      forwardedHeaders.push(request.headers);
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end("<html>ok</html>");
+    });
+    await listen(upstream);
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("upstream address unavailable");
+    const target = `http://127.0.0.1:${address.port}/dynamic`;
+    const proxy = await startSafeWebProxy();
+    const bearerBudget = proxy.openBudget();
+    const legacyBudget = proxy.openBudget();
+    try {
+      await expect(proxyGet(proxy.url, target, {
+        "proxy-authorization": `Bearer ${bearerBudget.id}`
+      })).resolves.toMatchObject({ status: 200, body: "<html>ok</html>" });
+      await expect(proxyGet(proxy.url, target, {
+        "x-sunabot-render-budget": legacyBudget.id
+      })).resolves.toMatchObject({ status: 200, body: "<html>ok</html>" });
+      await expect(proxyGet(proxy.url, target, {
+        "proxy-authorization": "Bearer unknown-budget"
+      })).resolves.toMatchObject({ status: 429 });
+      expect(forwardedHeaders).toHaveLength(2);
+      for (const headers of forwardedHeaders) {
+        expect(headers).not.toHaveProperty("proxy-authorization");
+        expect(headers).not.toHaveProperty("x-sunabot-render-budget");
+      }
+    } finally {
+      bearerBudget.close();
+      legacyBudget.close();
+      await proxy.close();
+      await new Promise<void>((resolve, reject) => upstream.close((error) => error ? reject(error) : resolve()));
+    }
   });
 });
+
+function listen(server: http.Server) {
+  return new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+}
+
+function proxyGet(proxyValue: string, target: string, headers: http.OutgoingHttpHeaders) {
+  const proxy = new URL(proxyValue);
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const request = http.request({
+      hostname: proxy.hostname,
+      port: Number(proxy.port),
+      method: "GET",
+      path: target,
+      headers
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.once("end", () => resolve({
+        status: response.statusCode ?? 0,
+        body: Buffer.concat(chunks).toString("utf8")
+      }));
+    });
+    request.once("error", reject);
+    request.end();
+  });
+}

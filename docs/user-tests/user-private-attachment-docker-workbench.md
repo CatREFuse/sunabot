@@ -1,5 +1,9 @@
 # 普通私聊文件使用 Docker Workbench
 
+## 历史状态
+
+本文冻结 Sunabot 0.2.0 的 Docker Workbench 附件回归，仅用于 `upgrade-0.2.0-to-0.3.0` 迁移验证，不进入当前 harness 或 release gate，也不能作为 0.3.0 仍提供 Docker Workbench 的能力证据。
+
 ## 用户目标
 
 普通用户在 QQ 私聊中发送文件并要求原样返回时，阿罗娜能够导出并发送该文件，同时全程使用该会话允许的 Docker Workbench。
@@ -19,7 +23,7 @@
 
 用户收到与输入相同的文本文件。回复不得暴露 Native/Docker 路径、缓存位置、工具权限或内部路由细节。
 
-<!-- sunabot-user-test-case:v1 -->
+<!-- sunabot-user-test-case:historical-v0.2.0 -->
 ```json
 {
   "schemaVersion": 1,

@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   linuxRendererBubblewrapPrefix,
   prepareNativeWebfetchRendererInstallation,
-  rendererProcessEnvironment
+  rendererProcessEnvironment,
+  verifyNativeWebfetchRendererIsolation
 } from "../../tooling/runtime/native-webfetch-renderer.mjs";
 import { nativeWebfetchRendererDeployment } from "../../tooling/runtime/launcher.mjs";
 import {
@@ -97,11 +98,10 @@ describe("Native WebFetch Renderer security contract", () => {
 
   it("passes only an allowlisted environment and requires platform sandboxes", () => {
     const environment = rendererProcessEnvironment({
-      browserExecutable: "/cache/chromium",
-      browserRoot: "/cache/browsers",
       cache: "/tmp/cache",
       entry: "/cache/main.js",
       home: "/tmp/home",
+      lightpandaExecutable: "/cache/lightpanda",
       port: 8790,
       runtime: "/tmp/run",
       workspaceId: "a".repeat(16)
@@ -109,22 +109,23 @@ describe("Native WebFetch Renderer security contract", () => {
     expect(Object.keys(environment).sort()).toEqual([
       "HOME",
       "LANG",
+      "LIGHTPANDA_DISABLE_TELEMETRY",
       "NODE_ENV",
       "PATH",
-      "PLAYWRIGHT_BROWSERS_PATH",
-      "SUNABOT_WEBFETCH_CHROMIUM_EXECUTABLE",
-      "SUNABOT_WEBFETCH_CHROMIUM_SANDBOX",
+      "SUNABOT_WEBFETCH_LIGHTPANDA_EXECUTABLE",
       "SUNABOT_WEBFETCH_RENDERER_ENTRY",
       "SUNABOT_WEBFETCH_RENDERER_HOST",
       "SUNABOT_WEBFETCH_RENDERER_PORT",
       "SUNABOT_WEBFETCH_RENDERER_TOKEN_FD",
       "SUNABOT_WEBFETCH_RENDERER_WORKSPACE_ID",
+      "SUNABOT_WEBFETCH_RUNTIME_ISOLATION",
       "TMPDIR",
       "XDG_CACHE_HOME",
       "XDG_RUNTIME_DIR"
     ]);
     expect(JSON.stringify(environment)).not.toMatch(/PROVIDER|ONEBOT|CODEX|NAPCAT|workspace\//u);
-    expect(nativeWebfetchRendererDeployment("darwin")).toBe("docker");
+    expect(environment.LIGHTPANDA_DISABLE_TELEMETRY).toBe("true");
+    expect(nativeWebfetchRendererDeployment("darwin")).toBe("unavailable");
     expect(nativeWebfetchRendererDeployment("linux")).toBe("native");
 
     const bwrap = linuxRendererBubblewrapPrefix({
@@ -142,9 +143,9 @@ describe("Native WebFetch Renderer security contract", () => {
       "--unshare-uts",
       "--unshare-ipc",
       "--uid",
-      "65534",
+      "0",
       "--gid",
-      "65534",
+      "0",
       "--cap-drop",
       "ALL",
       "--tmpfs",
@@ -154,7 +155,33 @@ describe("Native WebFetch Renderer security contract", () => {
     expect(bwrap).not.toContain("--new-session");
   });
 
-  it("downloads Chromium once per Playwright installation and fails closed when it disappears", async () => {
+  it("fails closed when the real Bubblewrap namespace probe fails", async () => {
+    const command = vi.fn(async () => {
+      throw new Error("Creating new namespace failed");
+    });
+    await expect(verifyNativeWebfetchRendererIsolation({
+      root: "/opt/sunabot/current",
+      workspace: "/srv/sunabot/workspace"
+    }, {
+      environment: { HOME: "/tmp/sunabot-home" },
+      isolationProbe: {
+        args: ["--unshare-user", "--"],
+        executable: "/opt/sunabot/current/runtime/bubblewrap/bwrap",
+        nodeExecutable: "/opt/sunabot/current/runtime/node/bin/node"
+      }
+    }, command)).rejects.toThrow("Creating new namespace failed");
+    expect(command).toHaveBeenCalledWith(
+      "/opt/sunabot/current/runtime/bubblewrap/bwrap",
+      expect.arrayContaining([
+        "--unshare-user",
+        "/opt/sunabot/current/runtime/node/bin/node",
+        "-e"
+      ]),
+      expect.objectContaining({ timeoutMs: 10_000 })
+    );
+  });
+
+  it("caches the locked Lightpanda and Node executables without runtime downloads", async () => {
     const root = await fixtureProject();
     const cacheRoot = path.join(path.dirname(root), "renderer-cache");
     const context = {
@@ -162,35 +189,33 @@ describe("Native WebFetch Renderer security contract", () => {
       workspace: path.join(root, "workspace"),
       environment: { SUNABOT_WEBFETCH_NATIVE_CACHE: cacheRoot }
     };
-    const installCalls: string[][] = [];
-    const command = vi.fn(async (_executable: string, args: string[], options: {
+    const command = vi.fn(async (executable: string, args: string[], options: {
       env?: Record<string, string>;
     }) => {
-      if (args.includes("install")) {
-        installCalls.push(args);
-        const executable = path.join(options.env!.PLAYWRIGHT_BROWSERS_PATH, "chromium");
-        await fs.mkdir(path.dirname(executable), { recursive: true });
-        await fs.writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-        return "";
-      }
-      return path.join(options.env!.PLAYWRIGHT_BROWSERS_PATH, "chromium");
+      expect(path.basename(executable)).toBe("lightpanda");
+      expect(args).toEqual(["version"]);
+      expect(options.env).toEqual({ LIGHTPANDA_DISABLE_TELEMETRY: "true" });
+      return "Lightpanda 0.3.3";
     });
 
     const first = await prepareNativeWebfetchRendererInstallation(context, { command });
     const second = await prepareNativeWebfetchRendererInstallation(context, { command });
-    expect(first.browserExecutable).toBe(second.browserExecutable);
-    expect(installCalls).toHaveLength(1);
+    expect(first.lightpandaExecutable).toBe(second.lightpandaExecutable);
+    expect(first.nodeExecutable).toBe(second.nodeExecutable);
+    expect(first.entry).toBe(second.entry);
+    expect(command).toHaveBeenCalledTimes(2);
+    expect(await fs.readFile(first.lightpandaExecutable, "utf8")).toContain("Lightpanda 0.3.3");
 
-    await fs.rm(first.browserExecutable);
+    const source = path.join(root, "runtime/lightpanda/lightpanda");
+    await fs.rm(source);
     await expect(prepareNativeWebfetchRendererInstallation(context, { command }))
-      .rejects.toThrow("WEBFETCH_BROWSER_MISSING");
-    expect(installCalls).toHaveLength(1);
+      .rejects.toThrow("WEBFETCH_LIGHTPANDA_MISSING");
+    expect(command).toHaveBeenCalledTimes(2);
 
-    await prepareNativeWebfetchRendererInstallation(context, {
-      command,
-      repairBrowser: true
-    });
-    expect(installCalls).toHaveLength(2);
+    await fs.writeFile(source, "#!/bin/sh\necho 'Lightpanda 0.3.3 repaired'\n", { mode: 0o700 });
+    const repaired = await prepareNativeWebfetchRendererInstallation(context, { command });
+    expect(repaired.lightpandaExecutable).not.toBe(first.lightpandaExecutable);
+    expect(command).toHaveBeenCalledTimes(3);
   });
 
 });
@@ -204,15 +229,14 @@ async function fixtureProject() {
     "": { version: "0.0.0" },
     "node_modules/fastify": { version: "1.0.0", dependencies: { "fastify-dep": "1.0.0" } },
     "node_modules/fastify-dep": { version: "1.0.0" },
-    "node_modules/ipaddr.js": { version: "2.2.0" },
-    "node_modules/playwright": { version: "1.61.1", dependencies: { "playwright-core": "1.61.1" } },
-    "node_modules/playwright-core": { version: "1.61.1" }
+    "node_modules/linkedom": { version: "1.0.0", dependencies: { "linkedom-dep": "1.0.0" } },
+    "node_modules/linkedom-dep": { version: "1.0.0" }
   };
   await fs.writeFile(path.join(root, "package-lock.json"), JSON.stringify({
     lockfileVersion: 3,
     packages
   }));
-  for (const name of ["fastify", "fastify-dep", "ipaddr.js", "playwright", "playwright-core"]) {
+  for (const name of ["fastify", "fastify-dep", "linkedom", "linkedom-dep"]) {
     const directory = path.join(root, "node_modules", ...name.split("/"));
     await fs.mkdir(directory, { recursive: true });
     await fs.writeFile(path.join(directory, "package.json"), JSON.stringify({ name }));
@@ -221,13 +245,15 @@ async function fixtureProject() {
     "dist/apps/webfetch-renderer/main.js",
     "dist/adapters/webfetch/urlPolicy.js",
     "dist/services/webfetch/contracts.js",
-    "tooling/runtime/native-webfetch-renderer-supervisor.mjs",
-    "node_modules/playwright/cli.js"
+    "tooling/runtime/native-webfetch-renderer-supervisor.mjs"
   ]) {
     const target = path.join(root, relative);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, "export {};\n");
   }
+  const lightpanda = path.join(root, "runtime/lightpanda/lightpanda");
+  await fs.mkdir(path.dirname(lightpanda), { recursive: true });
+  await fs.writeFile(lightpanda, "#!/bin/sh\necho 'Lightpanda 0.3.3'\n", { mode: 0o700 });
   await fs.mkdir(path.join(root, "workspace"), { recursive: true });
   return root;
 }

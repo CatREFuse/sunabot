@@ -10,31 +10,26 @@ describe("conversation capability Workbench routing", () => {
     {
       label: "administrator private chat",
       scope: "private" as const,
-      isAdmin: true,
-      expected: "native" as const
+      isAdmin: true
     },
     {
       label: "ordinary private chat",
       scope: "private" as const,
-      isAdmin: false,
-      expected: "docker" as const
+      isAdmin: false
     },
     {
       label: "administrator group chat",
       scope: "user_group" as const,
-      isAdmin: true,
-      expected: "docker" as const
+      isAdmin: true
     },
     {
       label: "ordinary group chat",
       scope: "user_group" as const,
-      isAdmin: false,
-      expected: "docker" as const
+      isAdmin: false
     }
   ])("uses one route for chat export, Codex input and send_file in $label", ({
     scope,
-    isAdmin,
-    expected
+    isAdmin
   }) => {
     const context = createConversationCapabilityContext({
       agentId: "arona",
@@ -51,15 +46,15 @@ describe("conversation capability Workbench routing", () => {
     });
 
     expect(resolveConversationWorkbench(context, "chat_media_export").primaryBackend)
-      .toBe(expected);
+      .toBe("native");
     expect(resolveConversationWorkbench(context, "codex_input").primaryBackend)
-      .toBe(expected);
+      .toBe("native");
     expect(resolveConversationWorkbench(context, "send_file").primaryBackend)
-      .toBe(expected);
+      .toBe("native");
     expect(Object.isFrozen(context)).toBe(true);
   });
 
-  it("preserves the administrator private send_file source-missing fallback only", () => {
+  it("uses the exact canonical Workbench plan without a source fallback", () => {
     const context = createConversationCapabilityContext({
       agentId: "arona",
       accountId: "secondary",
@@ -74,9 +69,9 @@ describe("conversation capability Workbench routing", () => {
 
     expect(resolveConversationWorkbench(context, "send_file")).toMatchObject({
       primaryBackend: "native",
-      readableBackends: ["native", "docker"],
+      readableBackends: ["native"],
       writableBackends: ["native"],
-      fallbackPolicy: "source_missing_only"
+      fallbackPolicy: "none"
     });
     expect(resolveConversationWorkbench(context, "chat_media_export")).toMatchObject({
       primaryBackend: "native",

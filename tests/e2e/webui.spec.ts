@@ -179,11 +179,11 @@ test("Agent 设置只保留有效且唯一的配置入口", async ({ page }) => 
   await expect(page.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
 
   await page.goto("/agent-settings/memory");
-  await expect(page.getByLabel("工作记忆上限")).toHaveCount(1);
+  await expect(page.getByRole("heading", { name: "记忆处理", exact: true })).toBeVisible();
 
   await page.goto("/agent-settings/tools");
   await expect(page.getByLabel("启用 Native Bash")).toBeVisible();
-  await expect(page.getByLabel("启用 Docker Bash")).toBeVisible();
+  await expect(page.getByLabel("启用 Docker Bash")).toHaveCount(0);
   await expect(page.getByLabel("启用 Codex")).toBeVisible();
   await page.getByRole("tab", { name: "运行参数", exact: true }).click();
   await expect(page.getByLabel("启动 Codex Worker")).toHaveCount(0);
@@ -424,32 +424,32 @@ test("自拍参考图可预览、编辑备注、删除和逐图备注上传", as
   const state = await installMockApi(page);
   await page.goto("/images");
 
-  await expect(page.getByText("Native 3 / 9 · Docker 1 / 9", { exact: true })).toBeVisible();
+  await expect(page.getByText("4 / 9", { exact: true })).toBeVisible();
   const manager = page.getByRole("region", { name: "自拍参考图" });
   await expect(manager).toBeVisible();
-  await expect(manager.getByText("每个 Workbench 最多 9 张，每次自拍选用 1–3 张", { exact: true })).toBeVisible();
+  await expect(manager.getByText("最多 9 张，每次自拍选用 1–3 张", { exact: true })).toBeVisible();
   await expect(manager.getByText("群聊参考", { exact: true })).toBeVisible();
   await expect(page.getByRole("dialog", { name: "自拍参考图" })).toHaveCount(0);
 
-  await manager.getByRole("button", { name: "编辑备注 Native 常服正面" }).click();
+  await manager.getByRole("button", { name: "编辑备注 常服正面" }).click();
   const editDialog = page.getByRole("dialog", { name: "编辑图片备注" });
   await editDialog.getByLabel("01-neutral-face.png 的备注").fill("泳装");
   await editDialog.getByRole("button", { name: "保存", exact: true }).click();
   await expect(manager.getByText("备注已保存", { exact: true })).toBeVisible();
   expect(state.selfieReferences[0]?.note).toBe("泳装");
 
-  await manager.getByRole("button", { name: "查看原图 Native 泳装" }).first().click();
+  await manager.getByRole("button", { name: "查看原图 泳装" }).first().click();
   const preview = page.getByRole("dialog", { name: "自拍参考图预览" });
   await expect(preview).toBeVisible();
   await expect(preview.locator('img[src*="variant=original"]')).toBeVisible();
   await preview.getByRole("button", { name: "关闭预览" }).click();
 
-  await manager.getByRole("button", { name: "删除 Native 泳装" }).click();
+  await manager.getByRole("button", { name: "删除 泳装" }).click();
   await expect(page.getByRole("heading", { name: "删除这张参考图？" })).toBeVisible();
   await page.getByRole("button", { name: "删除", exact: true }).click();
   await expect(manager.getByText("参考图已删除", { exact: true })).toBeVisible();
   await expect(manager.locator("article")).toHaveCount(3);
-  expect(state.selfieReferences).toHaveLength(2);
+  expect(state.selfieReferences).toHaveLength(3);
 
   await manager.locator('input[type="file"]').setInputFiles({
     name: "replacement.png",
@@ -460,7 +460,7 @@ test("自拍参考图可预览、编辑备注、删除和逐图备注上传", as
   await uploadDialog.getByLabel("replacement.png 的备注").fill("女仆装");
   await uploadDialog.getByRole("button", { name: "保存并上传", exact: true }).click();
   await expect(manager.getByText("1 张已保存", { exact: true })).toBeVisible();
-  expect(state.selfieReferences).toHaveLength(3);
+  expect(state.selfieReferences).toHaveLength(4);
   expect(state.selfieReferences.at(-1)?.note).toBe("女仆装");
   expect(state.patchRequests).toHaveLength(0);
 
@@ -861,13 +861,13 @@ test("版本页面展示当前版本与更新日志", async ({ page }) => {
   expect((await initialRequest).method()).toBe("GET");
 
   await expect(page.getByRole("heading", { name: "版本更新", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "v0.2.0", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "v0.3.0", exact: true })).toBeVisible();
   await expect(page.getByText("当前发行", { exact: true })).toBeVisible();
-  await expect(page.getByText("2026年7月29日", { exact: true })).toBeVisible();
+  await expect(page.getByText("2026年8月12日", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "更新日志", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "动态渲染", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "隔离与鉴权", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "启动与升级", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "原生运行", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "网页与灵魂", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "安装与启动", exact: true })).toBeVisible();
 
   const refreshRequest = page.waitForRequest((request) => request.url().endsWith("/api/releases"));
   await page.getByRole("button", { name: "刷新", exact: true }).click();
@@ -915,7 +915,7 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
 
   await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("搜索工具")).toBeVisible();
-  await expect(page.getByLabel(/^启用 /)).toHaveCount(25);
+  await expect(page.getByLabel(/^启用 /)).toHaveCount(24);
   for (const name of [
     "assistant_text",
     "no_reply",
@@ -934,7 +934,6 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
     "send_file",
     "send_voice_message",
     "native_bash",
-    "docker_bash",
     "codex",
     "activate_skill",
     "read_skill_resource",
@@ -949,7 +948,7 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
   await expect(page.getByText("onebot.send_message", { exact: true })).toHaveCount(0);
   await expect(page.getByText("provider.test", { exact: true })).toHaveCount(0);
 
-  for (const [id, title] of [["docker_bash", "Docker Bash"], ["codex", "Codex"]] as const) {
+  for (const [id, title] of [["native_bash", "Native Bash"], ["codex", "Codex"]] as const) {
     const row = page.locator("article").filter({ has: page.getByText(id, { exact: true }) });
     await expect(row.getByText("配置已启用", { exact: true })).toBeVisible();
     await expect(row.getByText("能力可用", { exact: true })).toHaveCount(0);
@@ -962,19 +961,16 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
   }
 
   const nativeBashRow = page.locator("article").filter({ has: page.getByText("native_bash", { exact: true }) });
-  await expect(nativeBashRow.getByText("管理员私聊与 Web Chat 可用", { exact: true })).toBeVisible();
+  await expect(nativeBashRow.getByText("按平台授权会话", { exact: true })).toBeVisible();
   await expect(nativeBashRow.getByText("Native Bash 可用", { exact: true })).toBeVisible();
-  const dockerBashRow = page.locator("article").filter({ has: page.getByText("docker_bash", { exact: true }) });
-  await expect(dockerBashRow.getByText("全部允许会话可用", { exact: true })).toBeVisible();
-  await expect(dockerBashRow.getByText("Docker Bash 已启动", { exact: true })).toBeVisible();
-  await dockerBashRow.getByRole("button", { name: "查看 Docker Bash 详情" }).click();
-  const bashDialog = page.getByRole("dialog", { name: "Docker Bash" });
+  await nativeBashRow.getByRole("button", { name: "查看 Native Bash 详情" }).click();
+  const bashDialog = page.getByRole("dialog", { name: "Native Bash" });
   await expect(bashDialog.getByText("适用会话", { exact: true })).toBeVisible();
-  await expect(bashDialog.locator("dt").filter({ hasText: /^Docker Bash$/ })).toBeVisible();
+  await expect(bashDialog.locator("dt").filter({ hasText: /^Native Bash$/ })).toBeVisible();
   await bashDialog.getByRole("button", { name: "关闭工具详情" }).click();
   await expect(page.locator('[data-slot="settings-auto-save-status"]')).toHaveCount(0);
   await expect(page.getByLabel("启用 Native Bash")).toBeChecked();
-  await expect(page.getByLabel("启用 Docker Bash")).toBeChecked();
+  await expect(page.getByLabel("启用 Docker Bash")).toHaveCount(0);
   await expect(page.getByLabel("启用 Codex")).toBeChecked();
 
   for (const id of ["activate_skill", "read_skill_resource"] as const) {
@@ -1059,10 +1055,11 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
 
   await expect(page.getByRole("heading", { name: "核心人格" })).toBeVisible();
   const fileList = page.locator("aside").filter({ has: page.getByLabel("搜索文件") });
-  await expect(fileList.getByRole("button")).toHaveCount(7);
+  const fileButtons = fileList.locator("section").getByRole("button");
+  await expect(fileButtons).toHaveCount(7);
   await expect(fileList.getByRole("button", { name: /自拍提示词改写/ })).toBeVisible();
   await page.getByLabel("覆盖系统提示词").check();
-  await expect(fileList.getByRole("button")).toHaveCount(18);
+  await expect(fileButtons).toHaveCount(16);
   await expect(fileList.getByRole("button", { name: /梦境整理/ })).toBeVisible();
   expect(state.promptOverrides.plana).toBe(true);
   const editor = page.getByLabel("提示词正文");
@@ -1317,10 +1314,15 @@ test("生产构建支持深链接刷新与浏览器返回", async ({ page }) => 
   await logSearch.fill("alpha");
   const matchedLog = page.getByLabel("请求日志列表").locator("article");
   await expect(matchedLog).toHaveCount(1);
-  await expect(matchedLog).toContainText("完整最终提示词 Alpha");
+  await matchedLog.getByRole("button", { name: "查看Responses 模型调用请求详情" }).click();
+  const requestDetail = page.getByRole("dialog", { name: "请求详情" });
+  await expect(requestDetail).toContainText("完整最终提示词 Alpha");
+  await requestDetail.getByRole("button", { name: "关闭请求详情" }).click();
   await logSearch.fill("BETA");
   await expect(matchedLog).toHaveCount(1);
-  await expect(matchedLog).toContainText("模型返回正文 Beta");
+  await matchedLog.getByRole("button", { name: "查看Responses 模型调用请求详情" }).click();
+  await expect(requestDetail).toContainText("模型返回正文 Beta");
+  await requestDetail.getByRole("button", { name: "关闭请求详情" }).click();
   await logSearch.fill("没有结果");
   await expect(page.getByText("没有匹配的请求日志", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "关闭", exact: true }).click();

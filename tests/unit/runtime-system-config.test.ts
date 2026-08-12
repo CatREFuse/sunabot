@@ -946,7 +946,6 @@ function systemInput(
     enabled: null,
     orchestratorEnabled: null,
     searchImplementation: null,
-    bashAdminBackend: null,
     conversationId: null,
     ...overrides
   };

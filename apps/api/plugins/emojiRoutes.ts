@@ -22,7 +22,6 @@ import {
   EmojiNormalizationBusyError
 } from "../../../services/emojis/emojiOperationGate.js";
 import { requestAgentId } from "../requestAgentId.js";
-import type { AgentWorkbenchBackend } from "../../../packages/platform/agentResourceLayout.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
@@ -44,7 +43,7 @@ const emojiVersionParams = {
 
 export interface EmojiRouteOptions {
   repository: EmojiLibraryRepository;
-  getRepository?: (agentId: string, backend: AgentWorkbenchBackend) => EmojiLibraryRepository;
+  getRepository?: (agentId: string) => EmojiLibraryRepository;
   getConfig(): AppConfig;
   runtime: SunaRuntime;
   getAgentContext?: (agentId: string) => { config: AppConfig; runtime: SunaRuntime };
@@ -70,24 +69,12 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
   app.get("/api/emojis", {
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
-    if (requestWorkbenchScope(request.query) === "all") {
-      const agentId = requestAgentId(request.query);
-      if (!options.getRepository) {
-        badRequest("WORKBENCH_BACKEND_UNAVAILABLE", "当前接口未配置双 Workbench。", "workbench");
-      }
-      const [native, docker, settings] = await Promise.all([
-        options.getRepository(agentId, "native").list(),
-        options.getRepository(agentId, "docker").list(),
-        readEmojiSettings(options, agentId)
-      ]);
-      return withAllContentUrls({ native, docker }, agentId, settings);
-    }
     const context = repositoryContext(options, request.query);
     const [envelope, settings] = await Promise.all([
       context.repository.list(),
       readEmojiSettings(options, context.agentId)
     ]);
-    return withContentUrls(envelope, context.agentId, context.backend, settings);
+    return withContentUrls(envelope, context.agentId, settings);
   });
 
   app.patch("/api/emojis/settings", {
@@ -98,7 +85,7 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
       throw new AdminApiError(409, "EMOJI_SETTINGS_UNAVAILABLE", "表情设置暂不可用。");
     }
     const settings = await options.settings.update(context.agentId, parseEmojiSettingsBody(request.body));
-    return withContentUrls(await context.repository.list(), context.agentId, context.backend, settings);
+    return withContentUrls(await context.repository.list(), context.agentId, settings);
   });
 
   app.post("/api/emojis", {
@@ -111,7 +98,7 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
       reply,
       () => context.repository.upload(request.body)
     );
-    return withContentUrls(result, context.agentId, context.backend, await readEmojiSettings(options, context.agentId));
+    return withContentUrls(result, context.agentId, await readEmojiSettings(options, context.agentId));
   });
 
   app.post("/api/emojis/generate", {
@@ -161,7 +148,6 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
       return withContentUrls(
         envelope,
         repository.agentId,
-        repository.backend,
         await readEmojiSettings(options, repository.agentId)
       );
     } finally {
@@ -178,7 +164,6 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
     return withContentUrls(
       envelope,
       context.agentId,
-      context.backend,
       await readEmojiSettings(options, context.agentId)
     );
   });
@@ -189,7 +174,7 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
     const params = request.params as { key?: string };
     const context = repositoryContext(options, request.query);
     const envelope = await context.repository.listVersions(params.key ?? "");
-    return withVersionContentUrls(envelope, context.agentId, context.backend);
+    return withVersionContentUrls(envelope, context.agentId);
   });
 
   app.get("/api/emojis/:key/versions/:fileName/content", {
@@ -257,16 +242,18 @@ async function withNormalizationBusyResponse<T>(
 }
 
 function repositoryContext(options: EmojiRouteOptions, query: unknown) {
+  rejectRetiredWorkbenchQuery(query);
   const agentId = requestAgentId(query);
-  const backend = requestWorkbenchBackend(query);
-  if (!options.getRepository && backend === "docker") {
-    badRequest("WORKBENCH_BACKEND_UNAVAILABLE", "当前接口未配置 Docker Workbench。", "workbench");
-  }
   return {
     agentId,
-    backend,
-    repository: options.getRepository?.(agentId, backend) ?? options.repository
+    repository: options.getRepository?.(agentId) ?? options.repository
   };
+}
+
+function rejectRetiredWorkbenchQuery(query: unknown) {
+  if (query && typeof query === "object" && !Array.isArray(query) && "workbench" in query) {
+    badRequest("WORKBENCH_SOURCE_RETIRED", "Workbench 来源参数已停用。", "workbench");
+  }
 }
 
 function agentContext(options: EmojiRouteOptions, agentId: string) {
@@ -276,7 +263,6 @@ function agentContext(options: EmojiRouteOptions, agentId: string) {
 function withContentUrls(
   envelope: EmojiEnvelope,
   agentId: string,
-  backend: AgentWorkbenchBackend,
   settings: EmojiSettingsEnvelope
 ) {
   return {
@@ -286,8 +272,7 @@ function withContentUrls(
     revision: settings.revision,
     emojis: envelope.emojis.map((emoji) => {
       const base = `/api/emojis/${encodeURIComponent(emoji.key)}/content`;
-      const workbench = backend === "docker" ? "&workbench=docker" : "";
-      const scope = `&agentId=${encodeURIComponent(agentId)}&v=${encodeURIComponent(emoji.fileName)}${workbench}`;
+      const scope = `&agentId=${encodeURIComponent(agentId)}&v=${encodeURIComponent(emoji.fileName)}`;
       return {
         ...emoji,
         originalUrl: `${base}?variant=original${scope}`,
@@ -298,36 +283,15 @@ function withContentUrls(
   };
 }
 
-function withAllContentUrls(
-  envelopes: Record<AgentWorkbenchBackend, EmojiEnvelope>,
-  agentId: string,
-  settings: EmojiSettingsEnvelope
-) {
-  const native = withContentUrls(envelopes.native, agentId, "native", settings);
-  const docker = withContentUrls(envelopes.docker, agentId, "docker", settings);
-  return {
-    presetKeys: [...new Set([...native.presetKeys, ...docker.presetKeys])],
-    sendSize: settings.sendSize,
-    sendSeparately: settings.sendSeparately,
-    revision: settings.revision,
-    emojis: [
-      ...native.emojis.map((emoji) => ({ ...emoji, workbench: "native" as const })),
-      ...docker.emojis.map((emoji) => ({ ...emoji, workbench: "docker" as const }))
-    ]
-  };
-}
-
 function withVersionContentUrls(
   envelope: Awaited<ReturnType<EmojiLibraryRepository["listVersions"]>>,
-  agentId: string,
-  backend: AgentWorkbenchBackend = "native"
+  agentId: string
 ) {
   return {
     key: envelope.key,
     versions: envelope.versions.map((version) => {
       const base = `/api/emojis/${encodeURIComponent(envelope.key)}/versions/${encodeURIComponent(version.fileName)}/content`;
-      const workbench = backend === "docker" ? "&workbench=docker" : "";
-      const scope = `&agentId=${encodeURIComponent(agentId)}${workbench}`;
+      const scope = `&agentId=${encodeURIComponent(agentId)}`;
       return {
         ...version,
         originalUrl: `${base}?variant=original${scope}`,
@@ -336,22 +300,6 @@ function withVersionContentUrls(
       };
     })
   };
-}
-
-function requestWorkbenchBackend(query: unknown): AgentWorkbenchBackend {
-  const value = query && typeof query === "object" && !Array.isArray(query)
-    ? (query as { workbench?: unknown }).workbench
-    : undefined;
-  if (value === undefined || value === "" || value === "native") return "native";
-  if (value === "docker") return "docker";
-  badRequest("WORKBENCH_BACKEND_INVALID", "Workbench 参数无效。", "workbench");
-}
-
-function requestWorkbenchScope(query: unknown): AgentWorkbenchBackend | "all" {
-  const value = query && typeof query === "object" && !Array.isArray(query)
-    ? (query as { workbench?: unknown }).workbench
-    : undefined;
-  return value === "all" ? "all" : requestWorkbenchBackend(query);
 }
 
 function setEmojiContentHeaders(reply: FastifyReply, contentType: string) {

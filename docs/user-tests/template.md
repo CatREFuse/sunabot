@@ -29,9 +29,9 @@ Describe factual accuracy, completeness, usefulness, tone, and feature-specific 
       "workingMemory": [],
       "longTerm": [],
       "userProfiles": [],
+      "resetKnowledge": true,
       "workbenchFiles": [
         {
-          "backend": "native",
           "path": "knowledge/fixture.md",
           "content": "# Fixture\n\nA deterministic fact used only by this isolated case."
         }

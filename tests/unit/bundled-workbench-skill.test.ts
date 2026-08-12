@@ -75,11 +75,10 @@ describe("bundled Workbench configuration Skill", () => {
       workspace,
       "business/agents/plana/workbench/skills/workbench-config/references/bash-resource-operations.md"
     ), "utf8");
-    await expect(addressing).resolves.toContain("/workbench/native-workbench");
-    await expect(addressing).resolves.toContain(
-      "group-chat imports write Docker"
-    );
-    await expect(skill).resolves.toContain("Use Bash as the primary way");
+    await expect(addressing).resolves.toContain("one canonical Workbench tree");
+    await expect(addressing).resolves.not.toContain("docker-workbench");
+    await expect(addressing).resolves.not.toContain("native-workbench");
+    await expect(skill).resolves.toContain("Use `native_bash`");
     await expect(skill).resolves.not.toContain(
       "Do not edit Skills, emoji, selfie, knowledge, or MCP manifests with Bash"
     );

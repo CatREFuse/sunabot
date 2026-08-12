@@ -329,18 +329,13 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       });
       const toolCapabilities = await isolateReplyModule(
         "tool_capabilities",
-        () => this.resolveToolCapabilities(null),
+        () => this.resolveToolCapabilities(),
         () => ({ codex: false, workspaceBash: false }),
         { signal: options.signal }
       );
-      const [nativeBash, dockerBash] = await Promise.all([
-        capabilityContext
-          ? this.resolveProviderBashHandle(incoming, options.promptOverride, "native", capabilityContext)
-          : Promise.resolve(undefined),
-        capabilityContext
-          ? this.resolveProviderBashHandle(incoming, options.promptOverride, "docker", capabilityContext)
-          : Promise.resolve(undefined)
-      ]);
+      const nativeBash = capabilityContext
+        ? await this.resolveProviderBashHandle(incoming, options.promptOverride, capabilityContext)
+        : undefined;
       const chatMedia = capabilityContext
         ? providerChatMediaForIncoming(
           this.config,
@@ -375,10 +370,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           )
           : undefined,
         chatMedia,
-        bash: {
-          ...(nativeBash ? { native: nativeBash } : {}),
-          ...(dockerBash ? { docker: dockerBash } : {})
-        },
+        ...(nativeBash ? { bash: nativeBash } : {}),
         conversationAssets: options.atomicImageReply || !capabilityContext
           ? undefined
           : this.conversationAssetProviderOptions(

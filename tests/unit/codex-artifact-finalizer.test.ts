@@ -38,44 +38,41 @@ afterAll(async () => {
 });
 
 describe("Codex artifact finalizer", () => {
-  it.each(["native", "docker"] as const)(
-    "revalidates and publishes a runner artifact into the frozen %s Workbench",
-    async (backend) => {
-      const fixture = await artifactFixture(backend);
-      const controlWorkspace = path.join(fixture.root, "selected-project");
-      (fixture.job.arguments as Record<string, unknown>).workspace_path = controlWorkspace;
-      fixture.result.content = `Created the result from ${controlWorkspace} in ${fixture.jobDir}.`;
+  it("revalidates and publishes a runner artifact into the canonical Workbench", async () => {
+    const fixture = await artifactFixture();
+    const controlWorkspace = path.join(fixture.root, "selected-project");
+    (fixture.job.arguments as Record<string, unknown>).workspace_path = controlWorkspace;
+    fixture.result.content = `Created the result from ${controlWorkspace} in ${fixture.jobDir}.`;
 
-      const finalized = await finalizeCodexResultArtifacts({
-        job: fixture.job,
-        settings: fixture.settings,
-        result: fixture.result,
-        signal: new AbortController().signal,
-        cache: fixture.cache
-      });
+    const finalized = await finalizeCodexResultArtifacts({
+      job: fixture.job,
+      settings: fixture.settings,
+      result: fixture.result,
+      signal: new AbortController().signal,
+      cache: fixture.cache
+    });
 
-      const [artifact] = finalized.artifacts ?? [];
-      expect(artifact).toEqual({
-        schemaVersion: 1,
-        relativePath: `${publicationPrefix(fixture.job)}-${fixture.sha256}.txt`,
-        displayName: "codex-result.txt",
-        sha256: fixture.sha256,
-        sizeBytes: fixture.bytes.byteLength,
-        mimeType: "text/plain",
-        handle: `codex:${fixture.job.id}:artifact:0`,
-        backend
-      });
-      expect(finalized.resultFile).toBeUndefined();
-      expect(finalized.content).not.toContain(fixture.jobDir);
-      expect(finalized.content).not.toContain(controlWorkspace);
-      expect(artifact?.relativePath).not.toContain(fixture.jobDir);
-      await expect(fs.readFile(path.join(
-        fixture.settings.workspacePath,
-        backend === "native" ? "workbench" : "docker-workbench",
-        artifact!.relativePath
-      ))).resolves.toEqual(fixture.bytes);
-    }
-  );
+    const [artifact] = finalized.artifacts ?? [];
+    expect(artifact).toEqual({
+      schemaVersion: 1,
+      relativePath: `${publicationPrefix(fixture.job)}-${fixture.sha256}.txt`,
+      displayName: "codex-result.txt",
+      sha256: fixture.sha256,
+      sizeBytes: fixture.bytes.byteLength,
+      mimeType: "text/plain",
+      handle: `codex:${fixture.job.id}:artifact:0`
+    });
+    expect(artifact).not.toHaveProperty("backend");
+    expect(finalized.resultFile).toBeUndefined();
+    expect(finalized.content).not.toContain(fixture.jobDir);
+    expect(finalized.content).not.toContain(controlWorkspace);
+    expect(artifact?.relativePath).not.toContain(fixture.jobDir);
+    await expect(fs.readFile(path.join(
+      fixture.settings.workspacePath,
+      "workbench",
+      artifact!.relativePath
+    ))).resolves.toEqual(fixture.bytes);
+  });
 
   it("rejects a symbolic-link artifact before Workbench publication", async () => {
     const fixture = await artifactFixture("native");
@@ -111,7 +108,7 @@ describe("Codex artifact finalizer", () => {
     })).rejects.toMatchObject({ code: "codex_artifact_source_changed" });
   });
 
-  it("publishes a bounded non-Office ZIP artifact without widening normal chat export", async () => {
+  it("accepts a legacy docker marker while publishing only to the canonical Workbench", async () => {
     const fixture = await artifactFixture("docker");
     const zip = new JSZip();
     zip.file("result.txt", "bounded ZIP artifact\n");
@@ -143,12 +140,12 @@ describe("Codex artifact finalizer", () => {
     expect(artifact).toMatchObject({
       relativePath: `${publicationPrefix(fixture.job)}-${digest(bytes)}.zip`,
       displayName: "codex-result.zip",
-      mimeType: "application/zip",
-      backend: "docker"
+      mimeType: "application/zip"
     });
+    expect(artifact).not.toHaveProperty("backend");
     await expect(fs.readFile(path.join(
       fixture.settings.workspacePath,
-      "docker-workbench",
+      "workbench",
       artifact!.relativePath
     ))).resolves.toEqual(bytes);
   });
@@ -555,8 +552,7 @@ describe("SessionToolJobProcessor artifact finalization", () => {
           sha256: "a".repeat(64),
           sizeBytes: 4,
           mimeType: "text/plain",
-          handle: `codex:${job.id}:artifact:0`,
-          backend: "native"
+          handle: `codex:${job.id}:artifact:0`
         }]
       });
     });
@@ -575,8 +571,7 @@ describe("SessionToolJobProcessor artifact finalization", () => {
       result: {
         artifacts: [{
           relativePath: "chat-media-safe.txt",
-          handle: `codex:${job.id}:artifact:0`,
-          backend: "native"
+          handle: `codex:${job.id}:artifact:0`
         }]
       }
     });
@@ -742,7 +737,7 @@ describe("SessionToolJobProcessor artifact finalization", () => {
   });
 });
 
-async function artifactFixture(backend: "native" | "docker") {
+async function artifactFixture(legacyBackend: "native" | "docker" = "native") {
   await fs.mkdir(TEST_ROOT, { recursive: true });
   const root = await fs.mkdtemp(path.join(TEST_ROOT, "case-"));
   cleanupRoots.push(root);
@@ -774,7 +769,7 @@ async function artifactFixture(backend: "native" | "docker") {
   const job = toolJob(jobId, {
     task: "create an artifact",
     kind: "analysis",
-    __sunabot_artifact_backend: backend
+    __sunabot_artifact_backend: legacyBackend
   });
   const result: CodexToolResult = {
     ok: true,

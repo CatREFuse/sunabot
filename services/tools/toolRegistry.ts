@@ -8,7 +8,6 @@ import {
 } from "../../packages/contracts/admin/public.js";
 import {
   createWorkspaceBashTool,
-  DOCKER_BASH_TOOL_NAME,
   isWorkspaceBashProviderOptions,
   NATIVE_BASH_TOOL_NAME,
   type WorkspaceBashProviderOptions
@@ -108,14 +107,8 @@ export interface ToolAvailability {
     write(input: unknown): Promise<unknown>;
   };
   chatMedia?: ChatMediaToolPort;
-  bash?: {
-    native?: WorkspaceBashProviderOptions;
-    docker?: WorkspaceBashProviderOptions;
-  };
-  bashAvailable?: {
-    native?: boolean;
-    docker?: boolean;
-  };
+  bash?: WorkspaceBashProviderOptions;
+  bashAvailable?: boolean;
   bot?: Pick<BotConfig, "tools">;
   selfie?: { enabled: boolean };
   memory?: { enabled: boolean };
@@ -158,10 +151,9 @@ export interface ToolMetadata {
   unavailabilityKind?: ToolUnavailabilityKind;
   accessLabel?: string;
   accessDescription?: string;
-  executionBackend?: "native" | "docker";
+  executionBackend?: "native";
   bashEnvironments?: {
     native?: { available: boolean; reasonCode?: WorkspaceBashUnavailableReason };
-    docker?: { started: boolean; reasonCode?: WorkspaceBashUnavailableReason };
   };
   runtimeReasonCode?: WorkspaceBashUnavailableReason;
   execution: ToolExecution;
@@ -356,7 +348,7 @@ const catalog: readonly ToolCatalogEntry[] = [
     unavailableReason: "当前会话没有管理员自拍参考图导入权限或可导入图片。",
     unavailabilityKind: "session",
     accessLabel: "管理员 QQ 会话可用",
-    accessDescription: "管理员私聊写入 Native Workbench，管理员群聊写入 Docker Workbench。",
+    accessDescription: "当前 Agent 的管理员可在 QQ 私聊或群聊中写入同一 workbench。",
     defaultEnabled: true,
     execution: "inline"
   },
@@ -368,7 +360,7 @@ const catalog: readonly ToolCatalogEntry[] = [
     available: (options) => options.conversationAssets?.enabled === true,
     unavailableReason: "当前会话不支持文件发送。",
     accessLabel: "全部 QQ 会话可用",
-    accessDescription: "群聊与普通私聊发送 Docker workbench 文件；管理员私聊发送 Native workbench 文件。",
+    accessDescription: "发送当前 Agent workbench 中的文件。",
     defaultEnabled: true,
     execution: "inline"
   },
@@ -387,27 +379,14 @@ const catalog: readonly ToolCatalogEntry[] = [
   {
     name: NATIVE_BASH_TOOL_NAME,
     title: "Native Bash",
-    summary: "在管理员宿主环境中执行 Bash 命令。",
-    definition: () => createWorkspaceBashTool({ backend: "native" }),
-    available: (options) => isWorkspaceBashProviderOptions(options.bash?.native)
-      || options.bashAvailable?.native === true,
+    summary: "在当前 Agent 工作目录中执行 Bash 命令。",
+    definition: () => createWorkspaceBashTool(),
+    available: (options) => isWorkspaceBashProviderOptions(options.bash)
+      || options.bashAvailable === true,
     unavailableReason: "当前环境未通过 Native Bash 检查。",
     unavailabilityKind: "session",
-    accessLabel: "管理员私聊与 Web Chat 可用",
-    accessDescription: "管理员 QQ 私聊和管理 Web Chat 可用；群聊与普通用户私聊不可用。",
-    defaultEnabled: true,
-    execution: "inline"
-  },
-  {
-    name: DOCKER_BASH_TOOL_NAME,
-    title: "Docker Bash",
-    summary: "在当前 Agent 的隔离 Docker workbench 中执行 Bash 命令。",
-    definition: () => createWorkspaceBashTool({ backend: "docker" }),
-    available: (options) => isWorkspaceBashProviderOptions(options.bash?.docker)
-      || options.bashAvailable?.docker === true,
-    unavailableReason: "当前环境未通过 Docker Bash 隔离检查。",
-    accessLabel: "全部允许会话可用",
-    accessDescription: "管理员私聊、管理 Web Chat、群聊与普通用户私聊均可使用隔离 Docker workbench。",
+    accessLabel: "按平台授权会话可用",
+    accessDescription: "Linux 与 WSL 使用 Bubblewrap；macOS 仅管理员 QQ 私聊和管理 Web Chat 可用。",
     defaultEnabled: true,
     execution: "inline"
   },
@@ -649,12 +628,11 @@ function toolOverride(options: ToolAvailability, name: AgentToolName): BotToolOv
 }
 
 function isBashTool(name: AgentToolName) {
-  return name === NATIVE_BASH_TOOL_NAME || name === DOCKER_BASH_TOOL_NAME;
+  return name === NATIVE_BASH_TOOL_NAME;
 }
 
 function bashOptions(options: ToolAvailability, name: AgentToolName) {
-  if (name === NATIVE_BASH_TOOL_NAME) return options.bash?.native;
-  if (name === DOCKER_BASH_TOOL_NAME) return options.bash?.docker;
+  if (name === NATIVE_BASH_TOOL_NAME) return options.bash;
   return undefined;
 }
 

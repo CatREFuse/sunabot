@@ -1,25 +1,25 @@
-# Native workbench absolute image reference
+# Canonical Workbench absolute image reference
 
 ## Goal
 
-An administrator can pass the absolute image path returned by Native Bash directly to `generate_img`.
+An administrator can pass the absolute image path returned by Native Bash from the canonical Workbench directly to `generate_img`.
 
 ## Preconditions
 
-Run in a fresh isolated workspace with an authorized image Provider. Native Bash must decode the fixture, run `pwd -P`, and build the image path from that exact workbench root.
+Run in a fresh isolated workspace with an authorized image Provider. Native Bash must decode the fixture, run `pwd -P`, and build the image path from that exact canonical Workbench root.
 
 ## Expected quality
 
-The system prompt must tell the Bot that an authorized Bash image path can be passed unchanged through `generate_img.referenceImagePaths`. The tool trace must show `native_bash` returning the real Native workbench path and `generate_img` receiving that absolute path unchanged. The path must resolve to one reference image without appearing in user-facing output.
+The system prompt must tell the Bot that an authorized Bash image path can be passed unchanged through `generate_img.referenceImagePaths`. The tool trace must show `native_bash` returning the real canonical Workbench path and `generate_img` receiving that absolute path unchanged. The path must resolve to one reference image without appearing in user-facing output.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
 {
   "schemaVersion": 1,
   "id": "media.workbench-image-native-absolute-reference",
-  "title": "Use a Native workbench absolute image path",
+  "title": "Use a canonical Workbench absolute image path",
   "kind": "conversation",
-  "goal": "Generate an image from the exact absolute Native workbench path returned by Bash.",
+  "goal": "Generate an image from the exact absolute canonical Workbench path returned by Bash.",
   "input": {
     "actor": "admin_private",
     "accountId": "primary",
@@ -31,7 +31,6 @@ The system prompt must tell the Bot that an authorized Bash image path can be pa
       "userProfiles": [],
       "workbenchFiles": [
         {
-          "backend": "native",
           "path": "fixtures/reference.b64",
           "content": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
         }
@@ -79,12 +78,12 @@ The system prompt must tell the Bot that an authorized Bash image path can be pa
     "criteria": [
       {
         "id": "absolute_path",
-        "description": "generate_img receives the exact absolute image path derived from Native Bash pwd -P and resolves one workbench reference.",
+        "description": "generate_img receives the exact absolute image path derived from Native Bash pwd -P and resolves one canonical Workbench reference.",
         "minimumScore": 4
       },
       {
         "id": "boundary",
-        "description": "The generated image is delivered without exposing the host path or reading outside the current Agent workbench.",
+        "description": "The generated image is delivered without exposing the host path or reading outside the current Agent canonical Workbench.",
         "minimumScore": 4
       }
     ]

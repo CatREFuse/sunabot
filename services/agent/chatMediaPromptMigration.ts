@@ -11,14 +11,15 @@ import { CONFIGURATION_DIRECTORY_INDEX_CONTRACT } from "./bashWorkbenchPromptMig
 const LEGACY_CHAT_MEDIA_CONTRACT_MARKER = '<chat_media_export_contract version="1">';
 const LEGACY_CHAT_MEDIA_CONTRACT_V2_MARKER = '<chat_media_export_contract version="2">';
 const LEGACY_CHAT_MEDIA_CONTRACT_V3_MARKER = '<chat_media_export_contract version="3">';
-const CHAT_MEDIA_CONTRACT_MARKER = '<chat_media_export_contract version="4">';
+const LEGACY_CHAT_MEDIA_CONTRACT_V4_MARKER = '<chat_media_export_contract version="4">';
+const CHAT_MEDIA_CONTRACT_MARKER = '<chat_media_export_contract version="5">';
 
 export const CHAT_MEDIA_EXPORT_CONTRACT = [
   CHAT_MEDIA_CONTRACT_MARKER,
   "当前消息和明确引用消息中的图片、文件会以 `message:<message-id>:image:<index>` 或 `message:<message-id>:file:<index>` 媒体句柄显示。需要保存原始媒体时，只能把提示词中原样出现的句柄传给 `export_chat_media`；不得猜测、改写或把句柄当作路径、URL、Base64、下载地址。",
-  "`export_chat_media` 只解析本轮当前 Agent、当前消息及其明确引用消息实际提供的媒体；工具不可用或返回句柄不可用时，停止尝试通过 Bash、联网工具或任意 URL 获取原件。导出结果返回相对 Workbench 路径、SHA-256、MIME、扩展名、宽高和字节数；管理员私聊写入 Native Workbench，群聊与普通私聊写入 Docker Workbench。",
-  "`import_chat_emoji` 和 `import_chat_selfie` 仅在本轮实际提供对应工具的当前 Agent 管理员 QQ 私聊或群聊中可用。导入时传入原样媒体句柄，以及表情 key 或自拍备注，由工具完成格式校验、内容寻址、去重及对应 JSONL 的原子更新；管理员私聊写入 Native Workbench，管理员群聊写入 Docker Workbench。",
-  "Native 与 Docker Workbench 各自拥有 `emoji/emojis.jsonl`、`selfie/references.jsonl`、`skills/index.json` 和 `knowledge/index.json`。运行时同时读取两套表情、自拍和知识入口，管理 API 可按 Workbench 寻址；Skill 只有经过仓库审查并发布到 Native `workbench/skills/` 后才可激活。Docker 还可从只读 `native-workbench/` 访问 Native 内容，Native Bash 通过 `SUNABOT_DOCKER_WORKBENCH` 访问 Docker 内容。不得把只读投影当作可写目录。",
+  "`export_chat_media` 只解析本轮当前 Agent、当前消息及其明确引用消息实际提供的媒体；工具不可用或返回句柄不可用时，停止尝试通过 Bash、联网工具或任意 URL 获取原件。导出结果返回当前 Agent 唯一 Workbench 下的相对路径、SHA-256、MIME、扩展名、宽高和字节数。",
+  "`import_chat_emoji` 和 `import_chat_selfie` 仅在本轮实际提供对应工具的当前 Agent 管理员 QQ 私聊或群聊中可用。导入时传入原样媒体句柄，以及表情 key 或自拍备注，由工具完成格式校验、内容寻址、去重及对应 JSONL 的原子更新；所有会话都写入当前 Agent 的唯一 Workbench。",
+  "当前 Agent 的 `workbench/` 是唯一资源根，其中 `emoji/emojis.jsonl`、`selfie/references.jsonl`、`skills/index.json` 和 `knowledge/index.json` 分别是固定管理入口。运行时和管理 API 只读取这一套资源；Skill 只有经过仓库审查并发布到 `workbench/skills/` 后才可激活。",
   "媒体句柄和提示词规则不能扩大本轮工具实际授予的 Agent、会话、消息、路径或写入权限。",
   "</chat_media_export_contract>"
 ].join("\n");
@@ -48,6 +49,7 @@ export function migrateConversationChatMediaTemplate(
 
   const messages = [...template.messages];
   const legacyMarker = [
+    LEGACY_CHAT_MEDIA_CONTRACT_V4_MARKER,
     LEGACY_CHAT_MEDIA_CONTRACT_V3_MARKER,
     LEGACY_CHAT_MEDIA_CONTRACT_V2_MARKER,
     LEGACY_CHAT_MEDIA_CONTRACT_MARKER

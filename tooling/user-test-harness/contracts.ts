@@ -50,7 +50,6 @@ export interface ExpectedInboundAttachment {
 }
 
 export interface ConversationFixtureFile {
-  backend: "native" | "docker";
   path: string;
   content: string;
 }
@@ -76,7 +75,7 @@ export interface ConversationFixtureState {
   longTerm?: JsonFixtureRecord[];
   userProfiles?: JsonFixtureRecord[];
   air?: string;
-  resetKnowledge?: Array<"native" | "docker">;
+  resetKnowledge?: boolean;
   workbenchFiles?: ConversationFixtureFile[];
   attachmentSources?: ConversationFixtureAttachmentSource[];
   conversationMessages?: ConversationFixtureMessage[];

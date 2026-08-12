@@ -5,6 +5,7 @@ import { WebSocket } from "ws";
 import { buildApp } from "../../apps/api/server.js";
 import { hashAdminPassword } from "../../src/admin/auth.js";
 import { defaultConfig, getRootDir, getWorkspaceDir, saveConfig } from "../../src/config.js";
+import { writeAdminCredentialRecord } from "../../tooling/admin/admin-credentials-core.mjs";
 import { beginFirstRunBootstrap, FIRST_RUN_JOURNAL } from "../../tooling/runtime/first-run-state.mjs";
 import { initializeWorkspace } from "../../tooling/workspace/init-workspace.mjs";
 
@@ -250,8 +251,8 @@ try {
     url: `/api/agents/arona/accounts/${account.id}/login/status`,
     headers: readHeaders
   });
-  const journalCompleted = await fs.access(path.join(workspace, FIRST_RUN_JOURNAL))
-    .then(() => false, () => true);
+  const journalRetainedForLauncher = await fs.access(path.join(workspace, FIRST_RUN_JOURNAL))
+    .then(() => true, () => false);
   console.log(`SUNABOT_FIRST_RUN_E2E=${JSON.stringify({
     adminAuthenticated: session.json().authenticated === true,
     providerId: selected.json().config?.providers?.defaultProviderId,
@@ -268,7 +269,7 @@ try {
     firstInboundReplyEnabled: conversationBeforeEnable.replyEnabled,
     repliesBeforeEnable,
     firstReplyDelivered: sentPrivateMessages.length,
-    journalCompleted
+    journalRetainedForLauncher
   })}`);
 } finally {
   onebot?.close();
@@ -287,11 +288,11 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs: n
 
 async function writeAdminCredentials(workspaceRoot: string) {
   const now = "2026-07-14T00:00:00.000Z";
-  await fs.writeFile(path.join(workspaceRoot, "secrets/admin-credentials.json"), JSON.stringify({
+  await writeAdminCredentialRecord(path.join(workspaceRoot, "secrets/admin-credentials.json"), {
     version: 1,
     username: "admin",
     password: await hashAdminPassword("correct-horse-battery-staple"),
     createdAt: now,
     updatedAt: now
-  }));
+  });
 }

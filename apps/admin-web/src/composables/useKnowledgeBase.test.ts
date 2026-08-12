@@ -9,19 +9,13 @@ import { useKnowledgeBase } from "./useKnowledgeBase";
 const apiRequest = vi.hoisted(() => vi.fn());
 vi.mock("./useAdminApi", () => ({ apiRequest }));
 
-const nativeDocument: KnowledgeDocument = {
+const document: KnowledgeDocument = {
   path: "共享/说明.md",
   format: "markdown",
   sizeBytes: 100,
   chunkCount: 1,
   status: "indexed",
-  updatedAt: "2026-07-30T08:00:00.000Z",
-  workbench: "native"
-};
-const dockerDocument: KnowledgeDocument = {
-  ...nativeDocument,
-  sizeBytes: 200,
-  workbench: "docker"
+  updatedAt: "2026-07-30T08:00:00.000Z"
 };
 
 function snapshot(documents: KnowledgeDocument[]): KnowledgeSnapshot {
@@ -39,38 +33,27 @@ function snapshot(documents: KnowledgeDocument[]): KnowledgeSnapshot {
 describe("useKnowledgeBase", () => {
   beforeEach(() => { apiRequest.mockReset(); });
 
-  it("loads and searches both Workbench sources", async () => {
+  it("loads and searches the Agent Workbench", async () => {
     const searchResult: KnowledgeSearchResult = {
       ok: true,
       query: "共享",
       matches: [
         {
-          path: nativeDocument.path,
+          path: document.path,
           format: "markdown",
           ordinal: 0,
           startLine: 1,
           endLine: 1,
-          content: "Native",
-          score: 2,
-          workbench: "native"
-        },
-        {
-          path: dockerDocument.path,
-          format: "markdown",
-          ordinal: 0,
-          startLine: 1,
-          endLine: 1,
-          content: "Docker",
-          score: 1,
-          workbench: "docker"
+          content: "共享",
+          score: 2
         }
       ]
     };
     apiRequest.mockImplementation((path: string) => {
-      if (path === "/api/knowledge?agentId=plana&workbench=all") {
-        return Promise.resolve(snapshot([nativeDocument, dockerDocument]));
+      if (path === "/api/knowledge?agentId=plana") {
+        return Promise.resolve(snapshot([document]));
       }
-      if (path === "/api/knowledge/search?agentId=plana&workbench=all&q=%E5%85%B1%E4%BA%AB&limit=12") {
+      if (path === "/api/knowledge/search?agentId=plana&q=%E5%85%B1%E4%BA%AB&limit=12") {
         return Promise.resolve(searchResult);
       }
       throw new Error(`Unexpected request: ${path}`);
@@ -78,22 +61,22 @@ describe("useKnowledgeBase", () => {
     const knowledge = useKnowledgeBase();
 
     await expect(knowledge.load("plana")).resolves.toBe(true);
-    expect(knowledge.snapshot.value?.documents).toEqual([nativeDocument, dockerDocument]);
+    expect(knowledge.snapshot.value?.documents).toEqual([document]);
     await expect(knowledge.search("共享", "plana")).resolves.toBe(true);
-    expect(knowledge.matches.value.map((match) => match.workbench)).toEqual(["native", "docker"]);
+    expect(knowledge.matches.value).toEqual(searchResult.matches);
   });
 
-  it("writes new documents to Native and deletes existing documents from their source", async () => {
-    let documents = [nativeDocument, dockerDocument];
+  it("writes and deletes documents in the Agent Workbench", async () => {
+    let documents = [document];
     apiRequest.mockImplementation((path: string, init?: RequestInit) => {
-      if (path === "/api/knowledge?agentId=plana&workbench=all" && !init?.method) {
+      if (path === "/api/knowledge?agentId=plana" && !init?.method) {
         return Promise.resolve(snapshot(documents));
       }
-      if (path === "/api/knowledge/documents?agentId=plana&workbench=native" && init?.method === "POST") {
-        return Promise.resolve({ snapshot: snapshot([nativeDocument]) });
+      if (path === "/api/knowledge/documents?agentId=plana" && init?.method === "POST") {
+        return Promise.resolve({ snapshot: snapshot([document]) });
       }
-      if (path === "/api/knowledge/documents?agentId=plana&workbench=docker" && init?.method === "DELETE") {
-        documents = [nativeDocument];
+      if (path === "/api/knowledge/documents?agentId=plana" && init?.method === "DELETE") {
+        documents = [];
         return Promise.resolve({ snapshot: snapshot([]) });
       }
       throw new Error(`Unexpected request: ${path}`);
@@ -102,7 +85,7 @@ describe("useKnowledgeBase", () => {
 
     await knowledge.load("plana");
     await expect(knowledge.upload({ path: "新资料.md", content: "# 新资料" }, "plana")).resolves.toBe(true);
-    await expect(knowledge.remove(dockerDocument, "plana")).resolves.toBe(true);
-    expect(knowledge.snapshot.value?.documents).toEqual([nativeDocument]);
+    await expect(knowledge.remove(document, "plana")).resolves.toBe(true);
+    expect(knowledge.snapshot.value?.documents).toEqual([]);
   });
 });

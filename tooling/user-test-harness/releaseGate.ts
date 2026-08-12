@@ -11,6 +11,25 @@ import { readUserTestCaseDocument } from "./caseDocument.js";
 import { validateSealedUserTestReport } from "./review.js";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+const RELEASE_CASE_COVERAGE = Object.freeze({
+  "0.3.0": Object.freeze([
+    Object.freeze({
+      caseId: "workbench-resources.single-addressing",
+      caseDocument: "docs/user-tests/single-workbench-resource-addressing.md",
+      minimumIndependentRuns: 1
+    }),
+    Object.freeze({
+      caseId: "bash-agent-loop.admin-private-native-download",
+      caseDocument: "docs/user-tests/cases/bash-agent-loop/admin-private-native-download.md",
+      minimumIndependentRuns: 2
+    }),
+    Object.freeze({
+      caseId: "webfetch.admin-private-lightpanda-dynamic",
+      caseDocument: "docs/user-tests/webfetch-lightpanda-dynamic.md",
+      minimumIndependentRuns: 2
+    })
+  ])
+});
 
 export async function gateUserTestReleaseManifest(
   manifestPath: string,
@@ -25,10 +44,32 @@ export async function gateUserTestReleaseManifest(
     throw new Error("USER_TEST_RELEASE_REVISION_MISMATCH");
   }
   const base = path.dirname(absoluteManifestPath);
+  const releaseVersion = await currentReleaseVersion(repositoryRoot);
+  const coverage = RELEASE_CASE_COVERAGE[releaseVersion as keyof typeof RELEASE_CASE_COVERAGE];
+  if (!coverage) throw new Error(`USER_TEST_RELEASE_COVERAGE_UNSUPPORTED:${releaseVersion}`);
+  if (manifest.suiteId !== `release-${releaseVersion}`) {
+    throw new Error("USER_TEST_RELEASE_SUITE_MISMATCH");
+  }
+  const manifestEntries = new Map<string, UserTestReleaseManifest["cases"][number]>();
+  for (const entry of manifest.cases) {
+    const canonicalPath = canonicalManifestCasePath(repositoryRoot, base, entry.caseDocument);
+    if (manifestEntries.has(canonicalPath)) throw new Error("USER_TEST_RELEASE_CASE_PATH_DUPLICATE");
+    manifestEntries.set(canonicalPath, entry);
+  }
+  if (manifestEntries.size !== coverage.length) throw new Error("USER_TEST_RELEASE_COVERAGE_MISMATCH");
   const seenCaseIds = new Set<string>();
   const results = [];
-  for (const entry of manifest.cases) {
-    const document = await readUserTestCaseDocument(resolveManifestPath(base, entry.caseDocument));
+  for (const requiredCase of coverage) {
+    const entry = manifestEntries.get(requiredCase.caseDocument);
+    if (!entry || entry.minimumIndependentRuns < requiredCase.minimumIndependentRuns) {
+      throw new Error(`USER_TEST_RELEASE_COVERAGE_MISSING:${requiredCase.caseId}`);
+    }
+    const canonicalCasePath = path.join(repositoryRoot, requiredCase.caseDocument);
+    await assertCanonicalCaseDocument(repositoryRoot, canonicalCasePath);
+    const document = await readUserTestCaseDocument(canonicalCasePath);
+    if (document.case.id !== requiredCase.caseId) {
+      throw new Error(`USER_TEST_RELEASE_CASE_ID_MISMATCH:${requiredCase.caseId}`);
+    }
     if (seenCaseIds.has(document.case.id)) throw new Error("USER_TEST_RELEASE_CASE_DUPLICATE");
     seenCaseIds.add(document.case.id);
     const reports = await Promise.all(entry.reports.map(async (reportPath) => (
@@ -131,6 +172,37 @@ async function currentSourceRevision(repositoryRoot: string) {
     throw new Error("USER_TEST_RELEASE_REVISION_INVALID");
   }
   return revision;
+}
+
+async function currentReleaseVersion(repositoryRoot: string) {
+  const value = JSON.parse(await fs.readFile(path.join(repositoryRoot, "package.json"), "utf8"));
+  if (!value || typeof value.version !== "string" || !/^\d+\.\d+\.\d+$/u.test(value.version)) {
+    throw new Error("USER_TEST_RELEASE_VERSION_INVALID");
+  }
+  return value.version;
+}
+
+function canonicalManifestCasePath(repositoryRoot: string, base: string, configured: string) {
+  const absolute = resolveManifestPath(base, configured);
+  const relative = path.relative(repositoryRoot, absolute).split(path.sep).join("/");
+  if (!relative || relative.startsWith("../") || path.isAbsolute(relative)) {
+    throw new Error("USER_TEST_RELEASE_CASE_PATH_INVALID");
+  }
+  return relative;
+}
+
+async function assertCanonicalCaseDocument(repositoryRoot: string, casePath: string) {
+  const stat = await fs.lstat(casePath);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error("USER_TEST_RELEASE_CASE_PATH_INVALID");
+  }
+  const [rootRealpath, caseRealpath] = await Promise.all([
+    fs.realpath(repositoryRoot),
+    fs.realpath(casePath)
+  ]);
+  if (!caseRealpath.startsWith(`${rootRealpath}${path.sep}`)) {
+    throw new Error("USER_TEST_RELEASE_CASE_PATH_INVALID");
+  }
 }
 
 function record(value: unknown, code: string) {

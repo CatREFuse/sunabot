@@ -22,29 +22,30 @@ function template(names: string[]): FinalPromptTemplate {
 }
 
 describe("conversation Bash tool prompt migration", () => {
-  it("replaces the legacy private tool with Native and Docker Bash while preserving its description", () => {
+  it("replaces the legacy workspace tool with native_bash while preserving its description", () => {
     const migrated = migrateConversationBashToolsTemplate(
       template(["read_file", "workspace_bash"]),
-      template(["read_file", "native_bash", "docker_bash"])
+      template(["read_file", "native_bash"])
     );
 
     expect(migrated?.tools?.map((tool) => tool.function.name)).toEqual([
       "read_file",
-      "native_bash",
-      "docker_bash"
+      "native_bash"
     ]);
-    expect(migrated?.tools?.find((tool) => tool.function.name === "docker_bash")?.function.description)
+    expect(migrated?.tools?.find((tool) => tool.function.name === "native_bash")?.function.description)
       .toBe("workspace_bash description");
   });
 
-  it("keeps group prompts Docker-only and is idempotent", () => {
-    const canonical = template(["read_file", "docker_bash"]);
+  it("removes legacy Docker and workspace tools and is idempotent", () => {
+    const canonical = template(["read_file", "native_bash"]);
     const migrated = migrateConversationBashToolsTemplate(
-      template(["read_file", "native_bash", "workspace_bash"]),
+      template(["read_file", "docker_bash", "workspace_bash"]),
       canonical
     );
 
-    expect(migrated?.tools?.map((tool) => tool.function.name)).toEqual(["read_file", "docker_bash"]);
+    expect(migrated?.tools?.map((tool) => tool.function.name)).toEqual(["read_file", "native_bash"]);
+    expect(migrated?.tools?.find((tool) => tool.function.name === "native_bash")?.function.description)
+      .toBe("docker_bash description");
     expect(migrateConversationBashToolsTemplate(migrated!, canonical)).toBeUndefined();
   });
 });

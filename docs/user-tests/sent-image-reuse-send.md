@@ -2,7 +2,7 @@
 
 ## Goal
 
-The Bot sends a workbench image through `send_file` so the next chained turn can verify that the assistant asset was persisted with a reusable media handle.
+The Bot sends an image from the canonical Workbench through `send_file` so the next chained turn can verify that the assistant asset was persisted with a reusable media handle.
 
 ## Preconditions
 
@@ -31,7 +31,6 @@ The Agent must decode the fixture into a PNG and send that exact file as an imag
       "userProfiles": [],
       "workbenchFiles": [
         {
-          "backend": "native",
           "path": "fixtures/reference.b64",
           "content": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
         }

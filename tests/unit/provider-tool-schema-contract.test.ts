@@ -453,8 +453,7 @@ function strictRoot(child: Record<string, unknown>) {
 }
 
 function fullToolOptions(mode: { codexControl: boolean; asyncImage: boolean }) {
-  const nativeBash = bashOptions("native");
-  const dockerBash = bashOptions("docker");
+  const nativeBash = bashOptions();
   return {
     onAssistantText: vi.fn(),
     allowNoReply: true,
@@ -464,7 +463,7 @@ function fullToolOptions(mode: { codexControl: boolean; asyncImage: boolean }) {
       importEmoji: vi.fn(),
       importSelfie: vi.fn()
     },
-    bash: { native: nativeBash, docker: dockerBash },
+    bash: nativeBash,
     bot: {
       tools: {
         websearch: {},
@@ -511,19 +510,19 @@ function fullToolOptions(mode: { codexControl: boolean; asyncImage: boolean }) {
   } as unknown as ProviderCompleteOptions;
 }
 
-function bashOptions(backend: "native" | "docker") {
+function bashOptions() {
   return {
     enabled: true,
     workspacePath: "/fixture/workbench",
-    backend,
-    accessMode: backend === "native" ? "admin" : "isolated",
+    backend: "native" as const,
+    accessMode: "admin" as const,
     strictMode: true,
     isAdmin: true,
     userRequest: "Schema contract fixture.",
     isCurrent: () => true,
     audit: vi.fn(),
     approvalContext: {
-      backend,
+      backend: "native" as const,
       agentId: "plana",
       accountId: "primary",
       transport: "onebot",

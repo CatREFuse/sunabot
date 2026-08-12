@@ -30,14 +30,14 @@ describe("knowledge routes", () => {
     })).statusCode).toBe(200);
 
     expect(getService).toHaveBeenCalledTimes(5);
-    expect(getService).toHaveBeenCalledWith("arona", "native");
+    expect(getService).toHaveBeenCalledWith("arona");
     expect(service.search).toHaveBeenCalledWith({ query: "路线", limit: 4 });
     expect(service.uploadMarkdown).toHaveBeenCalledWith({ path: "手册/开始.md", content: "正文" });
     expect(service.deleteDocument).toHaveBeenCalledWith("手册/开始.md");
     await app.close();
   });
 
-  it("routes Docker Workbench knowledge operations independently", async () => {
+  it("rejects retired Workbench source query parameters", async () => {
     const service = {
       list: vi.fn(async () => ({ ok: true, documents: [] })),
       reindex: vi.fn(async () => ({ ok: true, documents: [] })),
@@ -54,12 +54,12 @@ describe("knowledge routes", () => {
       url: "/api/knowledge?agentId=arona&workbench=docker"
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(getService).toHaveBeenCalledWith("arona", "docker");
+    expect(response.statusCode).toBe(400);
+    expect(getService).not.toHaveBeenCalled();
     await app.close();
   });
 
-  it("merges Native and Docker list and search results with source locations", async () => {
+  it("returns canonical list and search results without source locations", async () => {
     const snapshot = (path: string) => ({
       ok: true as const,
       root: "knowledge" as const,
@@ -76,74 +76,47 @@ describe("knowledge routes", () => {
       errorCount: 0,
       indexedAt: "2026-07-30T08:00:00.000Z"
     });
-    const services = {
-      native: {
-        list: vi.fn(async () => snapshot("native.md")),
-        reindex: vi.fn(async () => snapshot("native.md")),
-        search: vi.fn(async () => ({
-          ok: true,
-          query: "双工作区",
-          matches: [{
-            path: "native.md",
-            format: "markdown" as const,
-            ordinal: 0,
-            startLine: 1,
-            endLine: 1,
-            content: "Native",
-            score: 2
-          }]
-        })),
-        uploadMarkdown: vi.fn(),
-        deleteDocument: vi.fn()
-      },
-      docker: {
-        list: vi.fn(async () => snapshot("docker.md")),
-        reindex: vi.fn(async () => snapshot("docker.md")),
-        search: vi.fn(async () => ({
-          ok: true,
-          query: "双工作区",
-          matches: [{
-            path: "docker.md",
-            format: "markdown" as const,
-            ordinal: 0,
-            startLine: 1,
-            endLine: 1,
-            content: "Docker",
-            score: 3
-          }]
-        })),
-        uploadMarkdown: vi.fn(),
-        deleteDocument: vi.fn()
-      }
+    const service = {
+      list: vi.fn(async () => snapshot("canonical.md")),
+      reindex: vi.fn(async () => snapshot("canonical.md")),
+      search: vi.fn(async () => ({
+        ok: true,
+        query: "统一工作区",
+        matches: [{
+          path: "canonical.md",
+          format: "markdown" as const,
+          ordinal: 0,
+          startLine: 1,
+          endLine: 1,
+          content: "Canonical",
+          score: 2
+        }]
+      })),
+      uploadMarkdown: vi.fn(),
+      deleteDocument: vi.fn()
     };
     const app = Fastify();
-    registerKnowledgeRoutes(app, {
-      getService: (_agentId, backend) => services[backend]
-    });
+    registerKnowledgeRoutes(app, { getService: () => service });
 
     const list = await app.inject({
       method: "GET",
-      url: "/api/knowledge?agentId=plana&workbench=all"
+      url: "/api/knowledge?agentId=plana"
     });
     expect(list.statusCode, list.body).toBe(200);
     expect(list.json()).toMatchObject({
-      fileCount: 2,
-      chunkCount: 2,
-      documents: [
-        { path: "native.md", workbench: "native" },
-        { path: "docker.md", workbench: "docker" }
-      ]
+      fileCount: 1,
+      chunkCount: 1,
+      documents: [{ path: "canonical.md" }]
     });
+    expect(list.json().documents[0]).not.toHaveProperty("workbench");
 
     const search = await app.inject({
       method: "GET",
-      url: "/api/knowledge/search?agentId=plana&workbench=all&q=双工作区&limit=2"
+      url: "/api/knowledge/search?agentId=plana&q=统一工作区&limit=2"
     });
     expect(search.statusCode, search.body).toBe(200);
-    expect(search.json().matches).toEqual([
-      expect.objectContaining({ path: "docker.md", workbench: "docker" }),
-      expect.objectContaining({ path: "native.md", workbench: "native" })
-    ]);
+    expect(search.json().matches).toEqual([expect.objectContaining({ path: "canonical.md" })]);
+    expect(search.json().matches[0]).not.toHaveProperty("workbench");
     await app.close();
   });
 

@@ -44,30 +44,27 @@ test.beforeAll(async () => {
     import("../../services/knowledge/public.js")
   ]);
   const knowledgeRoot = path.join(temporaryDirectory, WORKSPACE_LAYOUT.defaultAgent, "knowledge");
-  await fs.mkdir(path.join(knowledgeRoot, "产品"), { recursive: true });
+  await Promise.all([
+    fs.mkdir(path.join(knowledgeRoot, "产品"), { recursive: true }),
+    fs.mkdir(path.join(knowledgeRoot, "事件"), { recursive: true })
+  ]);
   await fs.writeFile(
     path.join(knowledgeRoot, "产品", "路线.md"),
     "# 火星基地\n\n火星基地采用核能供电，水循环系统保持独立冗余。\n"
+  );
+  await fs.writeFile(
+    path.join(knowledgeRoot, "事件", "运行记录.md"),
+    "# 运行记录\n\nWorkbench 运行记录。\n"
   );
   const knowledgeService = new KnowledgeBaseService({
     sourceRoot: knowledgeRoot,
     indexPath: path.join(temporaryDirectory, "cache", "knowledge", "plana.sqlite")
   });
-  const dockerKnowledgeRoot = path.join(temporaryDirectory, "docker-knowledge");
-  await fs.mkdir(path.join(dockerKnowledgeRoot, "事件"), { recursive: true });
-  await fs.writeFile(
-    path.join(dockerKnowledgeRoot, "事件", "运行记录.md"),
-    "# 运行记录\n\nDocker Workbench 运行记录。\n"
-  );
-  const dockerKnowledgeService = new KnowledgeBaseService({
-    sourceRoot: dockerKnowledgeRoot,
-    indexPath: path.join(temporaryDirectory, "cache", "knowledge", "plana-docker.sqlite")
-  });
   knowledgeApp = Fastify({ logger: false });
   registerKnowledgeRoutes(knowledgeApp, {
-    getService(agentId, backend) {
+    getService(agentId) {
       if (agentId !== "plana") throw new Error(`Unexpected knowledge Agent: ${agentId}`);
-      return backend === "docker" ? dockerKnowledgeService : knowledgeService;
+      return knowledgeService;
     }
   });
   knowledgeOrigin = await knowledgeApp.listen({ host: "127.0.0.1", port: 0 });
@@ -140,7 +137,7 @@ test("Fastify 生产服务提供静态资源、深链接回退与管理鉴权", 
   expect(releaseCatalog.headers()["cache-control"]).toBe("no-store");
   expect(await releaseCatalog.json()).toMatchObject({
     schemaVersion: 1,
-    currentVersion: "0.2.0"
+    currentVersion: "0.3.0"
   });
 });
 
@@ -188,8 +185,8 @@ test("知识库 WebUI 通过真实 Fastify 临时 workspace 完成检索、上�
   );
   await expect(fs.readFile(uploadedPath, "utf8")).resolves.toContain("检查恢复点");
 
-  await page.getByRole("button", { name: "删除 Native 运维/应急手册.md" }).click();
-  await page.getByRole("button", { name: "确认删除 Native 运维/应急手册.md" }).click();
+  await page.getByRole("button", { name: "删除 运维/应急手册.md" }).click();
+  await page.getByRole("button", { name: "确认删除 运维/应急手册.md" }).click();
   await expect(page.getByText("应急手册.md", { exact: true })).toHaveCount(0);
   await expect(fs.stat(uploadedPath)).rejects.toMatchObject({ code: "ENOENT" });
 });

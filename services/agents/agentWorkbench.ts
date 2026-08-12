@@ -6,7 +6,6 @@ import {
 } from "../../packages/platform/agentResourceLayout.js";
 
 export const AGENT_WORKBENCH_DIRECTORY = AGENT_RESOURCE_LAYOUT.workbench;
-export const AGENT_DOCKER_WORKBENCH_DIRECTORY = AGENT_RESOURCE_LAYOUT.dockerWorkbench;
 export const AGENT_SKILLS_DIRECTORY = AGENT_RESOURCE_LAYOUT.skills;
 export const AGENT_MCP_DIRECTORY = AGENT_RESOURCE_LAYOUT.mcp;
 
@@ -17,35 +16,21 @@ export interface AgentBashEnvironment {
     skills: string;
     mcp: string;
   };
-  projectionMounts: {
-    nativeWorkbench?: string;
-    dockerWorkbench?: string;
-  };
+  projectionMounts: undefined;
 }
 
-export async function resolveAgentWorkbench(
-  agentWorkspace: string,
-  backend: "native" | "docker" = "native"
-) {
+export async function resolveAgentWorkbench(agentWorkspace: string) {
   const workspace = path.resolve(agentWorkspace);
   const workspaceRoot = await resolveWorkspaceRoot(workspace);
-  return resolveRegularDirectory(
-    workspaceRoot,
-    backend === "docker" ? AGENT_DOCKER_WORKBENCH_DIRECTORY : AGENT_WORKBENCH_DIRECTORY
-  );
+  return resolveRegularDirectory(workspaceRoot, AGENT_WORKBENCH_DIRECTORY);
 }
 
 export async function resolveAgentBashEnvironment(
-  agentWorkspace: string,
-  backend: "native" | "docker"
+  agentWorkspace: string
 ): Promise<AgentBashEnvironment> {
   const workspaceRoot = await resolveWorkspaceRoot(path.resolve(agentWorkspace));
-  if (backend === "docker") {
-    await resolveRegularDirectory(workspaceRoot, AGENT_RESOURCE_LAYOUT.dockerWorkbenchProjection);
-  }
-  const [nativeWorkbench, dockerWorkbench, skills, mcp] = await Promise.all([
+  const [workbench, skills, mcp] = await Promise.all([
     resolveRegularDirectory(workspaceRoot, AGENT_WORKBENCH_DIRECTORY),
-    resolveRegularDirectory(workspaceRoot, AGENT_DOCKER_WORKBENCH_DIRECTORY),
     resolveRegularDirectory(
       workspaceRoot,
       AGENT_SKILLS_DIRECTORY
@@ -53,12 +38,10 @@ export async function resolveAgentBashEnvironment(
     resolveRegularDirectory(workspaceRoot, AGENT_MCP_DIRECTORY)
   ]);
   return {
-    workbenchRoot: backend === "native" ? nativeWorkbench : dockerWorkbench,
-    addressableWorkbenchRoot: backend === "native" ? dockerWorkbench : nativeWorkbench,
+    workbenchRoot: workbench,
+    addressableWorkbenchRoot: workbench,
     readOnlyMounts: { skills, mcp },
-    projectionMounts: backend === "docker"
-      ? { nativeWorkbench }
-      : { dockerWorkbench }
+    projectionMounts: undefined
   };
 }
 
@@ -66,27 +49,15 @@ export function resolveAgentResourceDirectory(agentWorkspace: string, kind: "sel
   return agentResourcePath(path.resolve(agentWorkspace), kind);
 }
 
-export function resolveAgentResourceDirectories(
-  agentWorkspace: string,
-  kind: "selfie" | "emoji" | "skills" | "knowledge"
-) {
-  const workspace = path.resolve(agentWorkspace);
-  return {
-    native: agentResourcePath(workspace, kind, "native"),
-    docker: agentResourcePath(workspace, kind, "docker")
-  };
-}
-
 export async function resolveAgentWorkbenchFile(
   agentWorkspace: string,
-  relativePath: string,
-  backend: "native" | "docker" = "native"
+  relativePath: string
 ) {
   const requested = relativePath.trim();
   if (!requested || path.isAbsolute(requested)) {
     throw new Error("AGENT_WORKBENCH_PATH_INVALID: path must be relative to workbench.");
   }
-  const workbenchRoot = await resolveAgentWorkbench(agentWorkspace, backend);
+  const workbenchRoot = await resolveAgentWorkbench(agentWorkspace);
   const candidate = path.resolve(workbenchRoot, requested);
   assertWithin(workbenchRoot, candidate, "AGENT_WORKBENCH_PATH_INVALID");
   const resolved = await fs.realpath(candidate);

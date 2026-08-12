@@ -1,6 +1,6 @@
 # 老版本升级到当前版本
 
-适用范围：现有实例版本为 `0.1.0`、`0.1.1`、`0.1.2`、`0.1.3`、`0.1.4` 或较早的 `0.2.0` 发布包，目标是升级到当前批准的 Sunabot revision，并保留 workspace、全部 Agent 数据、QQ 登录态、表情、自拍参考图、知识库和提示词。
+适用范围：现有实例版本为 `0.1.0`、`0.1.1`、`0.1.2`、`0.1.3`、`0.1.4` 或 `0.2.0`，目标是升级到 `0.3.0`，并保留 workspace、全部 Agent 数据、QQ 登录态、表情、自拍参考图、知识库和提示词。
 
 低于 `0.1.0`、版本无法确认、workspace 来源不明或已经同时被多个实例写入时，停止升级并先完成数据与运行时审计。旧 `sunabot-qq-runtime` 容器或 `qq-runtime` Compose service 仍在运行的实例，必须先执行 [旧单容器切换](./one-container-to-split-runtime.md)。
 
@@ -19,11 +19,11 @@
 
 | 当前版本 | 执行顺序 |
 | --- | --- |
-| `0.1.0` / `0.1.1` | `0.1.2` → `0.1.3` → `0.1.4` → `0.2.0` → 当前 revision |
-| `0.1.2` | `0.1.3` → `0.1.4` → `0.2.0` → 当前 revision |
-| `0.1.3` | `0.1.4` → `0.2.0` → 当前 revision |
-| `0.1.4` | `0.2.0` → 当前 revision |
-| 较早的 `0.2.0` | 当前 revision |
+| `0.1.0` / `0.1.1` | `0.1.2` → `0.1.3` → `0.1.4` → `0.2.0` → `0.3.0` |
+| `0.1.2` | `0.1.3` → `0.1.4` → `0.2.0` → `0.3.0` |
+| `0.1.3` | `0.1.4` → `0.2.0` → `0.3.0` |
+| `0.1.4` | `0.2.0` → `0.3.0` |
+| `0.2.0` | `0.3.0` |
 
 每一行都从当前实际版本开始执行。已经完成且有恢复点、迁移报告、目标版本与运行验证证据的阶段无需重复。
 
@@ -130,40 +130,35 @@ npm run upgrade:0.2.0 -- apply --workspace "$SUNABOT_WORKSPACE"
 
 该阶段创建全 Agent SQLite 恢复点，并按平台启用受监管的动态 WebFetch Renderer。完整边界和回滚见 [0.1.4 升级到 0.2.0](./upgrade-0.1.4-to-0.2.0.md)。
 
-### 0.2.0 → 当前 revision
+### 0.2.0 → 0.3.0
 
-确认 `0.2.0` 阶段的 `status` 与 `doctor` 已通过，然后停止服务：
+在完整 `0.3.0` 代码包中执行逐文件只读预检：
+
+```bash
+npm run upgrade:0.3.0 -- plan --workspace "$SUNABOT_WORKSPACE"
+```
+
+plan 枚举全部 Agent 的 canonical `workbench/` 与旧 `docker-workbench/`。目标缺失的普通文件列为 copy，字节相同的普通文件列为 identical；内容差异、类型差异、链接、特殊文件、硬链接或非空旧 `native-workbench/` 投影列为冲突。冲突报告写入 `workspace/backups/upgrade-0.3.0/conflicts/`，并明确资源目录与 SQLite 均未修改。
+
+确认 plan 无冲突后停止服务并执行 apply：
 
 ```bash
 SUNABOT_WORKSPACE="$SUNABOT_WORKSPACE" ./sunabot.sh down
+SUNABOT_WORKSPACE="$SUNABOT_WORKSPACE" ./sunabot.sh status
+npm run upgrade:0.3.0 -- apply --quiesced --workspace "$SUNABOT_WORKSPACE"
 ```
 
-切换到当前批准的源码 revision 或正式发布包，核对代码身份：
+apply 创建覆盖全部 Agent 业务库、queue 数据库与迁移前两套资源树的恢复点，只复制目标缺失的文件并核对摘要，字节相同的目标保持原样；固定入口全部验证通过且 SQLite 前后摘要一致后，旧 `docker-workbench/` 整棵归档到恢复点。复制、入口校验或归档失败会自动恢复迁移前资源树，服务保持停止。
+
+使用 apply 返回的恢复点执行验证：
 
 ```bash
-git status --short
-git rev-parse HEAD
-node -p "require('./package.json').version"
-npm run runtime:contract
+npm run upgrade:0.3.0 -- verify \
+  --workspace "$SUNABOT_WORKSPACE" \
+  --recovery /absolute/path/to/recovery-point
 ```
 
-源码部署按当前 lockfile 执行 `npm ci`；正式发布包按发行 manifest 完成完整性校验。保持服务停止并使用当前工具创建新的全 Agent SQLite 恢复点：
-
-```bash
-SUNABOT_WORKSPACE="$SUNABOT_WORKSPACE" npm run backup:create -- --quiesced
-```
-
-保存命令返回的恢复点路径，并在启动前验证该恢复点：
-
-```bash
-npm run backup:verify -- --backup /absolute/path/to/recovery-point
-```
-
-验证双工作区布局：
-
-```bash
-npm run migrate:agent-resources -- verify --workspace "$SUNABOT_WORKSPACE"
-```
+完整边界和回滚见 [0.2.0 升级到 0.3.0](./upgrade-0.2.0-to-0.3.0.md)。
 
 验证通过后启动：
 
@@ -175,47 +170,32 @@ SUNABOT_WORKSPACE="$SUNABOT_WORKSPACE" ./sunabot.sh doctor
 
 首次启动会执行当前 schema 的前向 SQLite 迁移、保留式提示词迁移和预装 `workbench-config` Skill 升级。任一启动迁移失败时停止操作，保留现场与本阶段恢复点。
 
-## 4. 双 Workbench 资源验收
+## 4. 单一 Workbench 资源验收
 
 每个 Agent 应具有以下布局：
 
 ```text
 workspace/business/agents/<agentId>/
-├── workbench/
-│   ├── index.md
-│   ├── selfie/references.jsonl
-│   ├── emoji/emojis.jsonl
-│   ├── skills/index.json
-│   └── knowledge/index.json
-└── docker-workbench/
+└── workbench/
     ├── index.md
     ├── selfie/references.jsonl
     ├── emoji/emojis.jsonl
     ├── skills/index.json
-    ├── knowledge/index.json
-    └── native-workbench/
+    └── knowledge/index.json
 ```
 
-资源保持原 Workbench，不执行跨 Workbench 复制或合并：
-
-- 表情：运行时读取 Native 与 Docker 两套 `emojis.jsonl`；同 key 运行时优先 Native，管理台分别显示两条来源记录。
-- 自拍参考图：运行时合并两套 `references.jsonl`；管理台显示每张素材的 Workbench 来源。
-- 知识库：两套 `knowledge/index.json` 独立重建，`knowledge_search` 合并两侧结果并保留来源。
-- 新增表情、自拍参考图和知识资料固定写入 Native 标准位置。
-- 修改、删除、表情版本和内容读取继续路由到条目原始 Workbench。
-- Docker Bash 的 cwd 是 `/workbench`，Native workbench 只读投影位于 `/workbench/native-workbench`。
-- Native Bash 的 cwd 是宿主 Native workbench，并通过 `SUNABOT_DOCKER_WORKBENCH` 寻址 Docker workbench。
+生产 Agent 根下不得继续存在 `docker-workbench/`；旧根只应位于该次恢复点的 `archived/agents/<agentId>/docker-workbench/`。表情、自拍参考图、知识资料、任务文件与 Skill 源包都从 canonical `workbench/` 读取；管理 API 与内容 URL 只按 `agentId` 定位，不包含 `workbench=native|docker|all`、来源字段或 `docker-workbench` 路径段。
 
 在管理台逐个切换 Agent 并检查：
 
-1. 表情页同时显示 Native、Docker 数量和每项来源；
-2. 图像页自拍参考区同时显示两侧素材和来源；
-3. 知识库列表与搜索结果显示 Workbench 来源；
-4. 新增一条受控测试内容后来源为 Native；
-5. 对 Docker 侧测试条目执行编辑或删除时，Native 同名内容不发生变化；
-6. 切换 Agent 后列表、搜索结果和弹层不保留前一个 Agent 的内容。
+1. 表情页只显示一套当前 Agent 记录；
+2. 图像页自拍参考区只显示一套素材；
+3. 知识库列表与搜索结果不显示 Workbench 来源；
+4. 新增、修改和删除都落在 canonical `workbench/`；
+5. 切换 Agent 后列表、搜索结果和弹层不保留前一个 Agent 的内容；
+6. 重启后相同资源仍可读取，且旧根没有重新创建。
 
-生产资源不适合直接修改时，在隔离 workspace 完成第 4、5 项，再对生产执行只读列表与检索验收。
+生产资源不适合直接修改时，在隔离 workspace 完成第 4 项，再对生产执行只读列表与检索验收。
 
 ## 5. 服务与真实消息验收
 
@@ -236,10 +216,10 @@ SUNABOT_WORKSPACE="$SUNABOT_WORKSPACE" ./sunabot.sh doctor
 
 - 私聊与群聊文本从原账号定向回复；
 - @、引用回复和 action 回包正常；
-- Bot 可以发送 Native 与 Docker 两侧的表情；
-- 自拍可以选择两侧参考图并直接回传；
-- `knowledge_search` 可以同时命中两侧确定性资料；
-- 重启后 Core、NapCat、SQLite、QQ 登录态和双 Workbench 投影恢复。
+- Bot 可以发送 canonical Workbench 中的表情；
+- 自拍可以选择唯一清单中的参考图并直接回传；
+- `knowledge_search` 可以命中 canonical 确定性资料；
+- 重启后 Core、NapCat、SQLite、QQ 登录态和单一 Workbench 资源恢复。
 
 真实 QQ 验收记录账号、会话类型、时间、输入、输出和消息 ID，不记录 token、凭据、绝对路径或消息正文之外的私密数据。
 
@@ -255,13 +235,12 @@ SUNABOT_WORKSPACE="$SUNABOT_WORKSPACE" ./sunabot.sh doctor
 4. 按对应版本迁移文档恢复提示词或资源备份；
 5. 使用来源版本的 `./sunabot.sh up`、`status`、`doctor` 验证。
 
-双工作区资源回滚只在资源从迁移后没有变化时执行：
+单一 Workbench 迁移回滚只在资源从迁移后没有变化时执行：
 
 ```bash
-npm run migrate:agent-resources -- rollback \
+npm run upgrade:0.3.0 -- rollback --quiesced \
   --workspace "$SUNABOT_WORKSPACE" \
-  --backup backups/agent-workbenches-v2-<timestamp> \
-  --quiesced
+  --recovery /absolute/path/to/recovery-point
 ```
 
 当前 revision 已经写入新数据库内容或产生新 outbox 后，使用完整恢复点恢复全部 Agent 的业务库与 queue，禁止只复制单个 SQLite 文件。恢复流程见 [全 Agent SQLite 备份、恢复与故障门禁](../operations/sqlite-backup-recovery.md)。
@@ -275,7 +254,8 @@ npm run migrate:agent-resources -- rollback \
 | `TARGET_RELEASE_MISMATCH` | 当前代码不属于该目标版本；换用完整目标发布包或批准 revision，禁止修改版本文件绕过检查 |
 | `serviceMayBeStopped=true` | 服务可能保持停止；检查该阶段输出和恢复点，不直接启动下一版本 |
 | 发现旧单容器 | 执行 `one-container-to-split-runtime.md`，保留旧容器作为回滚载体 |
-| `migrate:agent-resources verify` 失败 | 保持停服，按错误修复布局、权限或清单；不手工复制未知资源 |
+| `upgrade:0.3.0 plan` 报告冲突 | 保持停服并人工核对两侧字节；不得选择一侧覆盖或跳过冲突 |
+| `upgrade:0.3.0 verify` 失败 | 保持停服，按恢复点报告处理布局、归档、入口或 drift；不手工复制未知资源 |
 | `doctor` 中 Provider 或 Renderer 失败 | 修复当前依赖或配置后重新执行 doctor，不进入真实 QQ 验收 |
 | NapCat `connected=unknown` | 继续做账号登录和真实消息验收，状态本身不证明成功或失败 |
 | 资源只在一侧可见 | 核对该侧固定入口、清单、权限与管理 API 来源，不把内容复制到另一侧掩盖问题 |
@@ -287,7 +267,7 @@ npm run migrate:agent-resources -- rollback \
 - 起始版本、每一级目标版本和对应 Git revision 或发行 manifest；
 - 唯一 workspace 绝对路径和执行用户；
 - 各阶段 `plan`、`apply`、恢复点与迁移报告；
-- `migrate:agent-resources verify` 输出；
+- `upgrade:0.3.0 plan`、`apply` 与 `verify` 输出；
 - 最终 `status`、`doctor`、管理 API 与 OneBot health 状态；
 - 全部 Agent 的表情、自拍参考图与知识库 Native/Docker 可见性；
 - 真实 QQ 私聊、群聊、图片、表情、知识检索与重启恢复结果；

@@ -187,7 +187,7 @@ describe("SunaRuntime Session queue bridge", () => {
       event: groupEvent(19_981, 602, "发送报告"),
       accountId: "account-b",
       sessionId: "account:account-b:group:602",
-      workbenchDirectory: "docker-workbench",
+      workbenchDirectory: "workbench",
       target: { accountId: "account-b", scope: "user_group", userId: 171419991, groupId: 602 }
     }
   ])("queues send_file for the current $label conversation and account", async ({
@@ -332,13 +332,13 @@ describe("SunaRuntime Session queue bridge", () => {
       return { kind: "completed", text: "文件已发送" };
     });
     const harness = createRuntimeHarness(completeRequestTurn);
-    const dockerWorkbench = path.join(
+    const workbench = path.join(
       harness.runtime.config.persona.agentWorkspace,
-      "docker-workbench",
+      "workbench",
       "exports"
     );
-    fs.mkdirSync(dockerWorkbench, { recursive: true });
-    fs.writeFileSync(path.join(dockerWorkbench, "docker-report.txt"), "docker report");
+    fs.mkdirSync(workbench, { recursive: true });
+    fs.writeFileSync(path.join(workbench, "docker-report.txt"), "docker report");
 
     await handleOneBotEvent(harness.runtime, privateEvent(19_983, "使用 Docker 生成并发送报告"), harness.gateway);
     await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
@@ -362,7 +362,7 @@ describe("SunaRuntime Session queue bridge", () => {
       label: "ordinary group",
       event: groupEvent(19_985, 603, "发送 Native 文件", 998_105)
     }
-  ])("does not let an $label turn fall back from Docker to the Native workbench", async ({ event }) => {
+  ])("lets an $label turn return a file from the Agent workbench", async ({ event }) => {
     const completeRequestTurn = vi.fn(async (
       _request: RenderedPromptRequest,
       options: ProviderCompleteOptions = {}
@@ -373,8 +373,8 @@ describe("SunaRuntime Session queue bridge", () => {
       }, {
         callId: "call-ordinary-native-send-file",
         toolName: "send_file"
-      })).rejects.toMatchObject({ code: "SEND_FILE_SOURCE_MISSING" });
-      return { kind: "completed", text: "文件不可用" };
+      })).resolves.toMatchObject({ ok: true, queued: true, name: "native-only.txt" });
+      return { kind: "completed", text: "文件已发送" };
     });
     const harness = createRuntimeHarness(completeRequestTurn);
     const nativeWorkbench = path.join(
@@ -388,7 +388,7 @@ describe("SunaRuntime Session queue bridge", () => {
     await handleOneBotEvent(harness.runtime, event, harness.gateway);
     await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
 
-    expect(harness.gateway.sendConversationAsset).not.toHaveBeenCalled();
+    expect(harness.gateway.sendConversationAsset).toHaveBeenCalledOnce();
   });
 
   it("delivers send_file after preparation mutates non-identity incoming fields", async () => {
@@ -1487,7 +1487,7 @@ describe("SunaRuntime Session queue bridge", () => {
         expect(input).toMatchObject({
           task: "perform long analysis",
           kind: "analysis",
-          __sunabot_artifact_backend: "docker"
+          __sunabot_artifact_backend: "native"
         });
         expect(context.authFile).toBe(path.join(process.cwd(), "workspace/secrets/codex/auth.json"));
         toolStarted.resolve();
@@ -2118,7 +2118,7 @@ describe("SunaRuntime Session queue bridge", () => {
       event: groupEvent(22_005, 604, "ordinary group asset request", 998_102),
       sessionId: "group:604"
     }
-  ])("allows an ordinary $label to return a Docker workbench file", async ({
+  ])("allows an ordinary $label to return an Agent workbench file", async ({
     event,
     sessionId
   }) => {
@@ -2146,7 +2146,7 @@ describe("SunaRuntime Session queue bridge", () => {
       return { kind: "completed", text: "文件已发送" };
     });
     const harness = createRuntimeHarness(completeRequestTurn);
-    const workbench = path.join(harness.runtime.config.persona.agentWorkspace, "docker-workbench", "exports");
+    const workbench = path.join(harness.runtime.config.persona.agentWorkspace, "workbench", "exports");
     fs.mkdirSync(workbench, { recursive: true });
     fs.writeFileSync(path.join(workbench, "report.txt"), "report");
 

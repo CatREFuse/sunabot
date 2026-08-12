@@ -406,7 +406,6 @@ export function systemConfigMutationFingerprint(
       enabled: descriptor.normalizedInput.enabled,
       orchestratorEnabled: descriptor.normalizedInput.orchestratorEnabled,
       searchImplementation: descriptor.normalizedInput.searchImplementation,
-      bashAdminBackend: descriptor.normalizedInput.bashAdminBackend,
       conversationId: descriptor.normalizedInput.conversationId
     },
     closesCurrentPrivateReplyGate: descriptor.closesCurrentPrivateReplyGate

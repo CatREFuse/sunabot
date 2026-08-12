@@ -522,27 +522,17 @@ async function seedConversationFixture(
       throw new Error("USER_TEST_CONVERSATION_FIXTURE_AIR_CONFLICT");
     }
   }
-  if (fixture.resetKnowledge?.length || fixture.workbenchFiles?.length) {
+  if (fixture.resetKnowledge || fixture.workbenchFiles?.length) {
     const agentWorkspace = resolveProjectPath(built.runtime.config.persona.agentWorkspace);
     if (!agentWorkspace) throw new Error("USER_TEST_CONVERSATION_FIXTURE_WORKSPACE_INVALID");
-    const roots = new Map<"native" | "docker", string>();
-    for (const backend of fixture.resetKnowledge ?? []) {
-      let root = roots.get(backend);
-      if (!root) {
-        root = await resolveAgentWorkbench(agentWorkspace, backend);
-        roots.set(backend, root);
-      }
+    const root = await resolveAgentWorkbench(agentWorkspace);
+    if (fixture.resetKnowledge) {
       await resetUserTestKnowledgeDirectory(
         String(process.env.SUNABOT_WORKSPACE ?? ""),
         root
       );
     }
     for (const file of fixture.workbenchFiles ?? []) {
-      let root = roots.get(file.backend);
-      if (!root) {
-        root = await resolveAgentWorkbench(agentWorkspace, file.backend);
-        roots.set(file.backend, root);
-      }
       await writeConversationFixtureFile(root, file.path, file.content);
     }
   }

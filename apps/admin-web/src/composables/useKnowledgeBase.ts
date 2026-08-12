@@ -39,9 +39,7 @@ export function useKnowledgeBase() {
     const context = beginContext(agentId);
     mutating.value = true;
     try {
-      const payload = await apiRequest<KnowledgeSnapshot>(endpoint("/api/knowledge/reindex", context.agentId, {
-        workbench: "all"
-      }), {
+      const payload = await apiRequest<KnowledgeSnapshot>(endpoint("/api/knowledge/reindex", context.agentId), {
         method: "POST",
         signal: context.controller.signal
       });
@@ -61,7 +59,6 @@ export function useKnowledgeBase() {
     const context = beginContext(agentId, false);
     searching.value = true;
     const path = endpoint("/api/knowledge/search", context.agentId, {
-      workbench: "all",
       q: query,
       limit: String(limit)
     });
@@ -84,7 +81,7 @@ export function useKnowledgeBase() {
     mutating.value = true;
     try {
       const payload = await apiRequest<{ snapshot: KnowledgeSnapshot }>(
-        endpoint("/api/knowledge/documents", context.agentId, { workbench: "native" }),
+        endpoint("/api/knowledge/documents", context.agentId),
         {
           method: "POST",
           body: JSON.stringify(input),
@@ -110,9 +107,7 @@ export function useKnowledgeBase() {
     mutating.value = true;
     try {
       const payload = await apiRequest<{ snapshot: KnowledgeSnapshot }>(
-        endpoint("/api/knowledge/documents", context.agentId, {
-          workbench: document.workbench ?? "native"
-        }),
+        endpoint("/api/knowledge/documents", context.agentId),
         {
           method: "DELETE",
           body: JSON.stringify({ path: document.path }),
@@ -174,9 +169,7 @@ export function useKnowledgeBase() {
     agentId: string;
     controller: AbortController;
   }) {
-    return apiRequest<KnowledgeSnapshot>(endpoint("/api/knowledge", context.agentId, {
-      workbench: "all"
-    }), {
+    return apiRequest<KnowledgeSnapshot>(endpoint("/api/knowledge", context.agentId), {
       signal: context.controller.signal
     });
   }

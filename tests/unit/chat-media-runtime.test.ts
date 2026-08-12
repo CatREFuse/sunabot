@@ -160,7 +160,7 @@ describe("current-turn chat media capability", () => {
       handle: "message:77:image:0",
       note: "群聊新增的正面角色参考"
     });
-    const catalogPath = path.join(config.persona.agentWorkspace, "docker-workbench", "emoji", "emojis.jsonl");
+    const catalogPath = path.join(config.persona.agentWorkspace, "workbench", "emoji", "emojis.jsonl");
     const catalog = await fs.readFile(catalogPath, "utf8");
 
     expect(first).toMatchObject({
@@ -175,7 +175,7 @@ describe("current-turn chat media capability", () => {
     expect(catalog.trim().split("\n")).toHaveLength(1);
     expect(catalog).toContain(first.fileName);
     await expect(fs.readFile(
-      path.join(config.persona.agentWorkspace, "docker-workbench", "emoji", first.fileName)
+      path.join(config.persona.agentWorkspace, "workbench", "emoji", first.fileName)
     )).resolves.toHaveLength(first.byteLength);
     expect(selfie).toMatchObject({
       ok: true,
@@ -185,7 +185,7 @@ describe("current-turn chat media capability", () => {
       deduplicated: false
     });
     await expect(fs.readFile(
-      path.join(config.persona.agentWorkspace, "docker-workbench", "selfie", "references.jsonl"),
+      path.join(config.persona.agentWorkspace, "workbench", "selfie", "references.jsonl"),
       "utf8"
     )).resolves.toContain(selfie.id);
     closeEmojiStores();

@@ -1,5 +1,3 @@
-import type { WorkbenchBackend } from "./workbench";
-
 export type KnowledgeDocumentFormat = "jsonl" | "markdown" | "text";
 
 export interface KnowledgeDocument {
@@ -10,7 +8,6 @@ export interface KnowledgeDocument {
   status: "indexed" | "error";
   errorCode?: string;
   updatedAt: string;
-  workbench?: WorkbenchBackend;
 }
 
 export interface KnowledgeSnapshot {
@@ -32,7 +29,6 @@ export interface KnowledgeSearchMatch {
   content: string;
   score: number;
   truncated?: boolean;
-  workbench?: WorkbenchBackend;
 }
 
 export interface KnowledgeSearchResult {

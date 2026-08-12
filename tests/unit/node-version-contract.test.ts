@@ -10,10 +10,27 @@ import {
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("pinned Node runtime contract", () => {
-  it("keeps development, package, CI, Native release and Docker on Node 24.18.0", async () => {
+  it("keeps development, package, CI, Native start and bundled releases on Node 24.18.0", async () => {
     const input = await readNodeVersionContractInputs(root);
     expect(input.contract.nodeVersion).toBe("24.18.0");
     expect(validateNodeVersionEntrypoints(input)).toEqual([]);
+  });
+
+  it("keeps the packaged Core process entry on verified bundled executables", async () => {
+    const { nativeStart } = await readNodeVersionContractInputs(root);
+    expect(nativeStart).toContain('runtime/node/bin/node');
+    expect(nativeStart).toContain('runtime/bubblewrap/bwrap');
+    expect(nativeStart).toContain('${SUNABOT_NODE_EXECUTABLE+x}');
+    expect(nativeStart).toContain('${SUNABOT_BWRAP_EXECUTABLE+x}');
+    expect(nativeStart).toContain('export SUNABOT_BWRAP_EXECUTABLE="$bwrap_bin"');
+    expect(nativeStart).toContain('export SUNABOT_PACKAGED_RELEASE=1');
+    expect(nativeStart).not.toContain('command -v node');
+    expect(nativeStart).not.toContain('/usr/bin/bwrap');
+
+    const integrityCheck = nativeStart.indexOf("validateReleaseManifest");
+    const coreExec = nativeStart.indexOf('exec "$node_bin" "$root/dist/apps/api/main.js"');
+    expect(integrityCheck).toBeGreaterThan(-1);
+    expect(coreExec).toBeGreaterThan(integrityCheck);
   });
 
   it.each([
@@ -41,8 +58,11 @@ describe("pinned Node runtime contract", () => {
     ["component lock", (input: Awaited<ReturnType<typeof readNodeVersionContractInputs>>) => {
       input.componentLock.components.node.version = "24.14.0";
     }],
-    ["Docker", (input: Awaited<ReturnType<typeof readNodeVersionContractInputs>>) => {
-      input.dockerfile = input.dockerfile.replace("ARG NODE_VERSION=24.18.0", "ARG NODE_VERSION=24.14.0");
+    ["linux/arm64 archive", (input: Awaited<ReturnType<typeof readNodeVersionContractInputs>>) => {
+      input.componentLock.components.node.archives["linux/arm64"].sha256 = "";
+    }],
+    ["Native start", (input: Awaited<ReturnType<typeof readNodeVersionContractInputs>>) => {
+      input.nativeStart = input.nativeStart.replace('[[ "$actual_node" != "$expected_node" ]]', "true");
     }],
     ["Native manifest", (input: Awaited<ReturnType<typeof readNodeVersionContractInputs>>) => {
       input.buildRelease = input.buildRelease.replace("nodeVersion: contract.nodeVersion", "nodeVersion: process.versions.node");

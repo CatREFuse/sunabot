@@ -30,7 +30,6 @@ The Provider prompt requests an answer that first checks the Agent knowledge, th
     "fixture": {
       "workbenchFiles": [
         {
-          "backend": "native",
           "path": "knowledge/tool-evidence-fixture.md",
           "content": "# tool-evidence-fixture\n\n本地夹具事实：Sunabot 的 user test harness 使用 RecordingMessagingPort 捕获出站结果，不连接真实 QQ 或 NapCat。"
         }

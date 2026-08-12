@@ -12,95 +12,67 @@ afterEach(async () => {
 });
 
 describe("workbench image reference addresses", () => {
-  it("accepts the real Native and Docker workbench roots for an administrator private turn", async () => {
+  it("resolves absolute paths from the canonical workbench root", async () => {
     const workspace = await temporaryAgentWorkspace();
-    const nativeRoot = await resolveAgentWorkbench(workspace, "native");
-    const dockerRoot = await resolveAgentWorkbench(workspace, "docker");
+    const workbenchRoot = await resolveAgentWorkbench(workspace);
 
     await expect(resolveWorkbenchImageReferenceAddress(
       workspace,
-      "native",
-      path.join(nativeRoot, "fixtures", "native.png")
+      path.join(workbenchRoot, "fixtures", "canonical.png")
     )).resolves.toEqual({
-      path: path.join("fixtures", "native.png"),
-      backend: "native",
-      exactBackend: true
-    });
-    await expect(resolveWorkbenchImageReferenceAddress(
-      workspace,
-      "native",
-      path.join(dockerRoot, "fixtures", "docker.png")
-    )).resolves.toEqual({
-      path: path.join("fixtures", "docker.png"),
-      backend: "docker",
-      exactBackend: true
+      path: path.join("fixtures", "canonical.png")
     });
   });
 
-  it("maps Docker-visible absolute paths to the matching authorized workbench", async () => {
+  it("maps /workbench paths to the canonical root and rejects the retired projection", async () => {
     const workspace = await temporaryAgentWorkspace();
 
     await expect(resolveWorkbenchImageReferenceAddress(
       workspace,
-      "docker",
-      "/workbench/fixtures/docker.png"
+      "/workbench/fixtures/reference.png"
     )).resolves.toEqual({
-      path: path.join("fixtures", "docker.png"),
-      backend: "docker",
-      exactBackend: true
+      path: path.join("fixtures", "reference.png")
     });
     await expect(resolveWorkbenchImageReferenceAddress(
       workspace,
-      "docker",
       "/workbench/native-workbench/selfie/reference.png"
-    )).resolves.toEqual({
-      path: path.join("selfie", "reference.png"),
-      backend: "native",
-      exactBackend: true
-    });
+    )).rejects.toThrow("WORKBENCH_IMAGE_PATH_OUTSIDE_AUTHORIZED_ROOT");
   });
 
-  it("keeps relative paths on the conversation backend and rejects absolute escapes", async () => {
+  it("keeps relative paths on the canonical workbench and rejects absolute escapes", async () => {
     const workspace = await temporaryAgentWorkspace();
-    const nativeRoot = await resolveAgentWorkbench(workspace, "native");
+    const workbenchRoot = await resolveAgentWorkbench(workspace);
 
     await expect(resolveWorkbenchImageReferenceAddress(
       workspace,
-      "docker",
       "fixtures/reference.png"
     )).resolves.toEqual({
-      path: "fixtures/reference.png",
-      backend: "docker",
-      exactBackend: false
+      path: "fixtures/reference.png"
     });
     await expect(resolveWorkbenchImageReferenceAddress(
       workspace,
-      "docker",
-      path.join(nativeRoot, "fixtures", "private.png")
-    )).rejects.toThrow("WORKBENCH_IMAGE_PATH_OUTSIDE_AUTHORIZED_ROOT");
+      path.join(workbenchRoot, "fixtures", "private.png")
+    )).resolves.toEqual({
+      path: path.join("fixtures", "private.png")
+    });
     await expect(resolveWorkbenchImageReferenceAddress(
       workspace,
-      "native",
       "/workbench/../outside.png"
     )).rejects.toThrow("WORKBENCH_IMAGE_PATH_OUTSIDE_AUTHORIZED_ROOT");
     await expect(resolveWorkbenchImageReferenceAddress(
       workspace,
-      "native",
       "/etc/passwd"
     )).rejects.toThrow("WORKBENCH_IMAGE_PATH_OUTSIDE_AUTHORIZED_ROOT");
   });
 
-  it("resolves portable knowledge image paths from the Native workbench", async () => {
+  it("resolves portable knowledge image paths from the canonical workbench", async () => {
     const workspace = await temporaryAgentWorkspace();
 
     await expect(resolveWorkbenchImageReferenceAddress(
       workspace,
-      "docker",
       "knowledge/memory-images/reference.png"
     )).resolves.toEqual({
-      path: path.join("knowledge", "memory-images", "reference.png"),
-      backend: "native",
-      exactBackend: true
+      path: path.join("knowledge", "memory-images", "reference.png")
     });
   });
 });

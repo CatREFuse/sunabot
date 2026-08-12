@@ -187,7 +187,6 @@ export function defaultConfig(): AppConfig {
       },
       bash: {
         enabled: false,
-        adminPrivateBackend: "docker",
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         allowGroup: false,
@@ -501,7 +500,6 @@ function mergeBotConfig(
     tools: mergeBotToolSettings(base.tools, incoming?.tools as Partial<BotToolSettings> | undefined),
     bash: {
       enabled: bash?.enabled ?? base.bash.enabled,
-      adminPrivateBackend: "docker",
       auditModel: normalizeModelName(bash?.auditModel, base.bash.auditModel),
       strictMode: bash?.strictMode ?? base.bash.strictMode,
       allowGroup: bash?.allowGroup ?? base.bash.allowGroup,
@@ -648,19 +646,21 @@ function mergeBotToolOverrides(
     const candidate = incoming?.[name];
     const normalized = normalizeBotToolOverride(candidate, fallback);
     if (!normalized) continue;
-    if (name === "native_bash" || name === "docker_bash" || name === "codex") {
+    if (name === "native_bash" || name === "codex") {
       const { enabled: _legacyEnabled, ...descriptionOnly } = normalized;
       if (descriptionOnly.description) merged[name] = descriptionOnly;
       continue;
     }
     merged[name] = normalized;
   }
+  const legacyOverrides = incoming as Record<string, BotToolOverride | undefined> | undefined;
+  const legacyBase = base as Record<string, BotToolOverride | undefined> | undefined;
   const legacyBash = normalizeBotToolOverride(
-    (incoming as Record<string, BotToolOverride | undefined> | undefined)?.workspace_bash,
-    (base as Record<string, BotToolOverride | undefined> | undefined)?.workspace_bash
+    legacyOverrides?.native_bash ?? legacyOverrides?.docker_bash ?? legacyOverrides?.workspace_bash,
+    legacyBase?.native_bash ?? legacyBase?.docker_bash ?? legacyBase?.workspace_bash
   );
-  if (legacyBash?.description && !merged.docker_bash?.description) {
-    merged.docker_bash = { description: legacyBash.description };
+  if (legacyBash?.description && !merged.native_bash?.description) {
+    merged.native_bash = { description: legacyBash.description };
   }
   return merged;
 }

@@ -25,7 +25,8 @@ export function validateWebFetchInput(value: unknown): WebFetchInput | undefined
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const url = typeof record.url === "string" ? record.url.trim() : "";
-  if (!url || url.length > 4_096 || typeof record.semanticMatch !== "boolean") return undefined;
+  if (!url || url.length > 4_096 || webUrlHasCredentials(url)
+    || typeof record.semanticMatch !== "boolean") return undefined;
   const keys = Object.keys(record).sort();
   if (record.semanticMatch === false) {
     if (keys.length !== 2 || keys[0] !== "semanticMatch" || keys[1] !== "url") return undefined;
@@ -39,6 +40,15 @@ export function validateWebFetchInput(value: unknown): WebFetchInput | undefined
     : "";
   if (!query || query.length > 1_000) return undefined;
   return { url, semanticMatch: true, query };
+}
+
+function webUrlHasCredentials(value: string) {
+  try {
+    const url = new URL(value);
+    return Boolean(url.username || url.password);
+  } catch {
+    return false;
+  }
 }
 
 export interface WebFetchEvidencePolicyV1 {

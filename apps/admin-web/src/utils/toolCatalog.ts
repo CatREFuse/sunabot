@@ -8,7 +8,6 @@ const toolIcons: Record<string, string> = {
   generate_img: "bx-image-add",
   selfie: "bx-camera",
   native_bash: "bx-terminal",
-  docker_bash: "bx-terminal",
   codex: "bx-code-alt"
 };
 

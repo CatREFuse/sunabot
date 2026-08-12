@@ -63,7 +63,7 @@ export class ProxyConfigurationError extends Error {
 }
 
 /**
- * Resolves one proxy contract for API, Native and Docker runtimes. The WSL
+ * Resolves one proxy contract for API and Native runtimes. The WSL
  * gateway is discovered at runtime and never persisted as a fixed address.
  *
  * @param {ResolveProxyOptions} [options]

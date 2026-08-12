@@ -6,7 +6,7 @@ The Bot sends one image from its own emoji catalog so the next chained turn can 
 
 ## Preconditions
 
-This is the first step of the `media.sent-emoji-reuse` chained suite. Prepare a fresh isolated workspace from an Agent whose copied emoji catalog contains the key `汗颜`, run this case, and retain that workspace only for the second case `media.sent-emoji-reuse.generate`.
+This is the first step of the `media.sent-emoji-reuse` chained suite. Prepare a fresh isolated workspace whose canonical Workbench emoji catalog contains the key `汗颜`, run this case, and retain that workspace only for the second case `media.sent-emoji-reuse.generate`.
 
 ## Expected quality
 
@@ -50,8 +50,7 @@ The Agent must send only the requested catalog sticker. The successful mock rece
       "generate_img",
       "selfie",
       "send_file",
-      "native_bash",
-      "docker_bash"
+      "native_bash"
     ],
     "forbiddenSuccessfulTools": [],
     "requiredAvailableTools": [],

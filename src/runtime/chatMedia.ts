@@ -21,10 +21,7 @@ import { resolveProjectPath } from "../config.js";
 import type { AppConfig, ParsedIncomingMessage } from "../types.js";
 import { fileTypeFromBuffer } from "file-type";
 import crypto from "node:crypto";
-import {
-  resolveConversationWorkbench,
-  type ConversationCapabilityContextV1
-} from "../../services/conversations/conversationCapability.js";
+import type { ConversationCapabilityContextV1 } from "../../services/conversations/conversationCapability.js";
 
 export function providerChatMediaForIncoming(
   config: AppConfig,
@@ -39,18 +36,13 @@ export function providerChatMediaForIncoming(
   if (!sources.size) return undefined;
   const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
   if (!agentWorkspace) return undefined;
-  const backend = capability
-    ? resolveConversationWorkbench(capability, "chat_media_export").primaryBackend
-    : incoming.scope === "private"
-      ? "native" as const
-      : "docker" as const;
+  void capability;
   const exporter = new ChatMediaExportService({
     agentWorkspace,
     cache,
     sources,
     publisher: chatMediaPublisher,
-    isCurrent,
-    backend
+    isCurrent
   });
   const emojiImportAllowed = isAdminSender(incoming.userId, config.bot.adminQq.trim());
   return Object.freeze({
@@ -62,7 +54,7 @@ export function providerChatMediaForIncoming(
       ? {
           importEmoji: async (input: ImportChatEmojiInput) => {
             if (!isCurrent()) throw new Error("CHAT_MEDIA_TURN_EXPIRED");
-            const repository = new EmojiLibraryRepository({ getConfig: () => config, backend });
+            const repository = new EmojiLibraryRepository({ getConfig: () => config });
             const before = await repository.list();
             const bytes = await exporter.readImage(input.handle, MAX_EMOJI_UPLOAD_BYTES);
             if (!isCurrent()) throw new Error("CHAT_MEDIA_TURN_EXPIRED");
@@ -90,7 +82,7 @@ export function providerChatMediaForIncoming(
             const extension = selfieExtension(detected?.mime);
             if (!extension) throw new Error("CHAT_SELFIE_IMPORT_TYPE_INVALID");
             if (!isCurrent()) throw new Error("CHAT_MEDIA_TURN_EXPIRED");
-            const repository = new SelfieReferenceRepository({ getConfig: () => config, backend });
+            const repository = new SelfieReferenceRepository({ getConfig: () => config });
             const before = await repository.list();
             const id = crypto.createHash("sha256").update(bytes).digest("hex");
             const after = await repository.create({

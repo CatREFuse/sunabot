@@ -20,7 +20,6 @@ const REQUIRED_FILES = [
   "WORKING_MEMORY.md",
   "selfie_prompt_rewrite.json",
   "workbench/index.md",
-  "docker-workbench/index.md",
   "workbench/selfie/references.jsonl",
   "workbench/emoji/emojis.jsonl",
   "workbench/skills/index.json",

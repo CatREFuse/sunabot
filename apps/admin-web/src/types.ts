@@ -285,10 +285,9 @@ export interface SunaTool {
   unavailabilityKind?: ToolUnavailabilityKind;
   accessLabel?: string;
   accessDescription?: string;
-  executionBackend?: "native" | "docker";
+  executionBackend?: "native";
   bashEnvironments?: {
     native?: { available: boolean; reasonCode?: string };
-    docker?: { started: boolean; reasonCode?: string };
   };
   runtimeReasonCode?: string;
   defaultDescription?: string;
@@ -442,7 +441,6 @@ export interface SelfieReferenceImage {
   originalUrl: string;
   displayUrl: string;
   placeholderUrl: string;
-  workbench?: "native" | "docker";
 }
 
 export interface SelfieReferencePayload {

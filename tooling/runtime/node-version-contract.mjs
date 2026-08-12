@@ -11,7 +11,6 @@ export async function readNodeVersionContractInputs(root) {
     nodeVersionFile,
     nvmrc,
     workflow,
-    dockerfile,
     nativeStart,
     buildRelease
   ] = await Promise.all([
@@ -23,7 +22,6 @@ export async function readNodeVersionContractInputs(root) {
     fs.readFile(path.join(root, ".node-version"), "utf8"),
     fs.readFile(path.join(root, ".nvmrc"), "utf8"),
     fs.readFile(path.join(root, ".github/workflows/verify.yml"), "utf8"),
-    fs.readFile(path.join(root, "deploy/docker/Dockerfile"), "utf8"),
     fs.readFile(path.join(root, "deploy/native/bin/start-sunabot.sh"), "utf8"),
     fs.readFile(path.join(root, "tooling/runtime/build-release.mjs"), "utf8")
   ]);
@@ -36,7 +34,6 @@ export async function readNodeVersionContractInputs(root) {
     nodeVersionFile,
     nvmrc,
     workflow,
-    dockerfile,
     nativeStart,
     buildRelease
   };
@@ -56,25 +53,12 @@ export function validateNodeVersionEntrypoints(input) {
   expect(input.packageLock?.packages?.[""]?.engines?.node === expected,
     "package-lock root engines.node must equal the exact runtime contract Node version");
   expect(nodeComponent?.version === expected, "component lock Node version must match the runtime contract");
-  expect(
-    typeof nodeComponent?.image === "string" && nodeComponent.image.includes(`node:${expected}-`),
-    "component lock Node image tag must contain the exact runtime contract version"
-  );
+  expect(nodeComponent?.archives?.["linux/amd64"]?.sha256
+    && nodeComponent?.archives?.["linux/arm64"]?.sha256,
+  "component lock must pin both Node release archives");
   expect(
     /^\s*node-version-file:\s*\.node-version\s*$/m.test(input.workflow),
     "CI setup-node must read .node-version"
-  );
-  expect(
-    input.dockerfile.includes(`ARG NODE_VERSION=${expected}`),
-    "Dockerfile NODE_VERSION must match the runtime contract"
-  );
-  expect(
-    input.dockerfile.includes(`ARG NODE_IMAGE=${nodeComponent?.image}@${nodeComponent?.digest}`),
-    "Dockerfile Node image and digest must match the component lock"
-  );
-  expect(
-    input.dockerfile.includes("process.versions.node") && input.dockerfile.includes('"$NODE_VERSION"'),
-    "Docker build must assert the Node binary version"
   );
   expect(
     input.nativeStart.includes("actual_node")
@@ -84,7 +68,8 @@ export function validateNodeVersionEntrypoints(input) {
   );
   expect(
     input.buildRelease.includes("process.versions.node !== contract.nodeVersion")
-      && input.buildRelease.includes("nodeVersion: contract.nodeVersion"),
+      && input.buildRelease.includes("nodeVersion: contract.nodeVersion")
+      && input.buildRelease.includes("runtime/node/bin/node"),
     "Native release build and manifest must use the runtime contract Node version"
   );
   return errors;

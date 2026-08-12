@@ -21,15 +21,12 @@ export interface EmojiMockRequest {
   method: string;
   path: string;
   agentId: string;
-  workbench: "native" | "docker" | "all";
   body?: Record<string, unknown>;
 }
 
 export interface EmojiManagementMock {
   recordsByAgent: Record<string, EmojiRecord[]>;
-  dockerRecordsByAgent: Record<string, EmojiRecord[]>;
   versionsByAgent: Record<string, Record<string, EmojiVersionRecord[]>>;
-  dockerVersionsByAgent: Record<string, Record<string, EmojiVersionRecord[]>>;
   sendSizeByAgent: Record<string, 64 | 128 | 256 | 512 | 1024>;
   sendSeparatelyByAgent: Record<string, boolean>;
   requests: EmojiMockRequest[];
@@ -44,21 +41,15 @@ export async function installEmojiManagementMock(page: Page): Promise<EmojiManag
       plana: [
         emojiRecord("开心", "generated", "plana", 0),
         emojiRecord("害羞", "upload", "plana", 1),
-        emojiRecord("摸鱼", "upload", "plana", 2)
+        emojiRecord("摸鱼", "upload", "plana", 2),
+        emojiRecord("门缝小春", "upload", "plana", 5)
       ],
       arona: [
         emojiRecord("认真", "generated", "arona", 3),
         emojiRecord("打招呼", "upload", "arona", 4)
       ]
     },
-    dockerRecordsByAgent: {
-      plana: [
-        emojiRecord("门缝小春", "upload", "plana", 5, "docker")
-      ],
-      arona: []
-    },
     versionsByAgent: {},
-    dockerVersionsByAgent: {},
     sendSizeByAgent: { plana: 512, arona: 256 },
     sendSeparatelyByAgent: { plana: false, arona: false },
     requests: [],
@@ -70,25 +61,14 @@ export async function installEmojiManagementMock(page: Page): Promise<EmojiManag
       [{ ...record, current: true }]
     ]));
   }
-  for (const [agentId, agentRecords] of Object.entries(state.dockerRecordsByAgent)) {
-    state.dockerVersionsByAgent[agentId] = Object.fromEntries(agentRecords.map((record) => [
-      record.key,
-      [{ ...record, current: true }]
-    ]));
-  }
-
   await page.route("**/api/emojis**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
     const agentId = url.searchParams.get("agentId") || "plana";
-    const requestedWorkbench = url.searchParams.get("workbench");
-    const workbench = requestedWorkbench === "docker" || requestedWorkbench === "all"
-      ? requestedWorkbench
-      : "native";
     const body = request.postData() ? request.postDataJSON() as Record<string, unknown> : undefined;
-    state.requests.push({ method, path, agentId, workbench, body });
+    state.requests.push({ method, path, agentId, body });
 
     if (path.endsWith("/content") && method === "GET") {
       return route.fulfill({ status: 200, contentType: "image/png", body: uploadFixture });
@@ -96,19 +76,18 @@ export async function installEmojiManagementMock(page: Page): Promise<EmojiManag
     const versionList = path.match(/^\/api\/emojis\/([^/]+)\/versions$/u);
     if (versionList && method === "GET") {
       const key = decodeURIComponent(versionList[1] ?? "");
-      return fulfillJson(route, versionPayload(state, agentId, key, mutationWorkbench(workbench)));
+      return fulfillJson(route, versionPayload(state, agentId, key));
     }
     const versionRemove = path.match(/^\/api\/emojis\/([^/]+)\/versions\/([^/]+)$/u);
     if (versionRemove && method === "DELETE") {
       const key = decodeURIComponent(versionRemove[1] ?? "");
       const fileName = decodeURIComponent(versionRemove[2] ?? "");
-      const backend = mutationWorkbench(workbench);
-      versionStore(state, backend)[agentId]![key] = versions(state, agentId, key, backend)
+      state.versionsByAgent[agentId]![key] = versions(state, agentId, key)
         .filter((version) => version.current || version.fileName !== fileName);
       return route.fulfill({ status: 204 });
     }
     if (path === "/api/emojis" && method === "GET") {
-      return fulfillJson(route, payload(state, agentId, workbench));
+      return fulfillJson(route, payload(state, agentId));
     }
     if (path === "/api/emojis/settings" && method === "PATCH") {
       const sendSize = body?.sendSize;
@@ -121,41 +100,37 @@ export async function installEmojiManagementMock(page: Page): Promise<EmojiManag
       }
       state.sendSizeByAgent[agentId] = sendSize;
       state.sendSeparatelyByAgent[agentId] = sendSeparately;
-      return fulfillJson(route, payload(state, agentId, "native"));
+      return fulfillJson(route, payload(state, agentId));
     }
     if (path === "/api/emojis/generate" && method === "POST") {
       const key = requireKey(body);
-      const backend = mutationWorkbench(workbench);
-      upsert(state, agentId, emojiRecord(key, "generated", agentId, state.requests.length, backend), backend);
-      return fulfillJson(route, payload(state, agentId, backend));
+      upsert(state, agentId, emojiRecord(key, "generated", agentId, state.requests.length));
+      return fulfillJson(route, payload(state, agentId));
     }
     if (path === "/api/emojis" && method === "POST") {
       const key = requireKey(body);
-      const backend = mutationWorkbench(workbench);
-      upsert(state, agentId, emojiRecord(key, "upload", agentId, state.requests.length, backend), backend);
-      return fulfillJson(route, payload(state, agentId, backend));
+      upsert(state, agentId, emojiRecord(key, "upload", agentId, state.requests.length));
+      return fulfillJson(route, payload(state, agentId));
     }
     const rename = path.match(/^\/api\/emojis\/([^/]+)$/u);
     if (rename && method === "PATCH") {
       const key = decodeURIComponent(rename[1] ?? "");
       const nextKey = requireKey(body);
-      const backend = mutationWorkbench(workbench);
-      recordStore(state, backend)[agentId] = records(state, agentId, backend).map((record) => (
+      state.recordsByAgent[agentId] = records(state, agentId).map((record) => (
         record.key === key ? { ...record, key: nextKey } : record
       ));
-      versionStore(state, backend)[agentId]![nextKey] = versions(state, agentId, key, backend).map((version) => ({
+      state.versionsByAgent[agentId]![nextKey] = versions(state, agentId, key).map((version) => ({
         ...version,
         key: nextKey
       }));
-      delete versionStore(state, backend)[agentId]![key];
-      return fulfillJson(route, payload(state, agentId, backend));
+      delete state.versionsByAgent[agentId]![key];
+      return fulfillJson(route, payload(state, agentId));
     }
     const remove = path.match(/^\/api\/emojis\/([^/]+)$/u);
     if (remove && method === "DELETE") {
       const key = decodeURIComponent(remove[1] ?? "");
-      const backend = mutationWorkbench(workbench);
-      recordStore(state, backend)[agentId] = records(state, agentId, backend).filter((record) => record.key !== key);
-      delete versionStore(state, backend)[agentId]?.[key];
+      state.recordsByAgent[agentId] = records(state, agentId).filter((record) => record.key !== key);
+      delete state.versionsByAgent[agentId]?.[key];
       return route.fulfill({ status: 204 });
     }
     return fulfillJson(route, {
@@ -168,43 +143,27 @@ export async function installEmojiManagementMock(page: Page): Promise<EmojiManag
 
 function payload(
   state: EmojiManagementMock,
-  agentId: string,
-  workbench: "native" | "docker" | "all"
+  agentId: string
 ): EmojiPayload {
-  const emojis = workbench === "all"
-    ? [
-        ...records(state, agentId, "native").map((record) => ({ ...record, workbench: "native" as const })),
-        ...records(state, agentId, "docker").map((record) => ({ ...record, workbench: "docker" as const }))
-      ]
-    : records(state, agentId, workbench).map((record) => ({ ...record, workbench }));
   return {
     presetKeys: [...emojiPresetKeys],
-    emojis,
+    emojis: records(state, agentId),
     sendSize: state.sendSizeByAgent[agentId] ?? 512,
     sendSeparately: state.sendSeparatelyByAgent[agentId] ?? false,
     revision: `${agentId}-revision`
   };
 }
 
-function recordStore(state: EmojiManagementMock, workbench: "native" | "docker") {
-  return workbench === "docker" ? state.dockerRecordsByAgent : state.recordsByAgent;
-}
-
-function versionStore(state: EmojiManagementMock, workbench: "native" | "docker") {
-  return workbench === "docker" ? state.dockerVersionsByAgent : state.versionsByAgent;
-}
-
-function records(state: EmojiManagementMock, agentId: string, workbench: "native" | "docker") {
-  return recordStore(state, workbench)[agentId] ??= [];
+function records(state: EmojiManagementMock, agentId: string) {
+  return state.recordsByAgent[agentId] ??= [];
 }
 
 function versions(
   state: EmojiManagementMock,
   agentId: string,
-  key: string,
-  workbench: "native" | "docker"
+  key: string
 ) {
-  const store = versionStore(state, workbench);
+  const store = state.versionsByAgent;
   store[agentId] ??= {};
   return store[agentId]![key] ??= [];
 }
@@ -212,17 +171,16 @@ function versions(
 function upsert(
   state: EmojiManagementMock,
   agentId: string,
-  next: EmojiRecord,
-  workbench: "native" | "docker"
+  next: EmojiRecord
 ) {
-  const history = versions(state, agentId, next.key, workbench).map((version) => ({ ...version, current: false }));
+  const history = versions(state, agentId, next.key).map((version) => ({ ...version, current: false }));
   const matching = history.find((version) => version.fileName === next.fileName);
-  versionStore(state, workbench)[agentId]![next.key] = [
+  state.versionsByAgent[agentId]![next.key] = [
     { ...(matching ?? next), ...next, current: true },
     ...history.filter((version) => version.fileName !== next.fileName)
   ];
-  recordStore(state, workbench)[agentId] = [
-    ...records(state, agentId, workbench).filter((record) => record.key !== next.key),
+  state.recordsByAgent[agentId] = [
+    ...records(state, agentId).filter((record) => record.key !== next.key),
     next
   ];
 }
@@ -230,13 +188,12 @@ function upsert(
 function versionPayload(
   state: EmojiManagementMock,
   agentId: string,
-  key: string,
-  workbench: "native" | "docker"
+  key: string
 ) {
   return {
     key,
-    versions: versions(state, agentId, key, workbench).map((version) => {
-      const contentPath = `/api/emojis/${encodeURIComponent(key)}/versions/${encodeURIComponent(version.fileName)}/content?agentId=${encodeURIComponent(agentId)}&workbench=${workbench}`;
+    versions: versions(state, agentId, key).map((version) => {
+      const contentPath = `/api/emojis/${encodeURIComponent(key)}/versions/${encodeURIComponent(version.fileName)}/content?agentId=${encodeURIComponent(agentId)}`;
       return {
         ...version,
         originalUrl: `${contentPath}&variant=original`,
@@ -257,10 +214,9 @@ function emojiRecord(
   key: string,
   source: EmojiSource,
   agentId: string,
-  version: number,
-  workbench: "native" | "docker" = "native"
+  version: number
 ): EmojiRecord {
-  const contentPath = `/api/emojis/${encodeURIComponent(key)}/content?agentId=${encodeURIComponent(agentId)}&workbench=${workbench}`;
+  const contentPath = `/api/emojis/${encodeURIComponent(key)}/content?agentId=${encodeURIComponent(agentId)}`;
   return {
     key,
     source,
@@ -273,10 +229,6 @@ function emojiRecord(
     displayUrl: `${contentPath}&variant=display`,
     placeholderUrl: `${contentPath}&variant=placeholder`
   };
-}
-
-function mutationWorkbench(workbench: "native" | "docker" | "all") {
-  return workbench === "docker" ? "docker" : "native";
 }
 
 async function fulfillJson(route: Route, value: unknown, status = 200) {

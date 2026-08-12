@@ -23,7 +23,6 @@ const actionNames: Record<string, string> = {
   "generate_img": "生图",
   "selfie": "自拍",
   "native_bash": "Native 命令执行",
-  "docker_bash": "Docker 命令执行",
   "codex": "Codex 异步任务",
   "input_image": "图片输入",
   "add_workmemory": "记录工作记忆",

@@ -32,7 +32,9 @@ describe("WebFetch public contract", () => {
       { url: "https://example.com", semanticMatch: true },
       { url: "https://example.com", semanticMatch: true, query: "" },
       { url: "https://example.com", semanticMatch: false, headers: {} },
-      { url: "https://example.com", semanticMatch: "false" }
+      { url: "https://example.com", semanticMatch: "false" },
+      { url: "https://user@example.com", semanticMatch: false },
+      { url: "https://:secret@example.com", semanticMatch: true, query: "query" }
     ]) expect(readWebFetchInput(invalid)).toBeUndefined();
   });
 
@@ -149,6 +151,49 @@ describe("WebFetch extraction and selection", () => {
 
     expect(result).toEqual({ ok: false, code: "INVALID_INPUT", error: "WebFetch 参数无效。" });
     expect(staticFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects credential-bearing adapter URLs without returning their userinfo", async () => {
+    const staticFetch = vi.fn(async () => ({
+      html: articleHtml(longParagraphs("Credential-free output", 8)),
+      finalUrl: "https://user:secret@example.com/final",
+      status: 200
+    }));
+    const service = createWebFetchService({ staticFetch, renderer: rendererMock() });
+
+    const result = await service.fetch({ url: "https://example.com/start", semanticMatch: false });
+
+    expect(result).toEqual({ ok: false, code: "URL_NOT_ALLOWED", error: "该 URL 不允许抓取。" });
+    expect(JSON.stringify(result)).not.toContain("user");
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("rejects credential-bearing renderer URLs even if its validator is misconfigured", async () => {
+    const extract = vi.fn(async (html: string) => html.includes("root")
+      ? extracted("")
+      : extracted("Dynamic article ".repeat(100)));
+    const renderer = rendererMock("<article>Dynamic article</article>");
+    renderer.render.mockResolvedValue({
+      html: "<article>Dynamic article</article>",
+      finalUrl: "https://user:secret@example.com/final"
+    });
+    const service = createWebFetchService({
+      staticFetch: async () => ({
+        html: "<div id='root'></div>",
+        finalUrl: "https://example.com/start",
+        status: 200
+      }),
+      extract,
+      renderer,
+      validateRenderedUrl: async (value) => value
+    });
+
+    const result = await service.fetch({ url: "https://example.com/start", semanticMatch: false });
+
+    expect(result).toEqual({ ok: false, code: "URL_NOT_ALLOWED", error: "该 URL 不允许抓取。" });
+    expect(JSON.stringify(result)).not.toContain("user");
+    expect(JSON.stringify(result)).not.toContain("secret");
+    expect(extract).toHaveBeenCalledOnce();
   });
 
   it("upgrades an empty SPA shell to dynamic rendering without sending query to the renderer", async () => {
@@ -336,23 +381,24 @@ describe("WebFetch extraction and selection", () => {
     expect(estimateWebTokens(JSON.stringify(result))).toBeLessThanOrEqual(WEBFETCH_FULL_TOKEN_BUDGET);
   });
 
-  it("revalidates every redirect and enforces the decompressed byte limit", async () => {
+  it("follows every HTTP(S) redirect and enforces the decompressed byte limit", async () => {
     const request = vi.fn()
       .mockResolvedValueOnce({
         status: 302,
         headers: { location: "http://internal.test/private" },
         body: Readable.from([])
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: { "content-type": "text/html" },
+        body: Readable.from([Buffer.from("<html>internal</html>")])
       });
-    const lookup = vi.fn(async (hostname: string) => hostname === "public.test"
-      ? [{ address: "93.184.216.34", family: 4 }]
-      : [{ address: "127.0.0.1", family: 4 }]);
 
-    await expect(fetchSafeHtml("https://public.test/", { request, lookup }))
-      .rejects.toMatchObject({ code: "TARGET_NOT_PUBLIC" });
-    expect(request).toHaveBeenCalledOnce();
+    await expect(fetchSafeHtml("https://public.test/", { request }))
+      .resolves.toMatchObject({ finalUrl: "http://internal.test/private", status: 200 });
+    expect(request).toHaveBeenCalledTimes(2);
 
     await expect(fetchSafeHtml("https://public.test/", {
-      lookup,
       maxBytes: 8,
       request: async () => ({
         status: 200,

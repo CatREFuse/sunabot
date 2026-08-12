@@ -14,466 +14,273 @@ const [
   contract,
   schema,
   lock,
-  coreDockerfile,
-  bashDockerfile,
-  napcatDockerfile,
-  webfetchRendererDockerfile,
-  napcatEntrypoint,
-  compose,
-  coreHealthcheck,
-  outboundMedia,
-  apiServer,
-  onebotListener,
-  workspaceLayout,
-  launcher,
-  launcherCore,
-  dockerRecovery,
-  launcherShell,
-  agentsGuide,
-  dockerSeccompProfile,
-  buildRelease,
   packageManifest,
   packageLock,
-  nativeWebfetchRenderer,
-  nativeWebfetchRendererProcess,
-  webfetchRendererMain,
-  webfetchRendererClient
+  compose,
+  napcatEntrypoint,
+  launcher,
+  launcherCore,
+  launcherShell,
+  installer,
+  buildRelease,
+  releaseIntegrity,
+  nativeRenderer,
+  rendererSupervisor,
+  rendererMain,
+  rendererProxy,
+  rendererClient,
+  bashSandbox,
+  mcpSandbox,
+  skillScriptSandbox,
+  outboundMedia,
+  agentsGuide
 ] = await Promise.all([
   readJson("deploy/runtime-contract.json"),
   readJson("deploy/runtime-contract.schema.json"),
   readJson("components/component.lock.json"),
-  read("deploy/docker/Dockerfile"),
-  read("deploy/docker/Dockerfile.bash"),
-  read("deploy/docker/Dockerfile.napcat"),
-  read("deploy/docker/Dockerfile.webfetch-renderer"),
-  read("deploy/docker/napcat-entrypoint.sh"),
-  read("deploy/docker/compose.yml"),
-  read("deploy/docker/healthcheck.mjs"),
-  read("services/delivery/outboundMedia.ts"),
-  read("apps/api/server.ts"),
-  read("apps/api/onebotListener.ts"),
-  read("packages/platform/workspaceLayout.ts"),
-  read("tooling/runtime/launcher.mjs"),
-  read("tooling/runtime/launcher-core.mjs"),
-  read("tooling/runtime/docker-recovery.mjs"),
-  read("sunabot.sh"),
-  read("AGENTS.md"),
-  readJson("deploy/docker/seccomp-bwrap.json"),
-  read("tooling/runtime/build-release.mjs"),
   readJson("package.json"),
   readJson("package-lock.json"),
+  read("deploy/napcat/compose.yml"),
+  read("deploy/napcat/napcat-entrypoint.sh"),
+  read("tooling/runtime/launcher.mjs"),
+  read("tooling/runtime/launcher-core.mjs"),
+  read("sunabot.sh"),
+  read("install.sh"),
+  read("tooling/runtime/build-release.mjs"),
+  read("tooling/runtime/release-integrity.mjs"),
   read("tooling/runtime/native-webfetch-renderer.mjs"),
-  read("tooling/runtime/native-webfetch-renderer-process.mjs"),
+  read("tooling/runtime/native-webfetch-renderer-supervisor.mjs"),
   read("apps/webfetch-renderer/main.ts"),
-  read("adapters/webfetch/dynamicRendererClient.ts")
+  read("apps/webfetch-renderer/safeProxy.ts"),
+  read("adapters/webfetch/dynamicRendererClient.ts"),
+  read("services/tools/bashSandbox.ts"),
+  read("adapters/mcp/stdioSandboxLauncher.ts"),
+  read("adapters/filesystem/agentSkillScriptSandbox.ts"),
+  read("services/delivery/outboundMedia.ts"),
+  read("AGENTS.md")
 ]);
 
 const errors = [
   ...validateNodeVersionEntrypoints(await readNodeVersionContractInputs(root)),
   ...validateOfficeParserContract({ componentLock: lock, packageManifest, packageLock })
 ];
-const expect = (condition, message) => {
-  if (!condition) errors.push(message);
-};
+const expect = (condition, message) => { if (!condition) errors.push(message); };
 
-expect(contract.schemaVersion === 2, "runtime contract schemaVersion must be 2");
-expect(schema.properties?.schemaVersion?.const === 2, "runtime schema must fix schemaVersion 2");
-expect(contract.runtimeId === "sunabot-qq-runtime", "runtimeId must stay sunabot-qq-runtime");
-expect(contract.releaseVersion === packageManifest.version,
-  "runtime release version must match package version");
+expect(contract.schemaVersion === 3, "runtime contract schemaVersion must be 3");
+expect(schema.properties?.schemaVersion?.const === 3, "runtime schema must fix schemaVersion 3");
+expect(contract.runtimeId === "sunabot-qq-runtime", "runtimeId must stay canonical");
+expect(contract.releaseVersion === packageManifest.version, "runtime and package release versions must match");
 expect(packageLock.version === packageManifest.version
   && packageLock.packages?.[""]?.version === packageManifest.version,
 "package lock versions must match package version");
-expect(contract.nodeVersion === "24.18.0", "runtime must use the pinned Node version");
+expect(contract.nodeVersion === "24.18.0", "runtime must use pinned Node 24.18.0");
 expect(arraysEqual(contract.supportedPlatforms, lock.supportedPlatforms),
   "runtime and component platforms must match");
-expect(contract.supportedPlatforms.includes("linux/amd64"),
-  "the production Core image must declare linux/amd64 support");
-expect(contract.supportedPlatforms.includes("linux/arm64"),
-  "the production Core image must declare linux/arm64 support");
+expect(arraysEqual(contract.supportedPlatforms, ["linux/amd64", "linux/arm64"]),
+  "release must support Linux amd64 and arm64");
+expect(!("docker" in contract), "runtime contract must not expose a general Docker runtime");
 
-for (const required of [
-  '"src"',
-  '"services"',
-  '"adapters"',
-  '"packages"',
-  '"apps/api"',
-  '"apps/webfetch-renderer"',
-  '"apps/admin-web/src"',
-  '"tooling/migrations"',
-  '"tooling/quality"',
-  '"docs"'
-]) {
-  expect(buildRelease.includes(required), `release bundle must include ${required}`);
-}
-expect(packageManifest.scripts?.["migrate:sqlite"]?.includes("run-built-migration.mjs"),
-  "SQLite migration must support the prebuilt release bundle");
-expect(packageManifest.scripts?.["migrate:multi-agent"]?.includes("run-built-migration.mjs"),
-  "multi-Agent migration must support the prebuilt release bundle");
-
-expect(path.isAbsolute(contract.paths.workspace), "contract workspace must be absolute");
-expect(path.isAbsolute(contract.paths.installPrefix), "contract install prefix must be absolute");
+expect(path.isAbsolute(contract.paths.installPrefix) && path.isAbsolute(contract.paths.workspace),
+  "installPrefix and workspace must be absolute");
 for (const [name, value] of Object.entries(contract.paths)) {
-  if (name === "workspace" || name === "installPrefix") continue;
-  expect(typeof value === "string" && !path.isAbsolute(value), `${name} must be workspace-relative`);
-  expect(!String(value).split(/[\\/]/).includes(".."), `${name} must not escape workspace`);
+  if (name === "installPrefix" || name === "workspace") continue;
+  expect(typeof value === "string" && !path.isAbsolute(value) && !value.split(/[\\/]/u).includes(".."),
+    `paths.${name} must be workspace-relative`);
 }
-expect(contract.paths.napcatAccounts === "runtime/napcat/accounts",
-  "NapCat account root must remain canonical");
-for (const key of ["napcatAccounts"]) {
-  expect(schema.properties?.paths?.required?.includes(key), `runtime schema must require paths.${key}`);
-  expect(schema.properties?.paths?.properties?.[key]?.const === contract.paths[key],
-    `runtime schema must fix paths.${key}`);
-}
-for (const retired of ["napcatConfig", "napcatQqState", "napcatPlugins", "napcatQrCode", "napcatManualLogin"]) {
-  expect(!(retired in contract.paths), `runtime contract must not expose legacy paths.${retired}`);
-  expect(!schema.properties?.paths?.required?.includes(retired), `runtime schema must retire paths.${retired}`);
-}
-expect(workspaceLayout.includes('napcatAccounts: "runtime/napcat/accounts"')
-  && workspaceLayout.includes('legacyNapcatConfig: "runtime/napcat/config-full"')
-  && workspaceLayout.includes('legacyNapcatQqState: "runtime/napcat/qq"'),
-"workspace layout must separate current account paths from legacy migration paths");
-
-const admin = contract.network.admin;
-const onebot = contract.network.onebot;
-const webui = contract.network.napcatWebui;
-expect(admin.host === "127.0.0.1" && admin.port === 8787,
-  "admin must publish only on host loopback port 8787");
-expect(onebot.path === "/onebot/v11/ws" && onebot.internalPort === 8788,
-  "OneBot must use the dedicated internal port 8788 and fixed path");
-expect(onebot.accessTokenRequired === true, "OneBot access token must be mandatory");
-expect(onebot.nativeListenerHosts.macos === "127.0.0.1"
-  && onebot.nativeListenerHosts.wsl === "docker-network-gateway"
-  && onebot.nativeListenerHosts.linux === "docker-network-gateway",
-"Native OneBot listeners must stay on loopback or the private Compose gateway");
-expect(webui.host === "127.0.0.1" && webui.port === 6099,
-  "NapCat WebUI must publish only on host loopback port 6099");
-for (const value of Object.values(onebot.nativeAdvertisedUrls ?? {})) {
-  const url = validWebSocketUrl(value);
-  expect(url?.hostname === "host.docker.internal" && Number(url?.port) === onebot.internalPort,
-    "Native Core must advertise a container-reachable host.docker.internal OneBot URL");
-  expect(url?.pathname === onebot.path, "Native OneBot URL must use the fixed path");
-}
-const dockerOnebot = validWebSocketUrl(onebot.dockerAdvertisedUrl);
-expect(dockerOnebot?.hostname === contract.docker.services.core.name,
-  "Docker NapCat must address Core by Compose service DNS");
-expect(Number(dockerOnebot?.port) === onebot.internalPort && dockerOnebot?.pathname === onebot.path,
-  "Docker OneBot URL must match the internal port and path");
-
-expect(contract.mediaTransport.outbound.mode === "inline-base64"
-  && contract.mediaTransport.outbound.sharedFilesystem === false,
-"cross-component outbound media must default to inline base64 without a shared filesystem");
-expect(contract.mediaTransport.inbound.containerLocalPaths === false,
-  "container-local inbound paths must be rejected");
-expect(outboundMedia.includes('|| "inline-base64"')
-  && outboundMedia.includes("SUNABOT_MEDIA_MAX_INLINE_BYTES")
-  && outboundMedia.includes('if (value === "inline-base64") return value;')
-  && !outboundMedia.includes('value === "shared-path" ||')
-  && !outboundMedia.includes('platform === "darwin"'),
-"media delivery must be topology-configured, bounded and platform-independent");
-
+expect(contract.paths.napcatAccounts === "runtime/napcat/accounts", "NapCat account root must stay canonical");
 expect(JSON.stringify(contract.outboundProxy) === JSON.stringify(PROXY_RUNTIME_CONTRACT),
-  "outbound proxy runtime contract must match packages/platform");
-expect(contract.native.napcatManagedBy === "docker",
-  "NapCat must be Docker-managed in every Core mode");
-expect(contract.native.webfetchRenderer?.managedBy === "platform"
-  && contract.native.webfetchRenderer?.host === "127.0.0.1"
-  && contract.native.webfetchRenderer?.authentication === "ephemeral-token"
-  && contract.native.webfetchRenderer?.browserSandboxRequired === true
-  && contract.native.webfetchRenderer?.deploymentByPlatform?.macos === "docker"
-  && contract.native.webfetchRenderer?.deploymentByPlatform?.linux === "launcher"
-  && contract.native.webfetchRenderer?.deploymentByPlatform?.wsl === "launcher"
-  && contract.native.webfetchRenderer?.sandboxByPlatform?.macos === "docker-seccomp"
-  && contract.native.webfetchRenderer?.sandboxByPlatform?.linux === "bubblewrap"
-  && contract.native.webfetchRenderer?.sandboxByPlatform?.wsl === "bubblewrap"
-  && contract.native.webfetchRenderer?.tokenDeliveryByPlatform?.macos === "renderer-container-env-core-fd",
-"Native Core WebFetch Renderer must be platform-managed, authenticated, loopback-only and fail closed on platform sandboxing");
-expect(contract.capabilities.workspaceBash.service === "core"
-  && contract.capabilities.workspaceBash.isolation === "bubblewrap"
-  && contract.capabilities.workspaceBash.failClosed === true,
-"workspace Bash must remain fail-closed inside Core");
-const dockerLabels = contract.docker.labels;
-const dockerLabelSchema = schema.properties?.docker?.properties?.labels;
-for (const [key, value] of Object.entries({
-  runtimeId: "io.sunabot.runtime-id",
-  workspaceId: "io.sunabot.workspace-id",
-  component: "io.sunabot.component",
-  ownerId: "io.sunabot.owner-id",
-  invocationId: "io.sunabot.invocation-id",
-  expiresAtMs: "io.sunabot.expires-at-ms"
-})) {
-  expect(dockerLabels?.[key] === value, `Docker label ${key} must stay canonical`);
-  expect(dockerLabelSchema?.required?.includes(key)
-    && dockerLabelSchema?.properties?.[key]?.const === value,
-  `runtime schema must require canonical Docker label ${key}`);
+  "outbound proxy contract must match packages/platform");
+expect(contract.mediaTransport?.outbound?.mode === "inline-base64"
+  && contract.mediaTransport?.outbound?.sharedFilesystem === false
+  && contract.mediaTransport?.inbound?.containerLocalPaths === false,
+"Core and NapCat must not share application media paths");
+expect(outboundMedia.includes('|| "inline-base64"') && !outboundMedia.includes('value === "shared-path" ||'),
+  "media delivery must keep inline base64 as the component boundary");
+
+const napcat = lock.components?.napcat;
+expect(contract.napcat?.managedBy === "docker"
+  && contract.napcat?.composeFile === "deploy/napcat/compose.yml"
+  && contract.napcat?.service === "napcat"
+  && contract.napcat?.pullPolicy === "never",
+"NapCat must be the only Docker-managed component and use pull-never startup");
+expect(contract.napcat?.image === napcat?.image && contract.napcat?.digest === napcat?.digest,
+  "NapCat contract must match the locked upstream image digest");
+expect(napcat?.redistribution === "local-build-only-pending-review",
+  "public release must not claim NapCat redistribution rights");
+const composeServices = /^services:\s*$([\s\S]*?)^networks:\s*$/mu.exec(compose)?.[1] ?? "";
+const serviceNames = composeServices.split(/\r?\n/u)
+  .flatMap((line) => /^  ([A-Za-z0-9_-]+):\s*$/u.exec(line)?.[1] ?? []);
+expect(arraysEqual(serviceNames, ["napcat"]), "NapCat Compose must declare only the napcat service");
+for (const required of [
+  "pull_policy: never",
+  "NAPCAT_IMAGE",
+  "host.docker.internal:host-gateway",
+  "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099",
+  "io.sunabot.account-id",
+  "external: true"
+]) expect(compose.includes(required), `NapCat Compose missing ${required}`);
+expect(!compose.includes("build:") && !compose.includes("SUNABOT_WEBFETCH") && !compose.includes("SUNABOT_CORE"),
+  "NapCat Compose must not build or host Core/WebFetch");
+expect(napcatEntrypoint.includes("/app/entrypoint.sh"), "NapCat wrapper must delegate to the upstream entrypoint");
+
+expect(contract.native?.core?.managedBy === "launcher", "Core must be launcher-managed Native only");
+expect(contract.native?.bubblewrap?.managedBy === "launcher"
+  && contract.native.bubblewrap.releaseExecutable === "runtime/bubblewrap/bwrap"
+  && contract.native.bubblewrap.executableEnvironment === "SUNABOT_BWRAP_EXECUTABLE"
+  && contract.native.bubblewrap.packagedFallback === false
+  && contract.native.bubblewrap.verifiedByLauncher === true
+  && arraysEqual(contract.native.bubblewrap.consumers, [
+    "native-bash", "mcp-stdio", "skill-script", "webfetch-renderer"
+  ]),
+"Native Bubblewrap consumers must share the verified launcher-owned release executable");
+expect(contract.native?.webfetchRenderer?.engine === "lightpanda"
+  && contract.native?.webfetchRenderer?.deploymentByPlatform?.linux === "launcher"
+  && contract.native?.webfetchRenderer?.deploymentByPlatform?.wsl === "launcher"
+  && contract.native?.webfetchRenderer?.deploymentByPlatform?.macos === "unavailable",
+"dynamic WebFetch must use the native Lightpanda launcher on Linux/WSL with explicit macOS degradation");
+expect(contract.capabilities?.webfetch?.staticEngine === "node-defuddle"
+  && contract.capabilities?.webfetch?.dynamicEngine === "lightpanda"
+  && contract.capabilities?.webfetch?.chromium === false
+  && contract.capabilities?.webfetch?.telemetry === false,
+"WebFetch contract must forbid Chromium and Lightpanda telemetry");
+expect(!packageManifest.dependencies?.playwright, "Playwright must not be a production dependency");
+for (const [name, source] of Object.entries({ nativeRenderer, rendererSupervisor, rendererMain })) {
+  expect(!/playwright|chromium/iu.test(source), `${name} must not contain Playwright or Chromium runtime code`);
 }
-expect(["/usr/bin/timeout", "/usr/bin/head", "/usr/bin/wc", "/usr/bin/cat"]
-  .every((executable) => bashDockerfile.includes(executable)),
-"the disposable Bash image must contain the timeout and bounded-output watchdog dependencies");
-expect(contract.capabilities.required.includes("codex-cli")
-  && !contract.capabilities.optional.includes("codex-cli")
-  && contract.capabilities.codexCli.service === "core"
-  && contract.capabilities.codexCli.executable === "/usr/local/bin/codex"
-  && contract.capabilities.codexCli.authFile === "secrets/codex/auth.json"
-  && contract.capabilities.codexCli.failClosed === true,
-"Codex CLI must be a required, pinned Core capability with workspace auth");
-expect(hasBubblewrapSeccompRules(dockerSeccompProfile),
-  "Docker seccomp must retain the required bubblewrap namespace rules");
-
-const servicesBlock = compose.slice(compose.indexOf("services:"), compose.indexOf("\nnetworks:"));
-const serviceNames = servicesBlock
-  .split(/\r?\n/)
-  .flatMap((line) => /^  ([A-Za-z0-9_-]+):\s*$/.exec(line)?.[1] ?? []);
-expect(arraysEqual(serviceNames, ["webfetch-renderer", "core", "napcat"]),
-  "Compose must declare the independent webfetch renderer, core and napcat services");
-const rendererBlock = serviceBlock(compose, "webfetch-renderer", "core");
-const coreBlock = serviceBlock(compose, "core", "napcat");
-const napcatBlock = serviceBlock(compose, "napcat", undefined);
-expect(coreBlock.includes('profiles: ["core-docker"]'), "Core Docker service must be profile-controlled");
-expect(rendererBlock.includes('127.0.0.1:8790:8790')
-  && rendererBlock.includes("read_only: true")
-  && rendererBlock.includes("no-new-privileges:true")
-  && rendererBlock.includes("seccomp=deploy/docker/seccomp-webfetch-renderer.json")
-  && rendererBlock.includes('SUNABOT_WEBFETCH_RENDERER_TOKEN: ${SUNABOT_WEBFETCH_RENDERER_TOKEN:-}')
-  && rendererBlock.includes("SUNABOT_WEBFETCH_RUNTIME_ISOLATION: docker")
-  && !rendererBlock.includes("env_file:")
-  && !rendererBlock.includes("volumes:"),
-"WebFetch renderer must be loopback-only, read-only and isolated from Core secrets and workspace mounts");
-expect(coreBlock.includes('SUNABOT_WEBFETCH_RENDERER_TOKEN: ${SUNABOT_WEBFETCH_RENDERER_TOKEN:-}'),
-  "Core and Renderer token interpolation must remain compatible with token-free down and logs");
-expect(coreBlock.includes("127.0.0.1:8787:8787"),
-  "Core admin port must publish to host loopback only");
-expect(coreBlock.includes('expose:\n      - "8788"') && !coreBlock.includes(":8788:8788"),
-  "OneBot port must stay inside the Compose network");
-expect(napcatBlock.includes('127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099'),
-  "each NapCat WebUI must publish its assigned host loopback port");
-expect(napcatBlock.includes("host.docker.internal:host-gateway"),
-  "NapCat must have the Linux host-gateway compatibility mapping");
-expect(!napcatBlock.includes("env_file:"), "NapCat must not receive Core/provider secrets");
-expect(napcatBlock.includes(`${contract.paths.napcatAccounts}/\${NAPCAT_ACCOUNT_ID:-primary}/config-full`)
-  && napcatBlock.includes(`${contract.paths.napcatAccounts}/\${NAPCAT_ACCOUNT_ID:-primary}/qq`)
-  && napcatBlock.includes(`${contract.paths.napcatAccounts}/\${NAPCAT_ACCOUNT_ID:-primary}/plugins`),
-"NapCat must mount only its account-scoped state boundary");
-expect(napcatBlock.includes("io.sunabot.account-id")
-  && napcatBlock.includes("napcat-${NAPCAT_ACCOUNT_ID:-primary}"),
-"NapCat must expose a stable account label and private DNS alias");
-expect(compose.includes("external: true"), "the shared Core/NapCat network must be launcher-owned");
-expect(compose.includes("io.sunabot.runtime-id")
-  && compose.includes("io.sunabot.workspace-id")
-  && compose.includes("io.sunabot.component"),
-"both services and the network must carry runtime ownership labels");
-
-const node = lock.components.node;
-const napcat = lock.components.napcat;
-const codex = lock.components["codex-cli"];
-const officeParser = lock.components.officeparser;
-expect(coreDockerfile.includes(`${node.image}@${node.digest}`),
-  "Core Dockerfile must pin the Node image digest");
-const rendererRuntimeDependencies = webfetchRendererDockerfile.indexOf(
-  "FROM ${NODE_IMAGE} AS runtime-dependencies"
-);
-const rendererProductionInstall = webfetchRendererDockerfile.indexOf(
-  "RUN npm ci --omit=dev"
-);
-const rendererChromiumInstall = webfetchRendererDockerfile.indexOf(
-  "RUN /usr/local/bin/node node_modules/playwright/cli.js install --with-deps chromium"
-);
-const rendererRuntime = webfetchRendererDockerfile.indexOf(
-  "FROM runtime-dependencies AS runtime"
-);
-const rendererDistCopy = webfetchRendererDockerfile.indexOf(
-  "COPY --from=build --chown=1000:1000 /srv/sunabot/dist ./dist"
-);
-expect(webfetchRendererDockerfile.includes("io.sunabot.webfetch-renderer.source-digest"),
-  "WebFetch renderer image must expose the source digest used to skip ordinary rebuilds");
-expect(
-  rendererRuntimeDependencies >= 0
-    && rendererProductionInstall > rendererRuntimeDependencies
-    && rendererChromiumInstall > rendererProductionInstall
-    && rendererRuntime > rendererChromiumInstall
-    && rendererDistCopy > rendererRuntime,
-  "WebFetch renderer must key production dependencies and Chromium before the application runtime stage so ordinary source rebuilds reuse the browser layer"
-);
-const nativeUp = launcher.slice(
-  launcher.indexOf("async function upNative"),
-  launcher.indexOf("export function nativeBashImageComposeArguments")
-);
-expect(nativeUp.includes("prepareWebfetchRendererForNativeCore(context)"),
-"Native Core startup must select the Renderer deployment from the host platform");
-expect(launcher.includes('["up", "-d", "--no-build", context.contract.webfetchRendererService]')
-  && launcher.includes("dockerWebfetchRendererSourceDigest")
-  && launcher.includes('return platform === "darwin" ? "docker" : "native"'),
-"macOS Native Core and Docker Core must reuse a matching Renderer image while Linux Native Core uses the host Renderer");
-expect(nativeWebfetchRenderer.includes('"/usr/bin/bwrap"')
-  && nativeWebfetchRenderer.includes("WEBFETCH_MACOS_NATIVE_RENDERER_UNSUPPORTED")
-  && nativeWebfetchRenderer.includes("WEBFETCH_BROWSER_MISSING")
-  && nativeWebfetchRenderer.includes("SUNABOT_WEBFETCH_RENDERER_TOKEN_FD")
-  && nativeWebfetchRenderer.includes('"--uid", "65534"')
-  && nativeWebfetchRenderer.includes('"--gid", "65534"')
-  && nativeWebfetchRenderer.includes("fs.mkdtemp"),
-"Linux Native Renderer must use bubblewrap, one-time browser installation, token FD authentication and ephemeral runtime directories");
-expect(nativeWebfetchRendererProcess.includes("stopNativeWebfetchRendererProcessGroups")
-  && nativeWebfetchRendererProcess.includes("SUNABOT_WEBFETCH_RENDERER_WORKSPACE_ID"),
-"Native Renderer residual cleanup must require a workspace-bound process identity");
-expect(webfetchRendererMain.includes("rendererRequestAuthorized")
-  && webfetchRendererMain.includes('"chromium-sandbox"')
-  && webfetchRendererMain.includes("WEBFETCH_CHROMIUM_SANDBOX_REQUIRED"),
-"Renderer must authenticate render requests and require the Chromium sandbox");
-expect(webfetchRendererClient.includes("authorization: `Bearer ${this.authToken}`")
-  && webfetchRendererClient.includes("DYNAMIC_RENDERER_UNAVAILABLE"),
-"Core must authenticate Renderer requests and degrade when authentication is unavailable");
-expect(!/napcat|\/opt\/QQ|xvfb-run/i.test(coreDockerfile),
-  "Core Dockerfile must not contain QQ or NapCat");
-expect(coreDockerfile.includes("dist/apps/api/main.js")
-  && coreDockerfile.includes(contract.capabilities.workspaceBash.executable),
-"Core image must run the API and contain bubblewrap");
-expect(!coreDockerfile.toLowerCase().includes("libreoffice"),
-  "Core image must not install the retired LibreOffice runtime");
-expect(coreDockerfile.includes("COPY tooling/runtime ./tooling/runtime"),
-  "Core build stage must include API runtime helper modules");
-expect(coreDockerfile.includes("codex-skills/workbench-config"),
-  "Core image must include the bundled Workbench configuration Skill");
-expect(officeParser?.version === "7.2.3",
-  "Office parser must stay on the reviewed release");
-expect(codex.optional !== true
-  && codex.version === contract.capabilities.codexCli.version
-  && codex.package === "@openai/codex"
-  && /^sha512-[A-Za-z0-9+/]+=*$/.test(codex.integrity ?? ""),
-"Codex component lock must pin the required npm package and integrity");
-expect(coreDockerfile.includes(`ARG CODEX_CLI_VERSION=${codex.version}`)
-  && coreDockerfile.includes('"@openai/codex@${CODEX_CLI_VERSION}"')
-  && coreDockerfile.includes('test "$(codex --version)" = "codex-cli ${CODEX_CLI_VERSION}"'),
-"Core image must install and smoke-test the pinned Codex CLI");
-expect(coreBlock.includes("SUNABOT_CODEX_EXECUTABLE: /usr/local/bin/codex")
-  && coreBlock.includes("SUNABOT_CODEX_BIN: /usr/local/bin/codex"),
-"Docker Core must use the pinned in-image Codex executable");
-expect(napcatDockerfile.includes(`${napcat.image}@${napcat.digest}`),
-  "NapCat wrapper must pin the multi-architecture upstream digest");
-expect(napcat.architectures.includes("linux/amd64") && napcat.architectures.includes("linux/arm64"),
-  "NapCat lock must cover amd64 and arm64");
-expect(napcatEntrypoint.includes("cp -an") && napcatEntrypoint.includes("/app/entrypoint.sh"),
-  "NapCat wrapper must seed missing defaults without replacing launcher configuration");
-expect(launcher.includes("config.enableLocalFile2Url = true"),
-  "the launcher must configure a Base64 get_file fallback across the component boundary");
-expect(launcher.includes("loadNapcatAccounts") && launcher.includes('url.searchParams.set("account_id", account.id)'),
-  "the launcher must discover and route every registered NapCat account");
-expect(!coreHealthcheck.includes("supervisor-state")
-  && coreHealthcheck.includes("contract.network.admin.port")
-  && coreHealthcheck.includes("contract.network.onebot.internalPort"),
-  "Core healthcheck must not depend on the removed combined supervisor");
-
-for (const [name, component] of Object.entries(lock.components ?? {})) {
-  expect(Array.isArray(component.architectures) && component.architectures.length > 0,
-    `${name} must declare architectures`);
-  expect(Array.isArray(component.smoke) && component.smoke.length > 0,
-    `${name} must declare a smoke command`);
-  expect(Boolean(component.source) && Boolean(component.license),
-    `${name} must declare source and license status`);
-  if (component.image) {
-    expect(/^sha256:[a-f0-9]{64}$/.test(component.digest ?? ""),
-      `${name} image must pin a sha256 digest`);
-  }
+for (const required of [
+  "SUNABOT_WEBFETCH_LIGHTPANDA_EXECUTABLE",
+  "LIGHTPANDA_DISABLE_TELEMETRY",
+  "context.bubblewrapExecutable",
+  "WEBFETCH_LINUX_BUBBLEWRAP_UNAVAILABLE",
+  "WEBFETCH_LIGHTPANDA_MISSING"
+]) expect(nativeRenderer.includes(required) || rendererSupervisor.includes(required), `native renderer missing ${required}`);
+expect(!nativeRenderer.includes("context.runtimeEnvironment?.SUNABOT_BWRAP_EXECUTABLE"),
+  "native renderer must not accept a runtime.env Bubblewrap override");
+const launcherBubblewrapResolver = /export function bubblewrapExecutable\(context\) \{[\s\S]*?\n\}/u.exec(launcher)?.[0] ?? "";
+expect(launcherBubblewrapResolver.includes('context.packaged ? bundled : "/usr/bin/bwrap"')
+  && !launcherBubblewrapResolver.includes("runtimeEnvironment")
+  && launcher.includes("SUNABOT_BWRAP_EXECUTABLE: bubblewrapExecutable(context)")
+  && launcher.includes('SUNABOT_PACKAGED_RELEASE: context.packaged ? "1" : "0"'),
+"launcher must pin the bundled release Bubblewrap and mark packaged child processes");
+for (const [name, source] of Object.entries({ bashSandbox, mcpSandbox, skillScriptSandbox })) {
+  expect(source.includes("SUNABOT_BWRAP_EXECUTABLE")
+    && source.includes("SUNABOT_PACKAGED_RELEASE")
+    && source.includes('=== "1"'),
+  `${name} must consume launcher-owned Bubblewrap and forbid packaged system fallback`);
 }
+expect(rendererMain.includes('engine: "lightpanda"')
+  && rendererMain.includes("execFile")
+  && rendererMain.includes("maxBuffer: MAX_DOM_BYTES")
+  && rendererMain.includes('killSignal: "SIGKILL"'),
+"Lightpanda renderer must be bounded, short-lived and health-identifiable");
+expect(rendererProxy.includes('server.on("connect"') && rendererProxy.includes("MAX_RENDER_RESPONSE_BYTES"),
+  "renderer proxy must authenticate and bound HTTP and HTTPS traffic");
+expect(rendererClient.includes("authorization: `Bearer ${this.authToken}`"),
+  "Core must authenticate renderer requests");
 
-expect(onebotListener.includes("SUNABOT_ONEBOT_HOST")
-  && onebotListener.includes("SUNABOT_ONEBOT_PORT")
-  && onebotListener.includes("assertOneBotAccessToken")
-  && onebotListener.includes('request.url?.split("?", 1)[0] === "/healthz"')
-  && apiServer.includes('from "./onebotListener.js"')
-  && apiServer.includes("startOneBotHttpServer"),
-"Core must expose a separate authenticated OneBot listener with liveness");
-expect(`${launcher}\n${launcherCore}`.includes("SUNABOT_CORE_MODE")
-  && launcherCore.includes("nativeAdvertisedUrls")
-  && launcher.includes("configureNapcat")
-  && launcherShell.includes("tooling/runtime/launcher.mjs"),
-"the root launcher must select the Core mode and configure independent NapCat");
-expect(launcher.includes("waitForComponentHealth")
-  && launcher.includes("assertNonRootRuntimeUser")
-  && launcher.includes("docker-network-gateway")
-  && launcher.includes("nativeProcessEnvironment"),
-"the launcher must enforce readiness, non-root ownership, private Native ingress and one runtime environment");
-expect(launcher.includes("recoverStaleDockerOneoffs")
-  && dockerRecovery.includes("com.docker.compose.oneoff=true")
-  && dockerRecovery.includes("colima restart"),
-  "the launcher must detect stale Compose probes and keep Colima recovery interactive");
-expect(launcher.includes("recoverWorkspaceBashContainers")
-  && dockerRecovery.includes("io.sunabot.component")
-  && dockerRecovery.includes("workspace-bash")
-  && dockerRecovery.includes("io.sunabot.expires-at-ms"),
-"the launcher must safely recover expired workspace Bash containers by canonical labels");
-expect(launcher.includes("SUNABOT_WORKSPACE_ID")
-  && launcher.includes("SUNABOT_DOCKER_SOCKET")
-  && launcher.includes("resolveEffectiveDockerSocket"),
-"Native Core must receive the launcher-owned workspace and Docker endpoint identity");
-expect(launcher.includes("COMMAND_TIMEOUT")
-  && launcher.includes("COMMAND_OUTPUT_LIMIT")
-  && launcher.includes("INTERACTIVE_COMMAND_TIMEOUT_MS")
-  && launcher.includes("context.contract.shutdownTimeoutSeconds + 5")
-  && launcher.includes('child.kill("SIGTERM")')
-  && launcher.includes('child.kill("SIGKILL")')
-  && launcher.includes("commandTimeoutMs"),
-"launcher commands must enforce a default TERM-to-KILL hard deadline");
-expect(launcher.includes("assertDockerCoreCodex")
-  && launcher.includes("inspectDockerCodex")
-  && launcher.includes("inspectNativeCodex")
-  && launcher.includes("codexAuth"),
-"the launcher and doctor must validate Codex CLI and workspace auth in both Core modes");
-expect(launcher.includes("Apple Silicon Docker") && launcher.includes("EINVAL"),
-  "the launcher must preserve the observed Apple Silicon amd64 user-namespace failure detail");
-expect(agentsGuide.includes("NapCat") && agentsGuide.includes("独立 Docker")
-  && !agentsGuide.includes("Linux Native/Docker 继续使用共享 workspace"),
-"AGENTS must enforce the split-runtime portability rules");
+const napcatUpFunction = /export function napcatAccountUpArguments[\s\S]*?\n\}\n/u.exec(launcher)?.[0] ?? "";
+expect(!launcher.includes("upDocker")
+  && !launcher.includes("prepareDockerWebfetchRenderer")
+  && !launcher.includes("nativeBashImageComposeArguments")
+  && !napcatUpFunction.includes("--build")
+  && napcatUpFunction.includes('"--pull", "never"'),
+"launcher must run Native Core and never build or pull at startup");
+expect(!launcherCore.includes('new Set(["auto", "native", "docker"])')
+  && launcherCore.includes("SUNABOT_CORE_MODE 已移除")
+  && launcherCore.includes("--core 已移除"),
+"launcher arguments must retire Core mode selection");
+expect(launcher.includes('"--landing"') && launcher.includes("completeFirstRunBootstrap"),
+  "first run must execute and complete the administrator Landing flow");
+
+expect(launcherShell.includes("RELEASE_MANIFEST")
+  && launcherShell.includes("RELEASE_DEPENDENCIES_MISSING")
+  && launcherShell.includes('exec "$BUNDLED_NODE"')
+  && launcherShell.indexOf("npm ci") > launcherShell.indexOf("if [ -f \"$RELEASE_MANIFEST\" ]"),
+"packaged startup must use bundled Node/dependencies without npm");
+for (const required of [
+  "runtime/node/bin/node",
+  "runtime/bubblewrap/bwrap",
+  "runtime/bubblewrap/SOURCE.txt",
+  "runtime/lightpanda/lightpanda",
+  "node_modules/.package-lock.json",
+  "licenses/lightpanda/LICENSE",
+  "sources"
+]) expect(buildRelease.includes(required) || releaseIntegrity.includes(required), `release bundle missing ${required}`);
+expect(installer.includes("docker pull")
+  && installer.includes("docker image inspect")
+  && installer.includes('SUNABOT_WORKSPACE="$PREFIX/workspace"')
+  && installer.includes(".sha256"),
+"installer must verify assets, prepare locked NapCat once and keep a persistent workspace");
+expect(!launcher.includes("docker pull") && !launcher.includes('"pull"'),
+  "launcher must never download container images");
+
+const codex = lock.components?.["codex-cli"];
+expect(packageManifest.dependencies?.["@openai/codex"] === codex?.version
+  && contract.capabilities?.codexCli?.version === codex?.version,
+"release must bundle the exact locked Codex CLI");
+expect(lock.components?.lightpanda?.license === "AGPL-3.0-only"
+  && lock.components?.lightpanda?.correspondingSource?.sha256,
+"Lightpanda binary must ship with locked corresponding source");
+const bubblewrap = lock.components?.bubblewrap;
+expect(bubblewrap?.license === "LGPL-2.0-or-later"
+  && bubblewrap?.sourceArchives?.length === 3
+  && bubblewrap.sourceArchives.every((source) => /^[a-f0-9]{64}$/u.test(source.sha256))
+  && bubblewrap.runtimeSourceArchives?.length >= 1
+  && bubblewrap.runtimeSourceArchives.every((source) => /^[a-f0-9]{64}$/u.test(source.sha256))
+  && contract.supportedPlatforms.every((target) => {
+    const runtime = bubblewrap.runtimeDependencies?.[target];
+    return typeof runtime?.loader === "string"
+      && runtime.needed?.includes("libc.so.6")
+      && runtime.needed?.includes("libcap.so.2")
+      && runtime.needed?.includes("libselinux.so.1")
+      && runtime.needed?.includes("libpcre2-8.so.0")
+      && runtime.archives?.every((archive) => /^[a-f0-9]{64}$/u.test(archive.sha256));
+  })
+  && buildRelease.includes("--inhibit-cache")
+  && buildRelease.includes('"--list", binary')
+  && buildRelease.includes("bubblewrapNamespaceProbeArguments"),
+"Bubblewrap binary, loader, library closure and corresponding Debian sources must be locked and verified");
+expect(agentsGuide.includes("NapCat 是唯一 Docker 运行组件")
+  && agentsGuide.includes("每个 QQ 使用独立容器"),
+  "project guide must preserve the NapCat container exception");
+
+const retiredDockerDirectory = path.join(root, "deploy/docker");
+expect(!await exists(retiredDockerDirectory), "deploy/docker must be removed; only deploy/napcat may use Docker");
 
 if (errors.length > 0) {
-  process.stderr.write(`${errors.map((error) => `- ${error}`).join("\n")}\n`);
+  for (const error of errors) console.error(`- ${error}`);
   process.exitCode = 1;
 } else {
-  process.stdout.write(`${JSON.stringify({
-    ok: true,
-    runtimeId: contract.runtimeId,
+  console.log(JSON.stringify({
     schemaVersion: contract.schemaVersion,
     releaseVersion: contract.releaseVersion,
-    nodeVersion: contract.nodeVersion,
-    platforms: contract.supportedPlatforms,
-    components: Object.keys(lock.components),
-    composeServices: serviceNames
-  }, null, 2)}\n`);
+    core: "native",
+    webfetch: contract.capabilities.webfetch.dynamicEngine,
+    containerException: contract.napcat.service,
+    platforms: contract.supportedPlatforms
+  }, null, 2));
 }
 
-function serviceBlock(source, name, nextName) {
-  const start = source.indexOf(`\n  ${name}:`);
-  const end = nextName ? source.indexOf(`\n  ${nextName}:`, start + 1) : source.indexOf("\nnetworks:", start + 1);
-  return start >= 0 ? source.slice(start, end >= 0 ? end : undefined) : "";
+async function read(relative) {
+  return fs.readFile(path.join(root, relative), "utf8");
 }
 
-function validWebSocketUrl(value) {
+async function readJson(relative) {
+  return JSON.parse(await read(relative));
+}
+
+async function exists(target) {
   try {
-    const url = new URL(value);
-    return url.protocol === "ws:" || url.protocol === "wss:" ? url : undefined;
-  } catch {
-    return undefined;
+    await fs.access(target);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
   }
-}
-
-function hasBubblewrapSeccompRules(profile) {
-  const clone = profile.syscalls?.find((rule) => rule.names?.includes("clone") && rule.action === "SCMP_ACT_ALLOW");
-  const mount = profile.syscalls?.find((rule) =>
-    ["mount", "pivot_root", "umount2"].every((name) => rule.names?.includes(name))
-  );
-  return profile.defaultAction === "SCMP_ACT_ERRNO" && Boolean(clone) && mount?.action === "SCMP_ACT_ALLOW";
 }
 
 function arraysEqual(left, right) {
-  return Array.isArray(left)
-    && Array.isArray(right)
+  return Array.isArray(left) && Array.isArray(right)
     && left.length === right.length
     && left.every((value, index) => value === right[index]);
-}
-
-async function read(relativePath) {
-  return fs.readFile(path.join(root, relativePath), "utf8");
-}
-
-async function readJson(relativePath) {
-  return JSON.parse(await read(relativePath));
 }

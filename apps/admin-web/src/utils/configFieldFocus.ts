@@ -68,7 +68,6 @@ const labels: Record<string, string> = {
   "tools.generateImg.resolution": "默认清晰度",
   "tools.generateImg.quality": "默认质量",
   "bash.enabled": "启用 Bash",
-  "bash.adminPrivateBackend": "管理员私聊后端",
   "bash.auditModel": "审计模型",
   "bash.strictMode": "严格审计",
   "bash.allowGroup": "允许管理员在群聊中使用",

@@ -2,7 +2,7 @@
 
 ## Goal
 
-An administrator can give `generate_img` a relative path to an image in the current Agent Native workbench, and the generated result actually uses that file as an image reference.
+An administrator can give `generate_img` a relative path to an image in the current Agent canonical Workbench, and the generated result actually uses that file as an image reference.
 
 ## Preconditions
 
@@ -10,16 +10,16 @@ Run in a fresh isolated workspace with an authorized image Provider. The fixture
 
 ## Expected quality
 
-The tool trace must show successful Native workbench preparation followed by successful image generation. Review the `generate_img` arguments and result to confirm that `fixtures/reference.png` was supplied through the workbench image path parameter and resolved as one reference image, without exposing a host path.
+The tool trace must show successful canonical Workbench preparation followed by successful image generation. Review the `generate_img` arguments and result to confirm that `fixtures/reference.png` was supplied through the Workbench image path parameter and resolved as one reference image, without exposing a host path.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
 {
   "schemaVersion": 1,
   "id": "media.workbench-image-reference",
-  "title": "Use a Native workbench image as a generation reference",
+  "title": "Use a canonical Workbench image as a generation reference",
   "kind": "conversation",
-  "goal": "Generate an image from a relative Native workbench image path without requiring the user to upload or resend the file.",
+  "goal": "Generate an image from a relative canonical Workbench image path without requiring the user to upload or resend the file.",
   "input": {
     "actor": "admin_private",
     "accountId": "primary",
@@ -31,7 +31,6 @@ The tool trace must show successful Native workbench preparation followed by suc
       "userProfiles": [],
       "workbenchFiles": [
         {
-          "backend": "native",
           "path": "fixtures/reference.b64",
           "content": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
         }

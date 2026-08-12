@@ -1,18 +1,36 @@
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 
-export const RELEASE_MANIFEST_SCHEMA_VERSION = 2;
+export const RELEASE_MANIFEST_SCHEMA_VERSION = 3;
 export const RELEASE_PLATFORM_ID = "linux/amd64";
 
 export const RELEASE_PROTECTED_FILES = Object.freeze([
+  ".node-version",
   "AGENTS.md",
+  "install.sh",
+  "sunabot.sh",
   "deploy/runtime-contract.json",
+  "components/component.lock.json",
   "package.json",
   "package-lock.json",
   "node_modules/.package-lock.json",
+  "runtime/node/bin/node",
+  "runtime/node/LICENSE",
+  "runtime/bubblewrap/bwrap",
+  "runtime/bubblewrap/LICENSE",
+  "runtime/bubblewrap/SOURCE.txt",
+  "sources/bubblewrap/bubblewrap_0.8.0-2+deb12u1.dsc",
+  "sources/bubblewrap/bubblewrap_0.8.0.orig.tar.xz",
+  "sources/bubblewrap/bubblewrap_0.8.0-2+deb12u1.debian.tar.xz",
+  "runtime/lightpanda/lightpanda",
+  "licenses/lightpanda/LICENSE",
+  "licenses/lightpanda/SOURCE.txt",
   "packages/platform/multiAgentMigrationGate.mjs",
+  "packages/platform/proxy.mjs",
   "tooling/shared/paths.mjs",
   "tooling/migrations/migrate-single-agent-to-multi-agent.mjs",
   "tooling/migrations/migrate-to-sqlite.mjs",
@@ -22,16 +40,123 @@ export const RELEASE_PROTECTED_FILES = Object.freeze([
   "tooling/workspace/sqlite-recovery.mjs"
 ]);
 
-export const RELEASE_PROTECTED_TREES = Object.freeze(["dist", "tooling", "node_modules"]);
+export const RELEASE_PROTECTED_TREES = Object.freeze([
+  "apps/admin-web/dist",
+  "codex-skills/workbench-config",
+  "config",
+  "deploy",
+  "dist",
+  "node_modules",
+  "packages/platform",
+  "runtime",
+  "sources",
+  "tooling"
+]);
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const SOURCE_COMMIT_PATTERN = /^[a-f0-9]{40}$/;
+const SEALED_EVIDENCE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\.sealed\.json$/u;
 const HASH_CONCURRENCY = 32;
+const EVIDENCE_GIT_BUFFER_BYTES = 64 * 1024 * 1024;
+const execFileAsync = promisify(execFile);
 
 export function assertReleaseBuildPlatform(platform = process.platform, arch = process.arch) {
-  if (platform !== "linux" || arch !== "x64") {
-    throw new Error(`Native release artifact 只支持 linux/x64；当前为 ${platform}/${arch}。`);
+  if (platform !== "linux" || !new Set(["x64", "arm64"]).has(arch)) {
+    throw new Error(`Native release artifact 只支持 linux/x64 与 linux/arm64；当前为 ${platform}/${arch}。`);
   }
+}
+
+export function releasePlatformId(platform = process.platform, arch = process.arch) {
+  assertReleaseBuildPlatform(platform, arch);
+  return `linux/${arch === "x64" ? "amd64" : "arm64"}`;
+}
+
+export async function materializeReleaseEvidenceFromGit({
+  root,
+  evidenceCommit,
+  sourceCommit,
+  destination = ".user-test-runs"
+}) {
+  assertSourceCommit(evidenceCommit);
+  assertSourceCommit(sourceCommit);
+  const rootPath = path.resolve(root);
+  const destinationPath = path.resolve(rootPath, destination);
+  if (destinationPath !== path.join(rootPath, ".user-test-runs")) {
+    throw new Error("RELEASE_EVIDENCE_DESTINATION_INVALID");
+  }
+  if (await exists(destinationPath)) {
+    throw new Error("RELEASE_EVIDENCE_DESTINATION_EXISTS");
+  }
+
+  const ancestry = await execFileAsync("git", ["rev-list", "--parents", "-n", "1", evidenceCommit], {
+    cwd: rootPath,
+    encoding: "utf8"
+  });
+  if (ancestry.stdout.trim().split(/\s+/u).length !== 1) {
+    throw new Error("RELEASE_EVIDENCE_COMMIT_NOT_ROOT");
+  }
+
+  const { stdout } = await execFileAsync("git", ["ls-tree", "-z", evidenceCommit], {
+    cwd: rootPath,
+    encoding: "buffer",
+    maxBuffer: EVIDENCE_GIT_BUFFER_BYTES
+  });
+  const entries = parseEvidenceTree(stdout);
+  const manifestEntry = entries.find((entry) => entry.name === "release-manifest.json");
+  const sealedEntries = entries.filter((entry) => SEALED_EVIDENCE_NAME_PATTERN.test(entry.name));
+  if (!manifestEntry || sealedEntries.length < 1 || sealedEntries.length + 1 !== entries.length) {
+    throw new Error("RELEASE_EVIDENCE_TREE_INVALID");
+  }
+
+  const contents = new Map();
+  for (const entry of entries) {
+    const result = await execFileAsync("git", ["cat-file", "blob", entry.objectId], {
+      cwd: rootPath,
+      encoding: "buffer",
+      maxBuffer: EVIDENCE_GIT_BUFFER_BYTES
+    });
+    contents.set(entry.name, result.stdout);
+  }
+  const manifest = parseEvidenceJson(contents.get("release-manifest.json"), "RELEASE_EVIDENCE_MANIFEST_INVALID");
+  if (manifest.sourceRevision !== sourceCommit || !Array.isArray(manifest.cases)) {
+    throw new Error("RELEASE_EVIDENCE_REVISION_MISMATCH");
+  }
+  const referencedReports = new Set();
+  for (const item of manifest.cases) {
+    if (!isRecord(item) || !Array.isArray(item.reports) || item.reports.length < 1) {
+      throw new Error("RELEASE_EVIDENCE_MANIFEST_INVALID");
+    }
+    for (const reportName of item.reports) {
+      if (typeof reportName !== "string" || !SEALED_EVIDENCE_NAME_PATTERN.test(reportName)) {
+        throw new Error("RELEASE_EVIDENCE_REPORT_PATH_INVALID");
+      }
+      referencedReports.add(reportName);
+    }
+  }
+  const sealedNames = sealedEntries.map((entry) => entry.name).sort(compareText);
+  if (!arraysEqual([...referencedReports].sort(compareText), sealedNames)) {
+    throw new Error("RELEASE_EVIDENCE_REPORT_SET_MISMATCH");
+  }
+  for (const reportName of sealedNames) {
+    const report = parseEvidenceJson(contents.get(reportName), "RELEASE_EVIDENCE_REPORT_INVALID");
+    if (report.sourceRevision !== sourceCommit) {
+      throw new Error(`RELEASE_EVIDENCE_REPORT_REVISION_MISMATCH:${reportName}`);
+    }
+  }
+
+  await fsPromises.mkdir(destinationPath, { mode: 0o700 });
+  try {
+    for (const entry of entries) {
+      await fsPromises.writeFile(path.join(destinationPath, entry.name), contents.get(entry.name), {
+        mode: 0o600,
+        flag: "wx"
+      });
+    }
+  } catch (error) {
+    await fsPromises.rm(destinationPath, { recursive: true, force: true });
+    throw error;
+  }
+  return { evidenceCommit, sourceCommit, files: entries.map((entry) => entry.name) };
 }
 
 export function assertCleanSourceStatus(status) {
@@ -53,7 +178,8 @@ export async function createReleaseManifest({
   platform,
   nodeVersion,
   sourceCommit,
-  createdAt = new Date().toISOString()
+  createdAt = new Date().toISOString(),
+  components = {}
 }) {
   assertSourceCommit(sourceCommit);
   const files = await hashReleaseFiles(root);
@@ -65,6 +191,7 @@ export async function createReleaseManifest({
     nodeVersion,
     sourceCommit,
     createdAt,
+    components,
     runtimeContractSha256: files["deploy/runtime-contract.json"],
     integrity: {
       algorithm: "sha256",
@@ -80,14 +207,15 @@ export async function validateReleaseManifest({
   arch = process.arch,
   nodeVersion = process.versions.node
 }) {
-  assertReleaseBuildPlatform(platform, arch);
+  const expectedPlatform = releasePlatformId(platform, arch);
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("发行清单格式无效。");
   }
 
-  const [contract, packageManifest] = await Promise.all([
+  const [contract, packageManifest, componentLock] = await Promise.all([
     readJson(path.join(root, "deploy/runtime-contract.json"), "runtime contract"),
-    readJson(path.join(root, "package.json"), "package manifest")
+    readJson(path.join(root, "package.json"), "package manifest"),
+    readJson(path.join(root, "components/component.lock.json"), "component lock")
   ]);
   if (
     manifest.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION
@@ -96,11 +224,22 @@ export async function validateReleaseManifest({
     || manifest.releaseVersion !== packageManifest.version
     || manifest.nodeVersion !== contract.nodeVersion
     || manifest.nodeVersion !== nodeVersion
-    || manifest.platform !== RELEASE_PLATFORM_ID
+    || manifest.platform !== expectedPlatform
     || !Array.isArray(contract.supportedPlatforms)
-    || !contract.supportedPlatforms.includes(RELEASE_PLATFORM_ID)
+    || !contract.supportedPlatforms.includes(expectedPlatform)
   ) {
     throw new Error("发行清单与当前迁移运行时不一致。");
+  }
+  const expectedComponents = {
+    node: componentLock.components?.node?.version,
+    lightpanda: componentLock.components?.lightpanda?.version,
+    bubblewrap: componentLock.components?.bubblewrap?.version,
+    napcat: componentLock.components?.napcat?.version,
+    codexCli: componentLock.components?.["codex-cli"]?.version
+  };
+  if (!isRecord(manifest.components)
+    || Object.keys(expectedComponents).some((key) => manifest.components[key] !== expectedComponents[key])) {
+    throw new Error("发行清单与锁定组件版本不一致。");
   }
   assertSourceCommit(manifest.sourceCommit);
   if (typeof manifest.createdAt !== "string" || !Number.isFinite(Date.parse(manifest.createdAt))) {
@@ -138,7 +277,7 @@ export async function validateReleaseManifest({
       throw new Error(`发行文件校验失败：${relative}。`);
     }
   }
-  return { contract, packageManifest };
+  return { contract, packageManifest, componentLock };
 }
 
 export async function hashReleaseFiles(root) {
@@ -258,6 +397,47 @@ async function mapWithConcurrency(values, concurrency, mapper) {
   );
   await Promise.all(workers);
   return results;
+}
+
+function parseEvidenceTree(output) {
+  const records = Buffer.from(output).toString("utf8").split("\0").filter(Boolean);
+  return records.map((record) => {
+    const separator = record.indexOf("\t");
+    const metadata = record.slice(0, separator).split(" ");
+    const name = record.slice(separator + 1);
+    if (
+      separator < 1
+      || metadata.length !== 3
+      || metadata[0] !== "100644"
+      || metadata[1] !== "blob"
+      || !SOURCE_COMMIT_PATTERN.test(metadata[2])
+      || (name !== "release-manifest.json" && !SEALED_EVIDENCE_NAME_PATTERN.test(name))
+    ) {
+      throw new Error("RELEASE_EVIDENCE_TREE_INVALID");
+    }
+    return { name, objectId: metadata[2] };
+  });
+}
+
+function parseEvidenceJson(bytes, code) {
+  if (!Buffer.isBuffer(bytes)) throw new Error(code);
+  try {
+    const value = JSON.parse(bytes.toString("utf8"));
+    if (!isRecord(value)) throw new Error(code);
+    return value;
+  } catch {
+    throw new Error(code);
+  }
+}
+
+async function exists(filePath) {
+  try {
+    await fsPromises.access(filePath);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function isRecord(value) {

@@ -51,6 +51,15 @@ describe("0.1.0 or 0.1.1 to 0.1.2 release upgrade", () => {
     expect(inspected).toBe(false);
   });
 
+  it("rejects a newer release before reading retired Docker migration files", async () => {
+    const fixture = await createReleaseFixture({ packageVersion: "0.3.0" });
+    await fs.rm(path.join(fixture, "deploy", "docker"), { recursive: true });
+
+    await expect(verifyTargetRelease(fixture)).rejects.toMatchObject({
+      code: "TARGET_RELEASE_MISMATCH"
+    });
+  });
+
   it("runs the offline recovery and resource migration before starting the target runtime", async () => {
     const events: string[] = [];
     const workspace = path.join(root, "workspace");

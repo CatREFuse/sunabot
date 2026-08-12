@@ -9,6 +9,7 @@ import type {
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
 import type { AgentSummary } from "../../../services/agents/agentRegistry.js";
 import type { AccountRuntimeState } from "../../../services/agents/accountRuntimeReconciler.js";
+import type { AgentSoulService } from "../../../src/admin/agentSoul.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 
@@ -20,6 +21,7 @@ export interface AgentRouteOptions {
   onPromptSettingsUpdated?: (agentId: string) => Promise<void>;
   isAccountConnected?: (accountId: string) => boolean;
   reconcileAccount?: (accountId: string) => Promise<AccountRuntimeState>;
+  soulService?: AgentSoulService;
 }
 
 export function registerAgentRoutes(app: FastifyInstance, registry: AgentRegistry, options: AgentRouteOptions = {}) {
@@ -51,6 +53,36 @@ export function registerAgentRoutes(app: FastifyInstance, registry: AgentRegistr
     bodyLimit: 112 * 1024 * 1024,
     schema: { response: { 200: openObject } }
   }, async (request) => registry.previewImport(agentConfigImport(request.body)));
+
+  if (options.soulService) {
+    app.get("/api/agents/:agentId/soul/export", async (request, reply) => {
+      const { agentId } = request.params as { agentId: string };
+      const exported = await options.soulService!.export(agentId);
+      return reply
+        .header("cache-control", "no-store")
+        .header("content-disposition", `attachment; filename="${exported.fileName}"`)
+        .type("application/json; charset=utf-8")
+        .send(exported.bytes);
+    });
+
+    app.post("/api/agents/:agentId/soul/preview", {
+      bodyLimit: 5 * 1024 * 1024,
+      schema: { response: { 200: openObject } }
+    }, async (request, reply) => {
+      const { agentId } = request.params as { agentId: string };
+      reply.header("cache-control", "no-store");
+      return options.soulService!.preview(agentId, request.body);
+    });
+
+    app.post("/api/agents/:agentId/soul/import", {
+      bodyLimit: 5 * 1024 * 1024,
+      schema: { response: { 200: openObject } }
+    }, async (request, reply) => {
+      const { agentId } = request.params as { agentId: string };
+      reply.header("cache-control", "no-store");
+      return options.soulService!.apply(agentId, request.body);
+    });
+  }
 
   app.get("/api/agents/:agentId", { schema: { response: { 200: openObject } } }, async (request) => {
     const { agentId } = request.params as { agentId: string };

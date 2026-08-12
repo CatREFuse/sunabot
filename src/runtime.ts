@@ -61,10 +61,8 @@ import type {
   RuntimeToolCapabilityResolver,
   WorkspaceBashUnavailableReason
 } from "../services/tools/bashCapability.js";
-import type { BashExecutionBackend } from "../services/tools/bashAudit.js";
 import type { ConversationCapabilityContextV1 } from "../services/conversations/conversationCapability.js";
 import type { SystemConfigRuntimePort } from "../services/tools/systemConfigTool.js";
-import type { WorkspaceBashRuntimePort } from "../services/tools/bashRuntime.js";
 import type { BashSkillRepositoryPort } from "../services/tools/bashSkillRepository.js";
 import type { ReplyTaskGate } from "../services/orchestration/broadcastStormDetector.js";
 import { runWithAgentRuntimeContext } from "../packages/platform/runtimeAgentContext.js";
@@ -106,7 +104,6 @@ export class SunaRuntime {
   readonly userProfile: RuntimeUserProfile;
   readonly dreams: RuntimeDreams;
   readonly bashAudit?: RuntimeBashAuditPort;
-  readonly bashRuntime?: WorkspaceBashRuntimePort;
   readonly bashSkillRepository?: BashSkillRepositoryPort;
   private readonly rawToolCapabilityResolver?: RuntimeToolCapabilityResolver;
   readonly systemConfig?: SystemConfigRuntimePort;
@@ -133,7 +130,6 @@ export class SunaRuntime {
       this.conversationRecords = new Map(loadConversationRecords(config).map((record) => [record.id, record]));
       this.rawToolCapabilityResolver = options.resolveToolCapabilities;
       this.bashAudit = options.bashAudit;
-      this.bashRuntime = options.bashRuntime;
       this.bashSkillRepository = options.bashSkillRepository;
       this.systemConfig = options.systemConfig;
       this.agentExtensions = options.agentExtensions;
@@ -320,7 +316,6 @@ export class SunaRuntime {
   resolveProviderBashHandle(
     incoming: ParsedIncomingMessage,
     promptOverride?: string,
-    backend: BashExecutionBackend = "docker",
     capability?: Readonly<ConversationCapabilityContextV1>
   ) {
     return runtimeReply.runtime_resolveProviderBashHandle.call(
@@ -328,22 +323,16 @@ export class SunaRuntime {
       incoming,
       promptOverride,
       this.rawToolCapabilityResolver,
-      backend,
       capability
     );
   }
-  async resolveToolCapabilities(
-    backendOverride?: BashExecutionBackend | null
-  ): Promise<RuntimeToolCapabilities> {
+  async resolveToolCapabilities(): Promise<RuntimeToolCapabilities> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const epoch = this.configEpoch;
       const config = freezeRuntimeConfigSnapshot(this.config);
-      const backend = backendOverride === undefined
-        ? "docker"
-        : backendOverride;
       const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
       let auditAvailable = false;
-      if (backend && workspacePath && this.bashAudit) {
+      if (workspacePath && this.bashAudit) {
         try {
           auditAvailable = await this.bashAudit.available(config) === true;
         } catch {
@@ -355,23 +344,21 @@ export class SunaRuntime {
       if (!this.rawToolCapabilityResolver) {
         return {
           workspaceBash: false,
-          workspaceBashReason: workspaceBashUnavailableReason(backend, workspacePath, auditAvailable),
+          workspaceBashReason: workspaceBashUnavailableReason(workspacePath, auditAvailable),
           codex: false
         };
       }
       try {
         const capabilities = await this.rawToolCapabilityResolver({
           workspacePath: workspacePath ?? getRootDir(),
-          workspaceBashBackend: backend ?? "docker",
           workspaceBashAuditAvailable: auditAvailable
         });
         if (this.configEpoch !== epoch) continue;
-        const workspaceBash = Boolean(backend && workspacePath && auditAvailable && capabilities.workspaceBash === true);
+        const workspaceBash = Boolean(workspacePath && auditAvailable && capabilities.workspaceBash === true);
         return {
           workspaceBash,
           ...(!workspaceBash ? {
             workspaceBashReason: workspaceBashUnavailableReason(
-              backend,
               workspacePath,
               auditAvailable,
               capabilities.workspaceBashReason
@@ -383,22 +370,18 @@ export class SunaRuntime {
         if (this.configEpoch !== epoch) continue;
         return {
           workspaceBash: false,
-          workspaceBashReason: workspaceBashUnavailableReason(backend, workspacePath, auditAvailable),
+          workspaceBashReason: workspaceBashUnavailableReason(workspacePath, auditAvailable),
           codex: false
         };
       }
     }
     const config = freezeRuntimeConfigSnapshot(this.config);
-    const backend = backendOverride === undefined
-      ? "docker"
-      : backendOverride;
     const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
     return {
       workspaceBash: false,
       workspaceBashReason: workspaceBashUnavailableReason(
-        backend,
         workspacePath,
-        Boolean(backend && workspacePath && this.bashAudit)
+        Boolean(workspacePath && this.bashAudit)
       ),
       codex: false
     };
@@ -484,7 +467,6 @@ function deepFreezeRuntimeConfig<T>(value: T): T {
 }
 
 function workspaceBashUnavailableReason(
-  backend: BashExecutionBackend | null,
   workspacePath: string | undefined,
   auditAvailable: boolean,
   probeReason?: WorkspaceBashUnavailableReason
@@ -492,7 +474,5 @@ function workspaceBashUnavailableReason(
   if (!workspacePath) return "BASH_WORKBENCH_UNAVAILABLE";
   if (!auditAvailable) return "BASH_AUDIT_UNAVAILABLE";
   if (probeReason) return probeReason;
-  return backend === "native"
-    ? "BASH_NATIVE_ISOLATION_UNAVAILABLE"
-    : "BASH_DOCKER_ISOLATION_UNAVAILABLE";
+  return "BASH_NATIVE_ISOLATION_UNAVAILABLE";
 }

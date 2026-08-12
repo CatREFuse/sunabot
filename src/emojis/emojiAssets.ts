@@ -16,7 +16,6 @@ import {
 import { getWorkspacePath } from "../config.js";
 import type { AppConfig } from "../types.js";
 import { emojiMediaLocation, emojiStore } from "./emojiStore.js";
-import type { AgentWorkbenchBackend } from "../../packages/platform/agentResourceLayout.js";
 
 export { emojiMediaLocation };
 
@@ -97,7 +96,6 @@ export class EmojiAssetIntegrityGate {
 const integrityGate = new EmojiAssetIntegrityGate();
 
 interface ResolvedEmojiRecord {
-  backend: AgentWorkbenchBackend;
   record: EmojiRecord;
 }
 
@@ -111,8 +109,8 @@ export function availableEmojiKeys(config: AppConfig) {
 
 export function agentEmojiCatalogPort(config: AppConfig): EmojiCatalogPort {
   return {
-    listAvailable: () => resolvedAvailableEmojiRecords(config).map(({ backend, record }) => {
-      const location = emojiMediaLocation(config, record.fileName, backend);
+    listAvailable: () => resolvedAvailableEmojiRecords(config).map(({ record }) => {
+      const location = emojiMediaLocation(config, record.fileName);
       return { key: record.key, image: { url: location.url, filePath: location.filePath } };
     })
   };
@@ -127,8 +125,8 @@ export async function assertPlannedEmojiAssetsIntegrity(config: AppConfig, plan:
   const records = new Map<string, ResolvedEmojiRecord>();
   for (const asset of assets) {
     records.set(
-      emojiIntegrityOperationKey(config, asset.record, asset.backend),
-      { record: asset.record, backend: asset.backend }
+      emojiIntegrityOperationKey(config, asset.record),
+      { record: asset.record }
     );
   }
   await assertEmojiRecordsInBatches(config, [...records.values()]);
@@ -141,19 +139,19 @@ export async function readPlannedEmojiAssets(
   const assets = plannedEmojiAssets(config, plan);
   const bytesByRecord = new Map<string, Buffer>();
   for (const asset of assets) {
-    const operationKey = emojiIntegrityOperationKey(config, asset.record, asset.backend);
+    const operationKey = emojiIntegrityOperationKey(config, asset.record);
     if (!bytesByRecord.has(operationKey)) {
-      bytesByRecord.set(operationKey, await readVerifiedEmojiRecordFile(config, asset.record, asset.backend));
+      bytesByRecord.set(operationKey, await readVerifiedEmojiRecordFile(config, asset.record));
     }
   }
   return assets.map((asset) => ({
     ...asset,
-    bytes: bytesByRecord.get(emojiIntegrityOperationKey(config, asset.record, asset.backend))!
+    bytes: bytesByRecord.get(emojiIntegrityOperationKey(config, asset.record))!
   }));
 }
 
 function plannedEmojiAssets(config: AppConfig, plan: EmojiMarkerPlan) {
-  const assets: Array<Omit<VerifiedPlannedEmojiAsset, "bytes"> & { backend: AgentWorkbenchBackend }> = [];
+  const assets: Array<Omit<VerifiedPlannedEmojiAsset, "bytes">> = [];
   const records = new Map(resolvedAvailableEmojiRecords(config).map((resolved) => [resolved.record.key, resolved]));
   for (let index = 0; index < plan.expectedKeys.length; index += 1) {
     const key = plan.expectedKeys[index];
@@ -161,26 +159,25 @@ function plannedEmojiAssets(config: AppConfig, plan: EmojiMarkerPlan) {
     if (!key) throw emojiAssetUnavailable();
     const resolved = records.get(key);
     if (!resolved || !image?.filePath) throw emojiAssetUnavailable();
-    const { backend, record } = resolved;
-    const location = emojiMediaLocation(config, record.fileName, backend);
+    const { record } = resolved;
+    const location = emojiMediaLocation(config, record.fileName);
     if (path.resolve(image.filePath) !== path.resolve(location.filePath) || image.url !== location.url) {
       throw emojiAssetUnavailable();
     }
-    assets.push({ key, record, image, backend });
+    assets.push({ key, record, image });
   }
   return assets;
 }
 
 export async function filterVerifiedEmojiRecords(
   config: AppConfig,
-  records?: readonly EmojiRecord[],
-  backend: AgentWorkbenchBackend = "native"
+  records?: readonly EmojiRecord[]
 ) {
-  const selectedRecords = records ?? emojiStore(config, backend).readAll();
+  const selectedRecords = records ?? emojiStore(config).readAll();
   const unique = new Map<string, EmojiRecord>();
   const candidates = selectedRecords.flatMap((record) => {
     try {
-      const key = emojiIntegrityOperationKey(config, record, backend);
+      const key = emojiIntegrityOperationKey(config, record);
       unique.set(key, record);
       return [{ key, record }];
     } catch {
@@ -193,7 +190,7 @@ export async function filterVerifiedEmojiRecords(
     const batch = uniqueEntries.slice(index, index + MAX_INTEGRITY_CONCURRENCY);
     await Promise.all(batch.map(async ([key, record]) => {
       try {
-        await assertEmojiRecordFileIntegrity(config, record, backend);
+        await assertEmojiRecordFileIntegrity(config, record);
         verifiedKeys.add(key);
       } catch {
         // Invalid or over-capacity records remain hidden from the API list.
@@ -205,11 +202,10 @@ export async function filterVerifiedEmojiRecords(
 
 export async function readVerifiedEmojiRecordFile(
   config: AppConfig,
-  record: EmojiRecord,
-  backend: AgentWorkbenchBackend = "native"
+  record: EmojiRecord
 ) {
   try {
-    const result = await runEmojiIntegrityOperation(config, record, true, backend);
+    const result = await runEmojiIntegrityOperation(config, record, true);
     if (!result.bytes) throw emojiAssetUnavailable();
     return result.bytes;
   } catch {
@@ -219,11 +215,10 @@ export async function readVerifiedEmojiRecordFile(
 
 async function assertEmojiRecordFileIntegrity(
   config: AppConfig,
-  record: EmojiRecord,
-  backend: AgentWorkbenchBackend
+  record: EmojiRecord
 ) {
   try {
-    await runEmojiIntegrityOperation(config, record, false, backend);
+    await runEmojiIntegrityOperation(config, record, false);
   } catch {
     throw emojiAssetUnavailable();
   }
@@ -232,25 +227,24 @@ async function assertEmojiRecordFileIntegrity(
 async function assertEmojiRecordsInBatches(config: AppConfig, records: readonly ResolvedEmojiRecord[]) {
   for (let index = 0; index < records.length; index += MAX_INTEGRITY_CONCURRENCY) {
     await Promise.all(records.slice(index, index + MAX_INTEGRITY_CONCURRENCY)
-      .map(({ record, backend }) => assertEmojiRecordFileIntegrity(config, record, backend)));
+      .map(({ record }) => assertEmojiRecordFileIntegrity(config, record)));
   }
 }
 
 async function runEmojiIntegrityOperation(
   config: AppConfig,
   record: EmojiRecord,
-  requireBytes: boolean,
-  backend: AgentWorkbenchBackend
+  requireBytes: boolean
 ): Promise<EmojiIntegrityResult> {
-  const key = emojiIntegrityOperationKey(config, record, backend);
+  const key = emojiIntegrityOperationKey(config, record);
   const existing = integrityInFlight.get(key);
   if (existing) {
     const result = await existing;
     return requireBytes && !result.bytes
-      ? runEmojiIntegrityOperation(config, record, true, backend)
+      ? runEmojiIntegrityOperation(config, record, true)
       : result;
   }
-  const filePath = emojiMediaLocation(config, record.fileName, backend).filePath;
+  const filePath = emojiMediaLocation(config, record.fileName).filePath;
   const rawOperation = integrityGate.run(async () => {
     const identity = await lstatEmojiAsset(filePath, record);
     const cached = integrityCache.get(filePath);
@@ -274,28 +268,26 @@ async function runEmojiIntegrityOperation(
   integrityInFlight.set(key, trackedOperation);
   const result = await trackedOperation;
   return requireBytes && !result.bytes
-    ? runEmojiIntegrityOperation(config, record, true, backend)
+    ? runEmojiIntegrityOperation(config, record, true)
     : result;
 }
 
 function emojiIntegrityOperationKey(
   config: AppConfig,
-  record: EmojiRecord,
-  backend: AgentWorkbenchBackend
+  record: EmojiRecord
 ) {
   assertEmojiRecordMetadata(record);
-  const filePath = emojiMediaLocation(config, record.fileName, backend).filePath;
+  const filePath = emojiMediaLocation(config, record.fileName).filePath;
   return [path.resolve(filePath), record.fileName, record.sizeBytes, record.width, record.height].join("\0");
 }
 
 function emojiRecordFileIsCandidate(
   config: AppConfig,
-  record: EmojiRecord,
-  backend: AgentWorkbenchBackend
+  record: EmojiRecord
 ) {
   try {
     assertEmojiRecordMetadata(record);
-    const filePath = emojiMediaLocation(config, record.fileName, backend).filePath;
+    const filePath = emojiMediaLocation(config, record.fileName).filePath;
     const stats = fs.lstatSync(filePath, { bigint: true });
     return stats.isFile()
       && !stats.isSymbolicLink()
@@ -306,14 +298,12 @@ function emojiRecordFileIsCandidate(
 }
 
 function resolvedAvailableEmojiRecords(config: AppConfig): ResolvedEmojiRecord[] {
-  const byKey = new Map<string, ResolvedEmojiRecord>();
-  for (const backend of ["native", "docker"] as const) {
-    for (const record of emojiStore(config, backend).readAll()) {
-      if (byKey.has(record.key) || !emojiRecordFileIsCandidate(config, record, backend)) continue;
-      byKey.set(record.key, { backend, record });
-    }
+  const records: ResolvedEmojiRecord[] = [];
+  for (const record of emojiStore(config).readAll()) {
+    if (!emojiRecordFileIsCandidate(config, record)) continue;
+    records.push({ record });
   }
-  return [...byKey.values()];
+  return records;
 }
 
 function assertEmojiRecordMetadata(record: EmojiRecord) {

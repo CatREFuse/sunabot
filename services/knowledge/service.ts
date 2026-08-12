@@ -20,10 +20,7 @@ import type {
   KnowledgeSnapshot,
   KnowledgeUploadInput
 } from "./types.js";
-import {
-  AGENT_RESOURCE_LAYOUT,
-  type AgentWorkbenchBackend
-} from "../../packages/platform/agentResourceLayout.js";
+import { AGENT_RESOURCE_LAYOUT } from "../../packages/platform/agentResourceLayout.js";
 
 const INDEX_SCHEMA_VERSION = "1";
 export const KNOWLEDGE_DIRECTORY_INDEX_FILE = "index.json";
@@ -294,21 +291,17 @@ function sameOptionalFileIdentity(
 }
 
 export function knowledgeBaseForConfig(
-  config: Pick<AppConfig, "persona">,
-  backend: AgentWorkbenchBackend = "native"
+  config: Pick<AppConfig, "persona">
 ) {
   const agentId = config.persona.defaultAgentId;
   if (!AGENT_ID_PATTERN.test(agentId)) throw new Error(`Invalid knowledge base Agent ID: ${agentId}`);
   const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
   if (!agentWorkspace) throw new Error(`Invalid knowledge base workspace: ${config.persona.agentWorkspace}`);
   return new KnowledgeBaseService({
-    sourceRoot: path.join(
-      agentWorkspace,
-      backend === "native" ? AGENT_RESOURCE_LAYOUT.knowledge : AGENT_RESOURCE_LAYOUT.dockerKnowledge
-    ),
+    sourceRoot: path.join(agentWorkspace, AGENT_RESOURCE_LAYOUT.knowledge),
     indexPath: getWorkspacePath(
       WORKSPACE_LAYOUT.knowledgeCache,
-      backend === "native" ? `${agentId}.sqlite` : `${agentId}-docker.sqlite`
+      `${agentId}.sqlite`
     )
   });
 }
@@ -317,23 +310,7 @@ export async function searchKnowledge(
   config: Pick<AppConfig, "persona">,
   input: KnowledgeSearchInput = {}
 ): Promise<KnowledgeSearchResult> {
-  const limit = normalizeLimit(input.limit);
-  const [native, docker] = await Promise.all([
-    knowledgeBaseForConfig(config, "native").search({ ...input, limit }),
-    knowledgeBaseForConfig(config, "docker").search({ ...input, limit })
-  ]);
-  if (!native.ok) return native;
-  const dockerMatches = docker.ok
-    ? docker.matches.map((match) => ({ ...match, path: `docker-workbench/${match.path}` }))
-    : [];
-  return {
-    ok: true,
-    query: native.query,
-    indexedAt: [native.indexedAt, docker.indexedAt].filter(Boolean).sort().at(-1),
-    matches: [...native.matches, ...dockerMatches]
-      .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
-      .slice(0, limit)
-  };
+  return knowledgeBaseForConfig(config).search(input);
 }
 
 function migrateIndex(database: DatabaseSync) {

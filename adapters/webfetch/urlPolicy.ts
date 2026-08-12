@@ -18,6 +18,9 @@ export function parseWebUrl(input: string | URL) {
   if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname) {
     throw new WebFetchError("URL_NOT_ALLOWED", "Unsupported URL protocol.");
   }
+  if (url.username || url.password) {
+    throw new WebFetchError("URL_NOT_ALLOWED", "URL credentials are not allowed.");
+  }
   url.hash = "";
   return url;
 }

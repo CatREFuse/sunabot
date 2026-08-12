@@ -7,10 +7,10 @@
 本设计覆盖以下操作：
 
 - 读取当前消息、引用消息和历史消息中的文件或图片。
-- 把聊天媒体保存到当前会话允许的 Workbench。
+- 把聊天媒体保存到当前 Agent 的 canonical Workbench。
 - 将聊天媒体作为图片生成或 Codex 任务输入。
 - 将 Bash 或 Codex 产生的文件作为可校验产物返回原会话。
-- 在多 Agent、多 QQ、Native Core 与 Docker Core 下保持相同业务合同。
+- 在多 Agent、多 QQ、Native Core 与每账号一个 NapCat Docker 容器下保持相同业务合同。
 
 现行身份鉴权、会话权限、Bash 对抗审批、路径边界、工作台隔离、外发校验和 durable outbox 保持不变。本设计不新增隐式审批、工具互斥、整轮污染标记或失败降级。
 
@@ -28,7 +28,7 @@
 | --- | --- | --- |
 | 附件定位 | `file_id`、非路径 `file` token、临时 URL、`busid` 与显示名称独立保留；显示名称不再作为下载 token。入站和持久化层都拒绝 URL、绝对路径、反斜杠与控制字符进入 token 字段 | 真实 NapCat 变体仍需现场验收 |
 | 获取与解析状态 | 原始字节先形成 acquired blob，再独立记录 `ready`、`partial`、`unsupported` 或 `parse_failed`；解析失败仍可受控导出原件 | 旧失败记录不反推原件存在 |
-| Workbench 选择 | 单一会话能力快照决定 Native/Docker；管理员私聊使用 Native，群聊和普通私聊使用 Docker，`send_file` 只保留管理员私聊的 source-missing Docker fallback | Voice 仍使用独立系统资产合同 |
+| Workbench 选择 | 单一会话能力快照始终解析当前 Agent 的 canonical Workbench；管理员私聊、群聊、普通私聊与 Web 管理员会话不选择第二个根 | Voice 仍使用独立系统资产合同 |
 | Codex 输入 | `inputHandles` 在 durable dispatch 前冻结；图片使用 Codex 原生图片输入，文本/PDF/Office 使用宿主解析后的有界、只读、哈希绑定文本投影；local worker 同时可读冻结原件 | 无可靠文本投影的非图片二进制只能由 local worker 读取；local worker 当前属于受信任的管理员执行主体，尚未具备抵御恶意附件提示注入后转存自身授权材料的硬隔离 |
 | Codex 输出 | CLI worker 与本机 app-server turn 都把当前 lease 对应 `attempt-<n>-<token>/outputs/` 设为 cwd，只接受其中的常规文件，执行路径、链接、大小、哈希和类型复验，再以两阶段发布写入冻结 Workbench；rename 已落盘但响应丢失时按绑定目录与 inode 恢复发布所有权 | SSH app-server 尚无远端文件传输合同；稳定 Codex handle 尚未进入跨后续回合的统一产物目录 |
 | 能力可见性 | Bash、聊天媒体、Workbench 文件、会话资产与 Codex dispatch 共用当前会话能力快照；缺少快照时相关端口不进入 Provider catalog | 全部工具的静态目录和管理台可观测性仍属阶段 4 |
@@ -105,7 +105,7 @@ interface ConversationArtifactRefV1 {
   mimeType?: string;
   displayName: string;
   storage: {
-    backend: "cache" | "native_workbench" | "docker_workbench" | "conversation_archive";
+    backend: "cache" | "workbench" | "conversation_archive";
     rootIdentity: string;
     relativePath: string;
   };
@@ -118,12 +118,12 @@ interface ConversationArtifactRefV1 {
 
 建立唯一的 `resolveConversationWorkbench(context, purpose)`：
 
-- 管理员私聊可按既有合同使用 Native Workbench，也可显式选择 Docker Bash。
-- 管理员群聊、普通私聊和普通群聊使用 Docker Workbench。
-- Docker 只读 Native 投影仍用于读取已经授权的 Native 资源。
+- 管理员私聊、管理员群聊、普通私聊、普通群聊与 Web 管理员会话都解析当前 Agent 的 canonical `workbench/`。
+- macOS Host Bash 与 Linux/WSL Bubblewrap 只是在不同平台把同一根以获准形态暴露给 Native 工具，不产生第二个业务目录。
 - `export_chat_media`、Bash、Codex 输入准备、`send_file` 和 durable asset 都调用同一解析器。
+- v0.2 的 `docker-workbench/` 只作为 0.2→0.3 停服迁移输入；运行时、管理 API、管理台和新用例不读取或创建该目录。
 
-返回值包含 backend、根身份、可读写模式和安全相对路径规则。工具描述从同一结果生成，避免描述与执行分离。
+返回值包含 canonical 根身份、可读写模式和安全相对路径规则。工具描述从同一结果生成，避免描述与执行分离。
 
 ### 3.5 Codex 输入与输出
 
@@ -203,7 +203,7 @@ flowchart LR
 - 获取成功且解析失败的原件仍可通过受控句柄导出。
 - 日志记录每次 action 的账号、动作、retcode、耗时与有限错误分类，不记录文件 ID、临时 URL 或文件正文。
 
-验收必须覆盖私聊和群聊、显式 `file_id`、仅 `file` token、URL 为空后 Base64 fallback、过期文件、解析失败但原件可导出，以及 Native/Docker Core。
+验收必须覆盖私聊和群聊、显式 `file_id`、仅 `file` token、URL 为空后 Base64 fallback、过期文件、解析失败但原件可导出，以及 Linux/WSL Native Core 与每账号 NapCat Docker。
 
 ### 阶段 2：统一会话能力与 Workbench 路由
 
@@ -214,7 +214,7 @@ flowchart LR
 - 工具目录从同一能力快照生成，并在配置 epoch 或会话失效后停止执行。
 - 保留现有权限和审批行为。
 
-验收必须覆盖四种主对话角色、Web 管理员会话、Native/Docker backend、工具可见性与实际执行一致、跨 Agent/跨会话句柄拒绝。
+验收必须覆盖四种主对话角色、Web 管理员会话、单一 canonical Workbench、macOS Host 与 Linux/WSL Bubblewrap 投影、工具可见性与实际执行一致、跨 Agent/跨会话句柄拒绝。
 
 ### 阶段 3：Codex 会话产物桥
 
@@ -244,7 +244,7 @@ flowchart LR
 - 保留现有 `message:<message-id>:image:<index>` 和 `message:<message-id>:file:<index>` 句柄。
 - 阶段 0 不修改 SQLite schema、附件 manifest 或 durable payload。
 - acquired/parse 双状态需要向前迁移，旧 `ready`/`partial` 映射为获取与解析均成功，旧 `failed` 保持失败且不推测原件存在。
-- 新 Codex 输入和产物字段均为可选；旧任务没有产物声明时继续按原合同执行，出现新产物声明但缺少冻结 Workbench backend 时以 `codex_artifact_backend_missing` 明确失败，不能静默丢弃文件。
+- 新 Codex 输入和产物字段均为可选；旧任务没有产物声明时继续按原合同执行，出现新产物声明但缺少冻结 canonical Workbench 标记时以 `codex_artifact_backend_missing` 明确失败，不能静默丢弃文件。该稳定错误名不代表存在第二个运行 backend。
 - 任何 durable schema 升级都使用 exact-key decoder、显式版本和恢复测试，不能依赖删除数据库或任务重建。
 
 ## 7. 完成标准
@@ -254,4 +254,4 @@ flowchart LR
 - 同一会话中的文件、图片、Bash 文件与 Codex 产物都能通过稳定句柄组合使用。
 - 模型无需猜测宿主路径、容器路径、临时 URL 或异步 worker 目录。
 - 工具可见性、执行能力、Workbench 路由和外发能力来自同一会话快照。
-- Native Core + NapCat Docker 与 Docker Core + NapCat Docker 使用相同业务合同，并通过独立真实环境验收。
+- Linux/WSL Native Core + 每账号 NapCat Docker 在 amd64/arm64 使用同一业务合同，并通过独立真实环境验收；macOS 源码形态保持同一数据与会话合同。

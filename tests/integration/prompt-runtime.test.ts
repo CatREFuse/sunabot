@@ -131,7 +131,6 @@ describe("workspace prompt runtime", () => {
       "read_file",
       "write_file",
       "native_bash",
-      "docker_bash",
       "websearch",
       "webfetch",
       "generate_img",

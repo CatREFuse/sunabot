@@ -5,13 +5,11 @@ export function codexControlAvailable(input: {
   scope: MessageScopeV1;
   promptOverride?: string;
   platform?: NodeJS.Platform;
-  runtimeMode?: string;
 }) {
   return input.isAdmin
     && input.scope === "private"
     && input.promptOverride === undefined
-    && (input.platform ?? process.platform) === "darwin"
-    && (input.runtimeMode ?? process.env.SUNABOT_RUNTIME_MODE) !== "docker";
+    && (input.platform ?? process.platform) === "darwin";
 }
 
 export function codexTurnAvailable(input: {

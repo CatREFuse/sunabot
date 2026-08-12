@@ -4,19 +4,15 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import dotenv from "dotenv";
-import { installGlobalProxyDispatcher, resolveProxyConfiguration } from "../../packages/platform/proxy.mjs";
+import { installGlobalProxyDispatcher } from "../../packages/platform/proxy.mjs";
 import { validateMultiAgentWorkspacePath } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
-import {
-  recoverStaleDockerOneoffs,
-  recoverWorkspaceBashContainers,
-  resolveDockerUnavailableMessage
-} from "./docker-recovery.mjs";
 import {
   listNativeCoreProcessGroups,
   stopNativeCoreProcessGroups
@@ -31,7 +27,6 @@ import {
   stopNativeWebfetchRendererProcessGroups
 } from "./native-webfetch-renderer-process.mjs";
 import { buildRuntimeProbe, collectWorkspaceProbeFacts } from "./probe.mjs";
-import { removeLegacyVoiceContainers } from "./legacy-voice-cleanup.mjs";
 import { accountRuntimeState, planAccountReconciliation } from "./account-reconciler.mjs";
 import {
   inspectAccountRuntimeOwner,
@@ -42,8 +37,10 @@ import {
 } from "./account-runtime-daemon.mjs";
 import {
   beginFirstRunBootstrap,
+  completeFirstRunBootstrap,
   rollbackFirstRunBootstrap
 } from "./first-run-state.mjs";
+import { validateReleaseManifest } from "./release-integrity.mjs";
 import {
   composeProjectName,
   databasePathOverrideConfigured,
@@ -64,7 +61,8 @@ const STARTUP_REQUIRED_CHECK_IDS = new Set([
   "core-process",
   "core-api",
   "onebot-listener",
-  "account-reconciler"
+  "account-reconciler",
+  "webfetch-dynamic-renderer"
 ]);
 const STARTUP_STABILITY_WINDOW_MS = 3_000;
 const STARTUP_STABILITY_POLL_MS = 250;
@@ -77,7 +75,6 @@ const BUILD_COMMAND_TIMEOUT_MS = 15 * 60_000;
 const INTERACTIVE_COMMAND_TIMEOUT_MS = 15 * 60_000;
 const COMMAND_TERMINATE_GRACE_MS = 1_000;
 const DEFAULT_COMMAND_OUTPUT_BYTES = 1 * 1024 * 1024;
-const DOCKER_CONTEXT_HOST_FORMAT = '{{ (index .Endpoints "docker").Host }}';
 
 export async function runLauncher(argv = process.argv.slice(2), environment = process.env) {
   const parsed = parseLauncherArguments(argv, environment);
@@ -88,9 +85,6 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
   }
   const wsl = isWslRuntime({ platform: process.platform, environment });
   const mode = resolveCoreMode(parsed.requestedMode, { platform: process.platform });
-  if (parsed.dev && mode !== "native") {
-    throw new Error("--dev 仅支持 Native Core；Docker Core 使用生产构建。");
-  }
   const contract = resolveLauncherContract(rawContract, {
     root,
     platform: process.platform,
@@ -113,9 +107,11 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
     coreLog: path.join(workspace, contract.paths.logs ?? "runtime/logs", parsed.dev ? "core-dev.log" : "core.log"),
     reconcilerLog: path.join(workspace, contract.paths.logs ?? "runtime/logs", "account-reconciler.log"),
     apiEntry: path.join(root, "dist/apps/api/main.js"),
-    webEntry: path.join(root, "apps/admin-web/dist/index.html")
+    webEntry: path.join(root, "apps/admin-web/dist/index.html"),
+    packaged: await exists(path.join(root, "release-manifest.json"))
   };
   context.runtimeEnvironment = await readRuntimeEnvironment(context.runtimeEnv);
+  context.bubblewrapExecutable = bubblewrapExecutable(context);
   context.composeOverrides = {};
   await installGlobalProxyDispatcher({
     env: nativeProcessEnvironment(context),
@@ -164,7 +160,7 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
 
 export function napcatAccountUpArguments(action, service) {
   return [
-    "up", "-d", "--build",
+    "up", "-d", "--no-build", "--pull", "never",
     ...(action === "restart" ? ["--force-recreate"] : []),
     service
   ];
@@ -176,24 +172,32 @@ async function restartRuntime(context) {
   }
   assertNonRootRuntimeUser();
   await assertDockerAvailable(context);
-  await recoverDockerRuntime(context);
   assertExpectedProject(context, await inspectRuntime(context));
+  await validatePackagedRelease(context);
+  await assertLinuxBubblewrapNamespace(context);
+  if (context.packaged) await assertNativeWebfetchRendererCapability(context);
+  await assertNapcatImageAvailable(context);
   await initializeWorkspace(context);
-  await beginFirstRunBootstrap(context.workspace);
+  const firstRunBootstrap = await beginFirstRunBootstrap(context.workspace);
   const secrets = await prepareSecrets(context);
   await ensureAdminCredentials(context);
-  context.composeOverrides.SUNABOT_WEBFETCH_RENDERER_TOKEN = crypto.randomBytes(32).toString("base64url");
   await assertComposeServices(context);
   await down(context);
   const baseline = await assertRuntimeEmpty(context);
   await waitForRuntimePortsClosed(context, { dev: context.dev });
   await ensureRuntimeNetwork(context);
-  if (context.mode === "native") await upNative(context, baseline, secrets.values);
-  else await upDocker(context, baseline, secrets.values);
+  await upNative(context, baseline, secrets.values);
   try {
     await startAccountRuntimeDaemon(context);
-    const report = await waitForStableStartup(context);
+    const stableStartup = await waitForStableStartup(context);
+    const report = stableStartup.report;
+    const readiness = firstRunCompletionReadiness(report, stableStartup.stableForMs);
     printRuntimeReport(context, report);
+    const firstRun = await completeFirstRunBootstrap(context.workspace, { readiness });
+    if (firstRunBootstrap.state === "active" && firstRun.state !== "completed") {
+      const missing = firstRun.state === "pending" ? firstRun.missing.join(",") : firstRun.state;
+      throw new Error(`FIRST_RUN_INCOMPLETE:${missing}`);
+    }
   } catch (error) {
     await down(context).catch(() => {});
     throw error;
@@ -213,9 +217,7 @@ async function upNative(context, before, secrets) {
   }
   await ensureNativeDependencies(context);
   if (!context.dev) await ensureNativeBuild(context);
-  await prepareNativeBashImage(context);
-  await compose(context, ["build", context.contract.napcatService]);
-  const renderer = await prepareWebfetchRendererForNativeCore(context);
+  const renderer = await prepareNativeWebfetchRenderer(context);
   const onebotListenHost = await resolveNativeOnebotListenHost(context);
   if (await tcpOpen(onebotListenHost, context.contract.onebotPort)) {
     throw new Error(`${onebotListenHost}:${context.contract.onebotPort} 已被非当前 launcher 管理的进程占用。`);
@@ -248,7 +250,6 @@ async function upNative(context, before, secrets) {
     });
   } catch (error) {
     await stopNapcatContainers(context).catch(() => {});
-    await compose(context, ["--profile", context.contract.coreProfile, "down", "--remove-orphans"]).catch(() => {});
     await stopNativeCore(context, native.record, { removeState: true }).catch(() => {});
     const rendererGroups = await listNativeWebfetchRendererProcessGroups({
       workspaceId: context.identity
@@ -267,111 +268,67 @@ async function upNative(context, before, secrets) {
   }
 }
 
-export function nativeBashImageComposeArguments(root) {
-  return [
-    "compose",
-    "-f", path.join(root, "deploy/docker/compose.bash.yml"),
-    "--profile", "build",
-    "build", "bash-image"
-  ];
-}
-
-async function prepareNativeBashImage(context) {
-  try {
-    await dockerCommand(context, nativeBashImageComposeArguments(context.root));
-  } catch (error) {
-    console.warn(`Bash Docker 隔离镜像准备失败，Bash capability 保持降级：${message(error)}`);
-  }
-}
-
-async function prepareDockerWebfetchRenderer(context) {
-  try {
-    const digest = await dockerWebfetchRendererSourceDigest(context.root);
-    context.composeOverrides.SUNABOT_WEBFETCH_RENDERER_SOURCE_DIGEST = digest;
-    const tag = context.environment.SUNABOT_IMAGE_TAG?.trim() || "local";
-    const image = `${context.contract.webfetchRendererImage}:${tag}`;
-    const currentDigest = await dockerCommand(context, [
-      "image",
-      "inspect",
-      "--format",
-      '{{index .Config.Labels "io.sunabot.webfetch-renderer.source-digest"}}',
-      image
-    ], { capture: true }).then((value) => value.trim()).catch(() => "");
-    if (currentDigest !== digest) {
-      await compose(context, ["build", context.contract.webfetchRendererService]);
-    }
-    await compose(context, ["up", "-d", "--no-build", context.contract.webfetchRendererService]);
-    await waitForHttp(
-      `http://127.0.0.1:${context.contract.webfetchRendererPort}/healthz`,
-      context.contract.coreReadyTimeoutSeconds * 1_000
-    );
-    return true;
-  } catch (error) {
-    console.warn(`WebFetch 动态渲染服务准备失败，静态抓取保持可用：${message(error)}`);
-    return false;
-  }
-}
-
-async function buildDockerWebfetchRendererImage(context) {
-  const digest = await dockerWebfetchRendererSourceDigest(context.root);
-  const tag = context.environment.SUNABOT_IMAGE_TAG?.trim() || "local";
-  const image = `${context.contract.webfetchRendererImage}:${tag}`;
-  await dockerCommand(context, [
-    "build",
-    "--platform", webfetchRendererPlatform(),
-    "--build-arg", `SUNABOT_WEBFETCH_RENDERER_SOURCE_DIGEST=${digest}`,
-    "--file", path.join(context.root, "deploy/docker/Dockerfile.webfetch-renderer"),
-    "--tag", image,
-    context.root
-  ], { timeoutMs: BUILD_COMMAND_TIMEOUT_MS });
-}
-
 async function bootstrapRuntime(context) {
   assertNonRootRuntimeUser();
-  if (context.mode === "native" && nativeWebfetchRendererDeployment() === "native") {
-    await ensureNativeDependencies(context);
-    await ensureNativeBuild(context);
-    await prepareNativeWebfetchRendererInstallation(context, {
-      command,
-      repairBrowser: true
-    });
-    console.log("Native WebFetch Renderer 依赖与 Chromium 已准备。");
-    return;
-  }
+  await validatePackagedRelease(context);
+  await assertLinuxBubblewrapNamespace(context);
+  await ensureNativeDependencies(context);
+  await ensureNativeBuild(context);
   await assertDockerAvailable(context);
-  await buildDockerWebfetchRendererImage(context);
-  console.log("WebFetch Renderer 镜像与 Chromium 已准备。");
+  await assertNapcatImageAvailable(context);
+  await assertNativeWebfetchRendererCapability(context);
+  console.log("Native Core、Bubblewrap namespace、Lightpanda 与 NapCat 锁定镜像已就绪。");
 }
 
-async function dockerWebfetchRendererSourceDigest(projectRoot) {
-  const hash = crypto.createHash("sha256");
-  for (const relative of [
-    "package.json",
-    "package-lock.json",
-    "tsconfig.json",
-    "deploy/docker/Dockerfile.webfetch-renderer",
-    "apps/webfetch-renderer",
-    "adapters",
-    "services",
-    "src",
-    "packages"
-  ]) {
-    await updateDigestFromPath(hash, path.join(projectRoot, relative), projectRoot);
+async function assertLinuxBubblewrapNamespace(context) {
+  if (process.platform !== "linux") return;
+  try {
+    await command(
+      bubblewrapExecutable(context),
+      bubblewrapProbeArguments(context.workspace, true),
+      { capture: true }
+    );
+  } catch (error) {
+    throw runtimeError(
+      "BUBBLEWRAP_NAMESPACE_UNAVAILABLE",
+      `Bubblewrap namespace 隔离不可用：${message(error)}`
+    );
   }
-  return hash.digest("hex");
 }
 
-async function updateDigestFromPath(hash, target, base) {
-  const stat = await fs.lstat(target);
-  hash.update(path.relative(base, target));
-  if (stat.isDirectory()) {
-    for (const entry of (await fs.readdir(target)).sort()) {
-      await updateDigestFromPath(hash, path.join(target, entry), base);
-    }
-  } else if (stat.isFile()) {
-    hash.update(await fs.readFile(target));
-  } else {
-    throw new Error(`Renderer 构建输入不是普通文件：${target}`);
+async function assertNativeWebfetchRendererCapability(context) {
+  if (process.platform !== "linux") return;
+  const installation = await prepareNativeWebfetchRendererInstallation(context, { command });
+  const launch = await createNativeWebfetchRendererLaunch(context, installation);
+  try {
+    await verifyNativeWebfetchRendererIsolation(context, launch, command);
+  } catch (error) {
+    throw runtimeError(
+      "WEBFETCH_DYNAMIC_ISOLATION_UNAVAILABLE",
+      `Lightpanda 动态抓取隔离不可用：${message(error)}`
+    );
+  } finally {
+    await fs.rm(launch.runRoot, { recursive: true, force: true });
+  }
+}
+
+async function validatePackagedRelease(context) {
+  if (!context.packaged) return;
+  const manifest = await readJson(path.join(context.root, "release-manifest.json"));
+  await validateReleaseManifest({ root: context.root, manifest });
+}
+
+async function assertNapcatImageAvailable(context) {
+  try {
+    await dockerCommand(context, ["image", "inspect", context.contract.napcatImage], {
+      capture: true,
+      timeoutMs: DOCKER_CONTROL_TIMEOUT_MS
+    });
+  } catch {
+    throw runtimeError(
+      "NAPCAT_IMAGE_MISSING",
+      "锁定的 NapCat 镜像未安装；请重新执行发行版 install.sh，启动过程不会下载镜像。"
+    );
   }
 }
 
@@ -419,8 +376,7 @@ async function prepareNativeWebfetchRenderer(context) {
       `http://127.0.0.1:${context.contract.webfetchRendererPort}/healthz`,
       context.contract.coreReadyTimeoutSeconds * 1_000
     );
-    if (health.browserIsolation !== "chromium-sandbox"
-      || health.runtimeIsolation !== launch.runtimeIsolation) {
+    if (health.engine !== "lightpanda" || health.runtimeIsolation !== launch.runtimeIsolation) {
       throw new Error("WEBFETCH_RENDERER_ISOLATION_UNVERIFIED");
     }
     return { record, token };
@@ -431,62 +387,23 @@ async function prepareNativeWebfetchRenderer(context) {
       } catch {}
     }
     if (launch?.runRoot) await fs.rm(launch.runRoot, { recursive: true, force: true }).catch(() => {});
+    if (process.platform === "linux") {
+      throw runtimeError(
+        "WEBFETCH_DYNAMIC_ISOLATION_UNAVAILABLE",
+        `Lightpanda 动态抓取隔离不可用：${message(error)}`
+      );
+    }
     console.warn(`WebFetch Native 动态渲染服务准备失败，静态抓取保持可用：${message(error)}`);
     return undefined;
   }
 }
 
-async function prepareWebfetchRendererForNativeCore(context) {
-  if (nativeWebfetchRendererDeployment() === "native") return prepareNativeWebfetchRenderer(context);
-  const ready = await prepareDockerWebfetchRenderer(context);
-  return ready ? { token: context.composeOverrides.SUNABOT_WEBFETCH_RENDERER_TOKEN } : undefined;
-}
-
 export function nativeWebfetchRendererDeployment(platform = process.platform) {
-  return platform === "darwin" ? "docker" : "native";
-}
-
-async function upDocker(context, before, secrets) {
-  if (!before.dockerCore.running && await tcpOpen("127.0.0.1", context.contract.adminPort)) {
-    throw new Error(`127.0.0.1:${context.contract.adminPort} 已被非当前 Docker Core 占用。`);
-  }
-  try {
-    await prepareWslDockerProxy(context);
-    await prepareDockerWebfetchRenderer(context);
-    await compose(context, [
-      "--profile",
-      context.contract.coreProfile,
-      "up",
-      "-d",
-      "--build",
-      context.contract.coreService
-    ]);
-    await waitForHttp(
-      `http://127.0.0.1:${context.contract.adminPort}${context.contract.healthPath}`,
-      context.contract.coreReadyTimeoutSeconds * 1_000
-    );
-    await waitForComponentHealth(context, "core", context.contract.coreReadyTimeoutSeconds * 1_000);
-    await assertDockerCoreBwrap(context);
-    await assertDockerCoreCodex(context);
-    const accounts = await loadNapcatAccounts(context);
-    await startNapcatAccounts(context, accounts, context.contract.dockerReverseWebSocket, secrets);
-    await writeState(context, {
-      mode: "docker",
-      dev: false,
-      reverseWebSocket: context.contract.dockerReverseWebSocket,
-      accounts: accounts.map(({ id, webuiPort }) => ({ id, webuiPort }))
-    });
-  } catch (error) {
-    await stopNapcatContainers(context).catch(() => {});
-    await compose(context, ["--profile", context.contract.coreProfile, "down", "--remove-orphans"]).catch(() => {});
-    await fs.rm(context.statePath, { force: true });
-    throw error;
-  }
+  return platform === "linux" ? "native" : "unavailable";
 }
 
 async function down(context) {
   await assertDockerAvailable(context);
-  await recoverDockerRuntime(context);
   const runtime = await inspectRuntime(context);
   if (runtime.reconciler.owner.status === "running"
     && !runtime.reconciler.processes.some((item) => item.pid === runtime.reconciler.owner.record.pid)) {
@@ -526,11 +443,7 @@ async function down(context) {
   if (runtime.state?.webfetchRenderer?.runRoot) {
     await fs.rm(runtime.state.webfetchRenderer.runRoot, { recursive: true, force: true });
   }
-  await removeWorkspaceContainers(context);
-  await removeLegacyVoiceContainers({
-    workspaceId: context.identity,
-    timeoutSeconds: context.contract.shutdownTimeoutSeconds
-  });
+  await stopNapcatContainers(context);
   await removeRuntimeNetwork(context);
   if (runtime.state || runtime.nativeProcessGroups.length > 0) {
     await waitForRuntimePortsClosed(context, runtime.state);
@@ -546,22 +459,6 @@ async function down(context) {
   }
   await fs.rm(context.statePath, { force: true });
   console.log("Sunabot Core 与 NapCat 已停止。");
-}
-
-async function recoverDockerRuntime(context) {
-  const runCommand = (executable, args, options = {}) => command(executable, args, {
-    ...options,
-    env: options.env ?? nativeProcessEnvironment(context)
-  });
-  await recoverWorkspaceBashContainers({
-    identity: context.identity,
-    runtimeId: context.contract.runtimeId,
-    runCommand
-  });
-  await recoverStaleDockerOneoffs({
-    identity: context.identity,
-    runCommand
-  });
 }
 
 async function assertRuntimeEmpty(context) {
@@ -580,10 +477,14 @@ async function assertRuntimeEmpty(context) {
   if (runtime.reconciler.owner.status !== "missing") {
     residuals.push(`账号调和 owner ${runtime.reconciler.owner.status}`);
   }
-  if (runtime.containers.length > 0) {
-    residuals.push(`Docker 容器 ${runtime.containers.map((item) => item.id).join(", ")}`);
+  if (runtime.napcat.matches.length > 0) {
+    residuals.push(`NapCat 容器 ${runtime.napcat.matches.map((item) => item.id).join(", ")}`);
   }
-  if (await runtimeNetworkExists(context)) residuals.push(`Docker 网络 ${context.project}-runtime`);
+  const unsupportedContainers = runtime.containers.filter((item) => item.component !== "napcat");
+  if (unsupportedContainers.length > 0) {
+    residuals.push(`已移除组件的旧容器 ${unsupportedContainers.map((item) => item.id).join(", ")}`);
+  }
+  if (await runtimeNetworkExists(context)) residuals.push(`NapCat 网络 ${context.project}-runtime`);
   if (residuals.length > 0) {
     throw runtimeError("RUNTIME_NOT_EMPTY", `当前 workspace 未清空：${residuals.join("；")}。`);
   }
@@ -645,6 +546,38 @@ export function assertStartupReportReady(report) {
   throw runtimeError("STARTUP_NOT_READY", detail);
 }
 
+export function firstRunCompletionReadiness(report, stableForMs) {
+  assertStartupReportReady(report);
+  if (!Number.isFinite(stableForMs) || stableForMs < STARTUP_STABILITY_WINDOW_MS) {
+    throw runtimeError(
+      "FIRST_RUN_RUNTIME_NOT_STABLE",
+      `首次运行的完整启动状态未连续稳定 ${STARTUP_STABILITY_WINDOW_MS}ms。`
+    );
+  }
+  const checks = new Map((report?.checks ?? []).map((item) => [item.id, item]));
+  const accounts = Array.isArray(report?.accounts) ? report.accounts : [];
+  const primary = accounts.find((account) => account.id === "primary");
+  const napcatReady = primary?.desiredState === "running"
+    && primary.observedState === "running"
+    && primary.reconcileRequired !== true
+    && accounts.every((account) => (
+      account.reconcileRequired !== true
+      && (account.desiredState !== "running" || account.observedState === "running")
+    ));
+  if (!napcatReady) {
+    throw runtimeError("FIRST_RUN_NAPCAT_NOT_READY", "首次运行的 NapCat 账号尚未通过运行状态检查。");
+  }
+  return {
+    coreListening: checks.get("core-process")?.status === "pass"
+      && checks.get("core-api")?.status === "pass",
+    onebotListening: checks.get("onebot-listener")?.status === "pass",
+    accountRuntimeReady: checks.get("account-reconciler")?.status === "pass",
+    napcatReady: true,
+    runtimeReady: true,
+    stable: true
+  };
+}
+
 async function waitForStableStartup(context) {
   const deadline = Date.now() + STARTUP_STABILITY_TIMEOUT_MS;
   let stableSince;
@@ -654,7 +587,7 @@ async function waitForStableStartup(context) {
       if (Date.now() - stableSince >= STARTUP_STABILITY_WINDOW_MS) {
         const report = buildRuntimeProbe(await collectRuntimeProbeFacts(context));
         assertStartupReportReady(report);
-        return report;
+        return { report, stableForMs: Date.now() - stableSince };
       }
     } else {
       stableSince = undefined;
@@ -668,19 +601,13 @@ async function waitForStableStartup(context) {
 
 async function startupComponentsReady(context) {
   const runtime = await inspectRuntime(context);
-  const coreRunning = context.mode === "native" ? runtime.native.running : runtime.dockerCore.running;
-  if (!coreRunning || !runtime.reconciler.healthy) return false;
+  if (!runtime.native.running || !runtime.reconciler.healthy) return false;
   const apiReady = await httpReady(
     `http://127.0.0.1:${context.contract.adminPort}${context.contract.healthPath}`
   );
   if (!apiReady) return false;
-  if (context.mode === "docker") {
-    return runtime.dockerCore.matches.length === 1
-      && await componentHealthStatus(context, runtime.dockerCore.matches[0].id)
-        .then((status) => status === "healthy")
-        .catch(() => false);
-  }
-  const onebotHost = runtime.state?.onebotListenHost ?? context.contract.onebotHost;
+  const onebotHost = runtime.state?.onebotListenHost
+    ?? defaultNativeOnebotHealthHost(context.contract.onebotHost);
   return httpReady(
     `http://${onebotHost}:${context.contract.onebotPort}${context.contract.onebotHealthPath}`
   );
@@ -696,33 +623,19 @@ async function collectRuntimeProbeFacts(context) {
   const runtime = await inspectRuntime(context);
   const apiPath = `http://127.0.0.1:${context.contract.adminPort}${context.contract.healthPath}`;
   const onebotHealthHost = runtime.state?.onebotListenHost
-    ?? (context.contract.onebotHost === "docker-network-gateway" ? "127.0.0.1" : context.contract.onebotHost);
+    ?? defaultNativeOnebotHealthHost(context.contract.onebotHost);
   const onebotPath = `http://${onebotHealthHost}:${context.contract.onebotPort}${context.contract.onebotHealthPath}`;
   const apiReady = await httpReady(apiPath);
-  let dockerCoreHealthy = false;
-  if (runtime.dockerCore.matches.length > 0) {
-    dockerCoreHealthy = await componentHealthStatus(context, runtime.dockerCore.matches[0].id)
-      .then((status) => status === "healthy")
-      .catch(() => false);
-  }
-  const onebotReady = runtime.native.running ? await httpReady(onebotPath) : dockerCoreHealthy;
+  const onebotReady = runtime.native.running && await httpReady(onebotPath);
   const rendererHealth = await readRendererHealth(
     `http://127.0.0.1:${context.contract.webfetchRendererPort}/healthz`
   );
-  const nativeRendererUsesDocker = context.mode === "native"
-    && nativeWebfetchRendererDeployment() === "docker";
-  const webfetchRendererReady = context.mode === "native" && !nativeRendererUsesDocker
-    ? runtime.nativeWebfetchRendererGroups.some((group) => group.members.some(
+  const webfetchRendererReady = runtime.nativeWebfetchRendererGroups.some((group) => group.members.some(
       (member) => member.pid === runtime.state?.webfetchRenderer?.pid
     ))
-      && rendererHealth?.browserIsolation === "chromium-sandbox"
+      && rendererHealth?.engine === "lightpanda"
       && rendererHealth?.runtimeIsolation === "linux-bubblewrap"
-    : runtime.webfetchRenderer.matches.length === 1
-      && await componentHealthStatus(context, runtime.webfetchRenderer.matches[0].id)
-        .then((status) => status === "healthy")
-        .catch(() => false)
-      && rendererHealth?.browserIsolation === "chromium-sandbox"
-      && rendererHealth?.runtimeIsolation === "docker";
+  ;
   const conflicts = accountRuntimeConflicts(runtime.reconciler, context);
 
   const docker = await dockerAvailable(context);
@@ -739,28 +652,12 @@ async function collectRuntimeProbeFacts(context) {
         ? `检测到 ${runtime.reconciler.processes.length} 个未完全登记的 host reconciler`
         : "host reconciler is not running"
   };
-  if (context.mode === "native") {
-    const native = await inspectNativeCapabilities(context);
-    Object.assign(capabilities, {
-      codexCli: native.codexCli,
-      codexAuth: native.codexAuth,
-      workspaceBash: native.workspaceBash
-    });
-  } else if (runtime.dockerCore.running) {
-    const codex = await inspectDockerCodex(context);
-    let workspaceBash;
-    try {
-      await assertDockerCoreBwrap(context);
-      workspaceBash = { ok: true, detail: "bubblewrap namespace probe passed" };
-    } catch (error) {
-      workspaceBash = { ok: false, detail: message(error) };
-    }
-    Object.assign(capabilities, {
-      codexCli: codex.cli,
-      codexAuth: codex.auth,
-      workspaceBash
-    });
-  }
+  const native = await inspectNativeCapabilities(context);
+  Object.assign(capabilities, {
+    codexCli: native.codexCli,
+    codexAuth: native.codexAuth,
+    workspaceBash: native.workspaceBash
+  });
 
   const legacyRunning = runtime.legacyContainers.filter((item) => item.state === "running");
   if (legacyRunning.length > 0) {
@@ -779,15 +676,7 @@ async function collectRuntimeProbeFacts(context) {
       detail: runtime.foreignProjects.join(", ")
     });
   }
-  if (runtime.native.running && runtime.dockerCore.running) {
-    conflicts.push({
-      id: "core-split-brain",
-      code: "CORE_SPLIT_BRAIN",
-      action: "./sunabot.sh down",
-      detail: "Native Core 与 Docker Core 同时运行"
-    });
-  }
-  if (!runtime.native.running && !runtime.dockerCore.running && apiReady) {
+  if (!runtime.native.running && apiReady) {
     conflicts.push({
       id: "admin-port-owner",
       code: "ADMIN_PORT_FOREIGN_OWNER",
@@ -810,8 +699,8 @@ async function collectRuntimeProbeFacts(context) {
   return {
     ...workspaceFacts,
     core: {
-      mode: runtime.native.running ? "native" : runtime.dockerCore.running ? "docker" : "stopped",
-      running: runtime.native.running || runtime.dockerCore.running,
+      mode: runtime.native.running ? "native" : "stopped",
+      running: runtime.native.running,
       apiReady,
       onebotReady,
       apiPath,
@@ -832,7 +721,7 @@ async function collectRuntimeProbeFacts(context) {
       webfetchDynamicRenderer: {
         ok: webfetchRendererReady,
         detail: webfetchRendererReady
-          ? `renderer healthy (${rendererHealth.runtimeIsolation}, chromium-sandbox)`
+          ? `renderer healthy (${rendererHealth.runtimeIsolation}, lightpanda)`
           : "renderer unavailable or isolation unverified"
       }
     }
@@ -868,15 +757,13 @@ async function loadRegisteredAccounts(context) {
 }
 
 function printHelp() {
-  console.log("用法：./sunabot.sh <up|start|down|restart|status|doctor|logs|bootstrap|help> [--core=auto|native|docker] [--dev]");
+  console.log("用法：./sunabot.sh <up|start|down|restart|status|doctor|logs|bootstrap|help> [--dev]");
 }
 
 async function logs(context) {
   const runtime = await inspectRuntime(context);
   if (!runtime.native.running
-    && !runtime.dockerCore.running
     && !runtime.napcat.running
-    && !runtime.webfetchRenderer.running
     && runtime.nativeWebfetchRendererGroups.length === 0) {
     throw new Error("Sunabot 尚未运行。");
   }
@@ -889,15 +776,8 @@ async function logs(context) {
     && await exists(runtime.state.webfetchRenderer.logPath)) {
     children.push(spawn("tail", ["-n", "120", "-F", runtime.state.webfetchRenderer.logPath], { stdio: "inherit" }));
   }
-  if (runtime.containers.length > 0) {
-    const services = [
-      ...(runtime.dockerCore.running ? [context.contract.coreService] : []),
-      ...(runtime.webfetchRenderer.running ? [context.contract.webfetchRendererService] : [])
-    ];
-    if (services.length) children.push(spawnCompose(context, ["--profile", context.contract.coreProfile, "logs", "-f", ...services]));
-    for (const container of runtime.napcat.matches.filter((item) => item.state === "running")) {
-      children.push(spawn("docker", ["logs", "-f", "--tail", "120", container.id], { stdio: "inherit" }));
-    }
+  for (const container of runtime.napcat.matches.filter((item) => item.state === "running")) {
+    children.push(spawn("docker", ["logs", "-f", "--tail", "120", container.id], { stdio: "inherit" }));
   }
   await followChildren(children);
 }
@@ -921,17 +801,14 @@ async function prepareSecrets(context) {
 async function ensureAdminCredentials(context) {
   const credentialsPath = path.join(context.workspace, "secrets/admin-credentials.json");
   if (await exists(credentialsPath)) return;
-  const username = process.env.SUNABOT_ADMIN_USERNAME?.trim() || "admin";
-  if (!/^[A-Za-z0-9._-]{1,128}$/.test(username)) {
-    throw new Error("SUNABOT_ADMIN_USERNAME 只能包含字母、数字、点、下划线和短横线。");
-  }
   if (!process.stdin.isTTY) {
-    throw new Error(`管理员凭据不存在；请执行 npm run admin:set-password -- ${username}`);
+    throw new Error("管理员凭据不存在；请在交互终端执行 ./sunabot.sh up 完成 Landing。");
   }
-  console.log(`首次启动需要设置管理员账号 ${username}。`);
+  console.log(`Sunabot ${context.contract.releaseVersion} 首次启动`);
+  console.log(`数据目录：${context.workspace}`);
   await command(process.execPath, [
     path.join(context.root, "tooling/admin/admin-credentials.mjs"),
-    username
+    "--landing"
   ], {
     cwd: context.root,
     env: { ...process.env, SUNABOT_WORKSPACE: context.workspace },
@@ -943,7 +820,7 @@ async function startNapcatAccounts(context, accounts, reverseWebSocket, secrets)
   for (const account of accounts) {
     await configureNapcat(context, reverseWebSocket, secrets, account);
     await clearNapcatLoginQr(context, account);
-    await napcatCompose(context, account, ["up", "-d", "--build", context.contract.napcatService]);
+    await napcatCompose(context, account, napcatAccountUpArguments("start", context.contract.napcatService));
     await waitForNapcatAccountHealth(context, account.id, context.contract.napcatReadyTimeoutSeconds * 1_000);
     await writeAccountRuntimeState(
       path.join(context.workspace, "runtime/napcat/accounts", account.id),
@@ -976,10 +853,11 @@ async function reconcileAccount(context, accountId, forceRestart = false) {
 
   try {
     await assertDockerAvailable(context);
+    await assertNapcatImageAvailable(context);
     let observedState = plan.observedState;
     if (plan.desiredState === "running") {
       if (!account) throw new Error(`QQ 账号 ${accountId} 未注册。`);
-      if (!runtime.native.running && !runtime.dockerCore.running) {
+      if (!runtime.native.running) {
         throw new Error("Sunabot Core 未运行；请执行 ./sunabot.sh up。");
       }
       const source = await fs.readFile(context.runtimeEnv, "utf8");
@@ -990,9 +868,7 @@ async function reconcileAccount(context, accountId, forceRestart = false) {
       if (!secrets.ONEBOT_ACCESS_TOKEN || !secrets.WEBUI_TOKEN) {
         throw new Error("运行密钥缺失；请执行 ./sunabot.sh up 完成初始化。");
       }
-      const reverseWebSocket = runtime.native.running
-        ? runtime.state?.reverseWebSocket
-        : context.contract.dockerReverseWebSocket;
+      const reverseWebSocket = runtime.state?.reverseWebSocket;
       if (!reverseWebSocket) throw new Error("Native OneBot 地址尚未写入 launcher 状态；请执行 ./sunabot.sh up。");
 
       const changed = await configureNapcat(context, reverseWebSocket, secrets, account);
@@ -1140,6 +1016,7 @@ async function probeNativeOneBot(context) {
     "run",
     "--rm",
     "--no-deps",
+    "--pull", "never",
     "-e", `SUNABOT_PROBE_HOST=${advertised.hostname}`,
     "-e", `SUNABOT_PROBE_PORT=${context.contract.onebotPort}`,
     "-e", `SUNABOT_PROBE_PATH=${context.contract.onebotHealthPath}`,
@@ -1150,13 +1027,18 @@ async function probeNativeOneBot(context) {
   ], { capture: true, timeoutMs: 15_000 });
   const line = output.split(/\r?\n/).reverse()
     .find((value) => value.startsWith("SUNABOT_PROBE_SELECTED="));
-  if (!line) throw new Error("NapCat 容器无法访问 Native OneBot /healthz；请检查 Docker host-gateway。 ");
+  if (!line) {
+    throw runtimeError(
+      "ONEBOT_CONTAINER_PROBE_FAILED",
+      "NapCat 容器无法通过 host.docker.internal 或运行网络 gateway 访问 Native OneBot /healthz。"
+    );
+  }
   const host = line.slice("SUNABOT_PROBE_SELECTED=".length).trim();
   return reverseWebSocketWithHost(context.contract.nativeReverseWebSocket, host);
 }
 
 async function resolveNativeOnebotListenHost(context) {
-  if (context.contract.onebotHost !== "docker-network-gateway") return context.contract.onebotHost;
+  if (!isDynamicNativeOnebotHost(context.contract.onebotHost)) return context.contract.onebotHost;
   const network = `${context.project}-runtime`;
   const gateway = (await dockerCommand(context, [
     "network",
@@ -1165,10 +1047,48 @@ async function resolveNativeOnebotListenHost(context) {
     "--format",
     "{{(index .IPAM.Config 0).Gateway}}"
   ], { capture: true })).trim();
-  if (net.isIP(gateway) !== 4) {
-    throw new Error(`无法解析 ${network} 的 IPv4 gateway；拒绝把 OneBot 监听发布到所有宿主接口。`);
+  return selectNativeOnebotListenHost({
+    configuredHost: context.contract.onebotHost,
+    dockerGateway: gateway,
+    wsl: context.wsl,
+    networkInterfaces: os.networkInterfaces(),
+    network
+  });
+}
+
+export function selectNativeOnebotListenHost({
+  configuredHost,
+  dockerGateway,
+  wsl,
+  networkInterfaces,
+  network = "NapCat runtime network"
+}) {
+  if (!isDynamicNativeOnebotHost(configuredHost)) return configuredHost;
+  if (net.isIP(dockerGateway) !== 4) {
+    throw runtimeError(
+      "ONEBOT_DOCKER_GATEWAY_INVALID",
+      `无法解析 ${network} 的 IPv4 gateway；拒绝扩大 OneBot 监听范围。`
+    );
   }
-  return gateway;
+  const localAddresses = Object.values(networkInterfaces ?? {})
+    .flatMap((entries) => entries ?? [])
+    .filter((entry) => entry.family === "IPv4" || entry.family === 4)
+    .map((entry) => entry.address);
+  if (localAddresses.includes(dockerGateway)) return dockerGateway;
+  if (wsl && configuredHost === "docker-network-gateway-or-loopback") return "127.0.0.1";
+  throw runtimeError(
+    "ONEBOT_DOCKER_GATEWAY_NOT_LOCAL",
+    `${network} gateway ${dockerGateway} 不属于 Native Core 网络命名空间；拒绝绑定不可用地址或公开 8788。`
+  );
+}
+
+function isDynamicNativeOnebotHost(host) {
+  return host === "docker-network-gateway"
+    || host === "docker-network-gateway-or-loopback";
+}
+
+function defaultNativeOnebotHealthHost(host) {
+  return isDynamicNativeOnebotHost(host) ? "127.0.0.1" : host;
 }
 
 async function ensureRuntimeNetwork(context) {
@@ -1227,35 +1147,6 @@ async function loadRegisteredAccountIds(context) {
   }
 }
 
-async function prepareWslDockerProxy(context) {
-  if (!context.wsl || context.mode !== "docker") return;
-  const proxy = await resolveProxyConfiguration({
-    env: nativeProcessEnvironment(context),
-    platform: "linux"
-  });
-  if (proxy.source !== "wsl-host" || !proxy.httpProxy) return;
-  context.composeOverrides.SUNABOT_PROXY_MODE = "env";
-  context.composeOverrides.SUNABOT_PROXY_DISCOVERED_URL = proxy.httpProxy;
-}
-
-async function waitForComponentHealth(context, component, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  let lastStatus = "missing";
-  while (Date.now() < deadline) {
-    const containers = await labeledContainers(context);
-    const match = containers.find((item) => item.component === component);
-    if (match) {
-      lastStatus = await componentHealthStatus(context, match.id).catch(() => "inspect-error");
-      if (lastStatus === "healthy") return;
-      if (["unhealthy", "exited", "dead"].includes(lastStatus)) {
-        throw new Error(`${component} 容器健康检查失败：${lastStatus}`);
-      }
-    }
-    await delay(250);
-  }
-  throw new Error(`${component} 容器健康检查超时：${lastStatus}`);
-}
-
 async function waitForNapcatAccountHealth(context, accountId, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastStatus = "missing";
@@ -1284,65 +1175,6 @@ async function componentHealthStatus(context, containerId) {
   return output.trim().toLowerCase();
 }
 
-async function assertDockerCoreBwrap(context) {
-  const containers = await labeledContainers(context);
-  const core = containers.find((item) => item.component === "core" && item.state === "running");
-  if (!core) throw new Error("Docker Core 未运行，无法执行 bubblewrap namespace probe。");
-  try {
-    await dockerCommand(context, [
-      "exec",
-      core.id,
-      "/usr/bin/bwrap",
-      ...bubblewrapProbeArguments("/srv/sunabot/workspace", true)
-    ], { capture: true });
-  } catch (error) {
-    const detail = message(error);
-    if (process.platform === "darwin" && process.arch === "arm64" && /invalid argument|EINVAL/i.test(detail)) {
-      throw new Error("Apple Silicon Docker 的 linux/amd64 模拟内核拒绝 bubblewrap user namespace（EINVAL）；当前环境不能安全启用 workspace_bash。");
-    }
-    throw error;
-  }
-}
-
-async function assertDockerCoreCodex(context) {
-  const codex = await inspectDockerCodex(context);
-  if (!codex.cli.ok) throw new Error(`Docker Codex CLI 不可用：${codex.cli.detail}`);
-}
-
-async function inspectDockerCodex(context) {
-  const containers = await labeledContainers(context);
-  const core = containers.find((item) => item.component === "core" && item.state === "running");
-  if (!core) {
-    const detail = "Docker Core 未运行。";
-    return { cli: { ok: false, detail }, auth: { ok: false, detail } };
-  }
-  const executable = context.contract.codexCli.executable;
-  let version;
-  try {
-    version = (await dockerCommand(context, ["exec", core.id, executable, "--version"], { capture: true })).trim();
-  } catch (error) {
-    const detail = message(error);
-    return { cli: { ok: false, detail }, auth: { ok: false, detail: "Codex CLI 不可用。" } };
-  }
-  const cli = codexVersionCheck(context, version, executable);
-  if (!cli.ok) return { cli, auth: { ok: false, detail: "Codex CLI 版本不匹配。" } };
-
-  const workspace = context.contract.paths.workspace ?? "/srv/sunabot/workspace";
-  const codexHome = path.posix.join(workspace, path.posix.dirname(context.contract.codexCli.authFile));
-  try {
-    await dockerCommand(context, [
-      "exec",
-      "--env", `CODEX_HOME=${codexHome}`,
-      core.id,
-      executable,
-      "login", "status"
-    ], { capture: true });
-    return { cli, auth: { ok: true, detail: codexHome } };
-  } catch (error) {
-    return { cli, auth: { ok: false, detail: message(error) } };
-  }
-}
-
 export function bubblewrapProbeArguments(workspace, networkAccess = false) {
   const args = [
     "--die-with-parent",
@@ -1365,6 +1197,11 @@ export function bubblewrapProbeArguments(workspace, networkAccess = false) {
   ];
   if (!networkAccess) args.splice(args.indexOf("--unshare-cgroup-try"), 0, "--unshare-net");
   return args;
+}
+
+export function bubblewrapExecutable(context) {
+  const bundled = path.join(context.root, "runtime/bubblewrap/bwrap");
+  return context.packaged ? bundled : "/usr/bin/bwrap";
 }
 
 async function startNativeCore(context, onebotListenHost, rendererToken) {
@@ -1571,9 +1408,7 @@ async function inspectRuntime(context, options = {}) {
     listNativeCoreProcessGroups({ root: context.root, workspace: context.workspace }),
     listNativeWebfetchRendererProcessGroups({ workspaceId: context.identity })
   ]);
-  const dockerCore = componentStatus(containers, "core");
   const napcat = componentStatus(containers, "napcat");
-  const webfetchRenderer = componentStatus(containers, "webfetch-renderer");
   const foreignProjects = [...new Set(containers
     .map((item) => item.project)
     .filter((project) => project && project !== context.project && !project.startsWith(`${context.project}-napcat-`)))];
@@ -1585,9 +1420,7 @@ async function inspectRuntime(context, options = {}) {
     reconciler,
     containers,
     legacyContainers,
-    dockerCore,
     napcat,
-    webfetchRenderer,
     foreignProjects
   };
 }
@@ -1709,10 +1542,7 @@ async function labeledContainers(context, options = {}) {
     '{{.Label "com.docker.compose.oneoff"}}',
     '{{.Names}}',
     '{{.Label "io.sunabot.runtime-id"}}',
-    '{{.Label "io.sunabot.workspace-id"}}',
-    '{{.Label "io.sunabot.owner-id"}}',
-    '{{.Label "io.sunabot.invocation-id"}}',
-    '{{.Label "io.sunabot.expires-at-ms"}}'
+    '{{.Label "io.sunabot.workspace-id"}}'
   ].join("\t");
   const output = await dockerCommand(context, [
     "ps", "-a",
@@ -1722,7 +1552,7 @@ async function labeledContainers(context, options = {}) {
   return output.split(/\r?\n/).filter(Boolean).map((line) => {
     const [
       id, component, state, project, accountId, oneoff,
-      name, runtimeId, workspaceId, ownerId, invocationId, expiresAtRaw
+      name, runtimeId, workspaceId
     ] = line.split("\t");
     const item = {
       id,
@@ -1733,71 +1563,10 @@ async function labeledContainers(context, options = {}) {
       oneoff,
       name,
       runtimeId,
-      workspaceId,
-      ownerId,
-      invocationId,
-      expiresAtRaw
+      workspaceId
     };
-    if (component === "workspace-bash") {
-      validateWorkspaceBashContainerOwnership(item, {
-        identity: context.identity,
-        runtimeId: context.contract.runtimeId
-      });
-    }
     return item;
   }).filter((item) => options.includeOneoffs === true || item.oneoff?.toLowerCase() !== "true");
-}
-
-export function validateWorkspaceBashContainerOwnership(container, deployment) {
-  const expiresAtMs = Number(container.expiresAtRaw);
-  const expectedName = Boolean(container.invocationId && (
-    container.name === `sunabot-bash-${container.invocationId}`
-    || container.name === `sunabot-bash-probe-${container.invocationId}`
-  ));
-  if (
-    !/^[a-f0-9]{12,64}$/u.test(container.id ?? "")
-    || container.runtimeId !== deployment.runtimeId
-    || container.workspaceId !== deployment.identity
-    || container.component !== "workspace-bash"
-    || !/^[a-f0-9]{32}$/u.test(container.ownerId ?? "")
-    || !/^[a-f0-9]{32}$/u.test(container.invocationId ?? "")
-    || !expectedName
-    || !Number.isSafeInteger(expiresAtMs)
-    || expiresAtMs <= 0
-  ) {
-    throw runtimeError(
-      "DOCKER_BASH_OWNERSHIP_INVALID",
-      `容器 ${container.id || "unknown"} 的 Bash 归属标签不完整；未删除。`
-    );
-  }
-}
-
-async function removeWorkspaceContainers(context) {
-  let containers = await labeledContainers(context, { includeOneoffs: true });
-  if (containers.length === 0) return;
-  const ids = containers.map((item) => item.id);
-  await dockerCommand(context, [
-    "stop",
-    "--timeout", String(context.contract.shutdownTimeoutSeconds),
-    ...ids
-  ], { timeoutMs: (context.contract.shutdownTimeoutSeconds + 5) * 1_000 }).catch(() => {});
-  containers = await labeledContainers(context, { includeOneoffs: true });
-  const running = containers.filter((item) => item.state === "running");
-  if (running.length > 0) {
-    throw runtimeError(
-      "DOCKER_CONTAINER_STOP_FAILED",
-      `当前 workspace 的容器未停止：${running.map((item) => item.id).join(", ")}。`
-    );
-  }
-  if (containers.length === 0) return;
-  await dockerCommand(context, ["rm", ...containers.map((item) => item.id)]).catch(() => {});
-  const survivors = await labeledContainers(context, { includeOneoffs: true });
-  if (survivors.length > 0) {
-    throw runtimeError(
-      "DOCKER_CONTAINER_REMOVE_FAILED",
-      `当前 workspace 的容器未移除：${survivors.map((item) => item.id).join(", ")}。`
-    );
-  }
 }
 
 async function runtimeNetworkWorkspaceId(context) {
@@ -1860,14 +1629,10 @@ async function assertComposeServices(context) {
   if (!(await exists(context.contract.composeFile))) {
     throw new Error(`Compose 文件不存在：${context.contract.composeFile}`);
   }
-  const output = await compose(context, ["--profile", context.contract.coreProfile, "config", "--services"], { capture: true });
+  const output = await compose(context, ["config", "--services"], { capture: true });
   const services = new Set(output.split(/\r?\n/).map((value) => value.trim()).filter(Boolean));
-  for (const expected of [
-    context.contract.coreService,
-    context.contract.napcatService,
-    context.contract.webfetchRendererService
-  ]) {
-    if (!services.has(expected)) throw new Error(`Compose 缺少 ${expected} service。`);
+  if (services.size !== 1 || !services.has(context.contract.napcatService)) {
+    throw new Error("NapCat Compose 只能声明 napcat service。");
   }
 }
 
@@ -1884,6 +1649,7 @@ async function napcatCompose(context, account, args, options = {}) {
   const project = `${context.project}-napcat-${account.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`;
   return command("docker", composeArgs(context, args, project), {
     capture: options.capture,
+    timeoutMs: options.timeoutMs,
     cwd: context.root,
     env: {
       ...composeEnvironment(context, project),
@@ -1891,14 +1657,6 @@ async function napcatCompose(context, account, args, options = {}) {
       NAPCAT_ACCOUNT: account.qqId ?? "",
       NAPCAT_WEBUI_PORT: String(account.webuiPort)
     }
-  });
-}
-
-function spawnCompose(context, args) {
-  return spawn("docker", composeArgs(context, args), {
-    cwd: context.root,
-    env: composeEnvironment(context),
-    stdio: "inherit"
   });
 }
 
@@ -1920,22 +1678,16 @@ function composeEnvironment(context, project = context.project) {
     ...context.composeOverrides,
     COMPOSE_PROJECT_NAME: project,
     SUNABOT_COMPOSE_PROJECT: project,
-    SUNABOT_DOCKER_NETWORK: `${context.project}-runtime`,
+    NAPCAT_IMAGE: context.contract.napcatImage,
+    SUNABOT_NAPCAT_NETWORK: `${context.project}-runtime`,
     SUNABOT_RUNTIME_ID: context.contract.runtimeId,
     SUNABOT_RUNTIME_UID: String(process.getuid?.() ?? 1000),
     SUNABOT_RUNTIME_GID: String(process.getgid?.() ?? 1000),
-    SUNABOT_WEBFETCH_PLATFORM: webfetchRendererPlatform(),
-    SUNABOT_CORE_PLATFORM:
-      process.platform === "darwin" && process.arch === "arm64" ? "linux/arm64" : "linux/amd64",
-    SUNABOT_WEBFETCH_CHROMIUM_SANDBOX: "1",
+    SUNABOT_PROJECT_ROOT: context.root,
     SUNABOT_WORKSPACE: context.workspace,
     SUNABOT_WORKSPACE_ID: context.identity,
     SUNABOT_RUNTIME_ENV: context.runtimeEnv
   };
-}
-
-function webfetchRendererPlatform(platform = process.platform, architecture = process.arch) {
-  return platform === "darwin" && architecture === "arm64" ? "linux/arm64" : "linux/amd64";
 }
 
 function nativeProcessEnvironment(context) {
@@ -1962,15 +1714,13 @@ export function nativeCoreEnvironment(
     SUNABOT_PORT: String(context.contract.adminPort),
     SUNABOT_ONEBOT_HOST: onebotListenHost,
     SUNABOT_ONEBOT_PORT: String(context.contract.onebotPort),
+    SUNABOT_BWRAP_EXECUTABLE: bubblewrapExecutable(context),
+    SUNABOT_PACKAGED_RELEASE: context.packaged ? "1" : "0",
     SUNABOT_WEBFETCH_RENDERER_URL: `http://127.0.0.1:${context.contract.webfetchRendererPort}`
   };
   if (rendererTokenFd) environment.SUNABOT_WEBFETCH_RENDERER_TOKEN_FD = "3";
   else delete environment.SUNABOT_WEBFETCH_RENDERER_TOKEN_FD;
-  if (platform === "darwin" && context.dockerSocket) {
-    environment.SUNABOT_DOCKER_SOCKET = context.dockerSocket;
-  } else {
-    delete environment.SUNABOT_DOCKER_SOCKET;
-  }
+  delete environment.SUNABOT_DOCKER_SOCKET;
   return environment;
 }
 
@@ -1986,43 +1736,41 @@ async function readRuntimeEnvironment(filePath) {
 async function ensureNativeDependencies(context) {
   const marker = path.join(context.root, "node_modules/.package-lock.json");
   const lock = path.join(context.root, "package-lock.json");
-  if (!(await exists(marker)) || await newerThan(lock, marker)) {
+  if (context.packaged) {
+    if (!await exists(marker)) throw new Error("RELEASE_DEPENDENCIES_MISSING");
+  } else if (!(await exists(marker)) || await newerThan(lock, marker)) {
     await command("npm", ["ci"], { cwd: context.root, timeoutMs: BUILD_COMMAND_TIMEOUT_MS });
   }
   const capabilities = await inspectNativeCapabilities(context);
   if (!capabilities.codexCli.ok) throw new Error(`Native Codex CLI 不可用：${capabilities.codexCli.detail}`);
+  if (process.platform === "linux" && !capabilities.workspaceBash.ok) {
+    throw runtimeError(
+      capabilities.workspaceBash.code ?? "BUBBLEWRAP_NAMESPACE_UNAVAILABLE",
+      `Bubblewrap namespace 隔离不可用：${capabilities.workspaceBash.detail}`
+    );
+  }
 }
 
 async function inspectNativeCapabilities(context) {
   const codex = await inspectNativeCodex(context);
   let workspaceBash;
-  if (process.platform !== "linux") context.dockerSocket = undefined;
   try {
     if (process.platform === "linux") {
-      await command("/usr/bin/bwrap", bubblewrapProbeArguments(context.workspace, true), { capture: true });
+      await command(bubblewrapExecutable(context), bubblewrapProbeArguments(context.workspace, true), { capture: true });
       workspaceBash = { ok: true, detail: "bubblewrap namespace probe passed" };
+    } else if (process.platform === "darwin") {
+      await fs.access("/bin/bash", fs.constants.X_OK);
+      workspaceBash = { ok: true, detail: "approved administrator host Bash available" };
     } else {
-      context.dockerSocket = await resolveEffectiveDockerSocket(
-        nativeProcessEnvironment(context),
-        (executable, args, options) => command(executable, args, options)
-      );
-      const image = context.runtimeEnvironment.SUNABOT_BASH_IMAGE || "sunabot-bash:local";
-      await dockerCommand(context, [
-        "run", "--rm", "--pull", "never", "--network", "bridge", "--read-only",
-        "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-        "--pids-limit", "64", "--memory", "512m", "--cpus", "1",
-        "--entrypoint", "/usr/bin/env", image, "-i",
-        "PATH=/usr/local/bin:/usr/bin:/bin", "/bin/bash", "--noprofile", "--norc", "-ec", ":"
-      ], { capture: true });
-      workspaceBash = { ok: true, detail: "Docker Bash isolation probe passed" };
+      throw new Error(`unsupported platform ${process.platform}`);
     }
   } catch (error) {
     workspaceBash = {
       ok: false,
-      code: process.platform === "linux" ? "BUBBLEWRAP_UNAVAILABLE" : "DOCKER_BASH_UNAVAILABLE",
+      code: process.platform === "linux" ? "BUBBLEWRAP_NAMESPACE_UNAVAILABLE" : "HOST_BASH_UNAVAILABLE",
       action: process.platform === "linux"
-        ? "安装 bubblewrap 并通过 namespace probe"
-        : "启动当前 Docker Engine 并准备 sunabot-bash 镜像",
+        ? "确认包内 Bubblewrap 运行库完整且内核允许 user namespace"
+        : "确认 /bin/bash 可执行",
       detail: message(error)
     };
   }
@@ -2033,70 +1781,9 @@ async function inspectNativeCapabilities(context) {
   };
 }
 
-export async function resolveEffectiveDockerSocket(environment = process.env, runCommand = command) {
-  const dockerContext = environment.DOCKER_CONTEXT?.trim();
-  const dockerHost = environment.DOCKER_HOST?.trim();
-  let host;
-  if (dockerContext) {
-    host = await inspectDockerContextHost(dockerContext, environment, runCommand);
-  } else if (dockerHost) {
-    host = dockerHost;
-  } else {
-    host = await inspectDockerContextHost(undefined, environment, runCommand);
-  }
-  return dockerSocketPath(host);
-}
-
-async function inspectDockerContextHost(contextName, environment, runCommand) {
-  const args = [
-    "context", "inspect",
-    "--format", DOCKER_CONTEXT_HOST_FORMAT,
-    ...(contextName ? [contextName] : [])
-  ];
-  return (await runCommand("docker", args, {
-    capture: true,
-    timeoutMs: DOCKER_CONTROL_TIMEOUT_MS,
-    env: environment
-  })).trim();
-}
-
-function dockerSocketPath(host) {
-  let parsed;
-  try {
-    parsed = new URL(host);
-  } catch {
-    throw runtimeError("DOCKER_BASH_ENDPOINT_UNSUPPORTED", "Docker endpoint 不是有效的 unix:// 地址。");
-  }
-  if (
-    parsed.protocol !== "unix:"
-    || parsed.hostname
-    || parsed.username
-    || parsed.password
-    || parsed.port
-    || parsed.search
-    || parsed.hash
-  ) {
-    throw runtimeError("DOCKER_BASH_ENDPOINT_UNSUPPORTED", "macOS Native Bash 只支持本机 unix:// Docker endpoint。");
-  }
-  let socketPath;
-  try {
-    socketPath = decodeURIComponent(parsed.pathname);
-  } catch {
-    throw runtimeError("DOCKER_BASH_ENDPOINT_UNSUPPORTED", "Docker Unix socket 路径编码无效。");
-  }
-  if (
-    !path.isAbsolute(socketPath)
-    || socketPath.includes("\0")
-    || socketPath.includes("\n")
-    || socketPath.includes("\r")
-  ) {
-    throw runtimeError("DOCKER_BASH_ENDPOINT_UNSUPPORTED", "Docker Unix socket 必须是绝对路径。");
-  }
-  return path.resolve(socketPath);
-}
-
 async function inspectNativeCodex(context) {
-  const executable = context.runtimeEnvironment.SUNABOT_CODEX_EXECUTABLE?.trim() || "codex";
+  const configured = context.runtimeEnvironment.SUNABOT_CODEX_EXECUTABLE?.trim();
+  const executable = configured || path.resolve(context.root, context.contract.codexCli.executable);
   const codexHome = path.join(context.workspace, path.dirname(context.contract.codexCli.authFile));
   const environment = { ...nativeProcessEnvironment(context), CODEX_HOME: codexHome };
   let version;
@@ -2136,6 +1823,10 @@ function assertNonRootRuntimeUser() {
 async function ensureNativeBuild(context) {
   const outputs = [context.apiEntry, context.webEntry];
   const present = await Promise.all(outputs.map(exists));
+  if (context.packaged) {
+    if (present.some((value) => !value)) throw new Error("RELEASE_BUILD_OUTPUT_MISSING");
+    return;
+  }
   if (present.some((value) => !value) || await sourcesNewerThan(context.root, outputs)) {
     await command("npm", ["run", "build"], { cwd: context.root, timeoutMs: BUILD_COMMAND_TIMEOUT_MS });
   }
@@ -2313,7 +2004,7 @@ function tcpOpen(host, port) {
 
 async function waitForRuntimePortsClosed(context, state) {
   const onebotHost = state?.onebotListenHost
-    ?? (context.contract.onebotHost === "docker-network-gateway" ? "127.0.0.1" : context.contract.onebotHost);
+    ?? defaultNativeOnebotHealthHost(context.contract.onebotHost);
   const endpoints = [
     { name: "管理 API", host: "127.0.0.1", port: context.contract.adminPort },
     { name: "OneBot", host: onebotHost, port: context.contract.onebotPort }
@@ -2338,11 +2029,7 @@ async function waitForRuntimePortsClosed(context, state) {
 
 async function assertDockerAvailable(context) {
   if (await dockerAvailable(context)) return;
-  const runCommand = (executable, args, options = {}) => command(executable, args, {
-    ...options,
-    env: options.env ?? nativeProcessEnvironment(context)
-  });
-  throw new Error(await resolveDockerUnavailableMessage({ runCommand }));
+  throw new Error("NAPCAT_DOCKER_UNAVAILABLE：NapCat 需要本机 Docker Engine 与 Compose 插件。");
 }
 
 async function dockerAvailable(context) {

@@ -10,7 +10,8 @@ import {
 } from "../../adapters/mcp/sandboxProjection.js";
 import {
   BubblewrapMcpStdioLauncher,
-  buildMcpBubblewrapInvocation
+  buildMcpBubblewrapInvocation,
+  resolveMcpBubblewrapExecutable
 } from "../../adapters/mcp/stdioSandboxLauncher.js";
 import { createMcpStdioLaunchProjection } from "../../adapters/mcp/stdioLaunchProjection.js";
 import { AgentExtensionService } from "../../services/extensions/public.js";
@@ -20,6 +21,22 @@ import { testTempRoot } from "./test-temp-root.js";
 const temporaryPaths: string[] = [];
 let workspace = "";
 const testDataRoot = testTempRoot("mcp-sandbox-projection");
+
+describe("MCP Bubblewrap executable", () => {
+  it("requires launcher injection for packaged runtimes and allows the source default", () => {
+    expect(resolveMcpBubblewrapExecutable({
+      SUNABOT_BWRAP_EXECUTABLE: "/opt/sunabot/current/runtime/bubblewrap/bwrap",
+      SUNABOT_PACKAGED_RELEASE: "1"
+    })).toBe("/opt/sunabot/current/runtime/bubblewrap/bwrap");
+    expect(resolveMcpBubblewrapExecutable({})).toBe("/usr/bin/bwrap");
+    expect(() => resolveMcpBubblewrapExecutable({ SUNABOT_PACKAGED_RELEASE: "1" }))
+      .toThrow("MCP_STDIO_ISOLATION_UNAVAILABLE");
+    expect(() => resolveMcpBubblewrapExecutable({
+      SUNABOT_BWRAP_EXECUTABLE: "../bwrap",
+      SUNABOT_PACKAGED_RELEASE: "1"
+    })).toThrow("MCP_STDIO_ISOLATION_UNAVAILABLE");
+  });
+});
 
 beforeEach(async () => {
   await makeTestTreeWritable(testDataRoot);

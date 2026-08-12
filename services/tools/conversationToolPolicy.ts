@@ -4,8 +4,8 @@ import { ADD_USER_PROFILE_TOOL_NAME } from "./addUserProfileTool.js";
 
 export function normalizeConversationDisabledTools(value: unknown): AgentToolName[] {
   if (!Array.isArray(value)) return [];
-  const normalized = value.flatMap((name) => name === "workspace_bash"
-    ? ["native_bash", "docker_bash"]
+  const normalized = value.flatMap((name) => name === "workspace_bash" || name === "docker_bash"
+    ? ["native_bash"]
     : [name]);
   return [...new Set(normalized.filter((name): name is AgentToolName => (
     typeof name === "string"

@@ -12,7 +12,7 @@ import {
 import {
   StrongIsolatedAgentSkillScriptSandbox,
   buildSkillScriptBubblewrapInvocation,
-  buildSkillScriptDockerInvocation,
+  resolveAgentSkillScriptBubblewrapExecutable,
   type AgentSkillScriptSandboxInput,
   type SkillScriptChild,
   type SkillScriptSpawn
@@ -22,7 +22,6 @@ import { testTempRoot } from "./test-temp-root.js";
 const digest = "a".repeat(64);
 const source = "#!/bin/bash\nprintf '%s\\n' \"$1\"\n";
 const resourceSha = createHash("sha256").update(source).digest("hex");
-const image = `sha256:${"d".repeat(64)}`;
 const TEST_ROOT = testTempRoot("skill-script-sandbox");
 let runRoot = "";
 let sandboxInput: AgentSkillScriptSandboxInput;
@@ -46,6 +45,20 @@ afterEach(async () => {
 });
 
 describe("Skill script sandbox", () => {
+  it("requires launcher injection for packaged runtimes and allows the source default", () => {
+    expect(resolveAgentSkillScriptBubblewrapExecutable({
+      SUNABOT_BWRAP_EXECUTABLE: "/opt/sunabot/current/runtime/bubblewrap/bwrap",
+      SUNABOT_PACKAGED_RELEASE: "1"
+    })).toBe("/opt/sunabot/current/runtime/bubblewrap/bwrap");
+    expect(resolveAgentSkillScriptBubblewrapExecutable({})).toBe("/usr/bin/bwrap");
+    expect(() => resolveAgentSkillScriptBubblewrapExecutable({ SUNABOT_PACKAGED_RELEASE: "1" }))
+      .toThrow("SKILL_SCRIPT_ISOLATION_UNAVAILABLE");
+    expect(() => resolveAgentSkillScriptBubblewrapExecutable({
+      SUNABOT_BWRAP_EXECUTABLE: "/opt/bwrap\rforged",
+      SUNABOT_PACKAGED_RELEASE: "1"
+    })).toThrow("SKILL_SCRIPT_ISOLATION_UNAVAILABLE");
+  });
+
   it("builds a fixed no-network bubblewrap invocation with workbench and skills read-only", () => {
     const invocation = buildSkillScriptBubblewrapInvocation(input(), {
       platform: "linux",
@@ -67,35 +80,6 @@ describe("Skill script sandbox", () => {
       .toThrow("SKILL_SCRIPT_ISOLATION_UNAVAILABLE");
   });
 
-  it("builds an immutable short-lived Docker invocation without network, socket, or inherited environment", () => {
-    const invocation = buildSkillScriptDockerInvocation(input(), {
-      dockerExecutable: "/fixture/docker",
-      image,
-      uid: 1_000,
-      gid: 1_001,
-      containerName: `sunabot-skill-script-${"e".repeat(32)}`,
-      dockerEnvironment: { DOCKER_HOST: "unix:///fixture/docker.sock" }
-    });
-    expect(invocation.kind).toBe("docker");
-    expect(invocation.env).toEqual({ DOCKER_HOST: "unix:///fixture/docker.sock" });
-    expect(invocation.args).toEqual(expect.arrayContaining([
-      "run", "--rm", "--pull", "never", "--network", "none", "--read-only",
-      "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-      "--mount", `type=bind,src=${input().projection.workbench},dst=/workbench,readonly`,
-      "--mount", `type=bind,src=${input().projection.skills},dst=/skills,readonly`,
-      "--entrypoint", "/usr/local/libexec/sunabot-skill-script-entrypoint", image,
-      "--digest", digest, "--resource-sha256", resourceSha,
-      "--audit", input().auditFingerprintSha256
-    ]));
-    expect(invocation.args).not.toContain("--env");
-    expect(invocation.args.join(" ")).not.toContain("docker.sock,dst");
-    expect(invocation.args.join(" ")).not.toContain("MCP_TOKEN");
-    expect(invocation.cleanup?.args).toEqual(["rm", "-f", `sunabot-skill-script-${"e".repeat(32)}`]);
-    expect(() => buildSkillScriptDockerInvocation(input(), {
-      image: "sunabot-skill-script:latest", uid: 1_000, gid: 1_000
-    })).toThrow("SKILL_SCRIPT_ISOLATION_UNAVAILABLE");
-  });
-
   it("drains one large execution, truncates to the caller budget, and preserves its success", async () => {
     const runInput = await createInput("large-output");
     const child = new FakeChild();
@@ -107,7 +91,7 @@ describe("Skill script sandbox", () => {
       });
       return child;
     };
-    const sandbox = dockerSandbox({ spawnProcess });
+    const sandbox = bubblewrapSandbox({ spawnProcess });
     const result = await sandbox.run({ ...runInput, outputBudgetBytes: 4_096 });
     expect(result).toMatchObject({ ok: true, exitCode: 0 });
     expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(4_096);
@@ -126,71 +110,48 @@ describe("Skill script sandbox", () => {
       });
       return child;
     });
-    const result = await dockerSandbox({ spawnProcess }).run({ ...runInput, outputBudgetBytes: 512 });
+    const result = await bubblewrapSandbox({ spawnProcess }).run({ ...runInput, outputBudgetBytes: 512 });
     expect(result).toMatchObject({ ok: false, exitCode: 7, stdoutTruncated: true });
     expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(512);
     expect(spawnProcess).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the exact container cleanup on abort and surfaces cleanup failure", async () => {
+  it("terminates the isolated process group on abort", async () => {
     const abortInput = await createInput("abort");
     const controller = new AbortController();
     const child = new FakeChild();
-    const cleanup = vi.fn(async () => undefined);
-    const sandbox = dockerSandbox({
+    const sandbox = bubblewrapSandbox({
       spawnProcess: () => {
         queueMicrotask(() => controller.abort());
         return child;
-      },
-      cleanupRunner: cleanup
+      }
     });
     await expect(sandbox.run({ ...abortInput, signal: controller.signal })).rejects.toThrow("SKILL_SCRIPT_ABORTED");
     expect(child.kills).toEqual(["SIGKILL"]);
-    expect(cleanup).toHaveBeenCalledWith(expect.objectContaining({
-      args: ["rm", "-f", `sunabot-skill-script-${"e".repeat(32)}`]
-    }));
-
-    const failedAbortInput = await createInput("abort-cleanup-failure");
-    const failedChild = new FakeChild();
-    const failed = dockerSandbox({
-      spawnProcess: () => {
-        queueMicrotask(() => controller2.abort());
-        return failedChild;
-      },
-      cleanupRunner: async () => { throw new Error("cleanup failed /host/path"); }
-    });
-    const controller2 = new AbortController();
-    await expect(failed.run({ ...failedAbortInput, signal: controller2.signal }))
-      .rejects.toThrow("SKILL_SCRIPT_CLEANUP_FAILED");
   });
 
-  it("uses the exact container cleanup on timeout and process error", async () => {
+  it("terminates on timeout and surfaces process errors", async () => {
     const timeoutInput = await createInput("timeout");
     const timedOutChild = new FakeChild();
-    const timeoutCleanup = vi.fn(async () => undefined);
-    const timedOut = dockerSandbox({ spawnProcess: () => timedOutChild, cleanupRunner: timeoutCleanup });
+    const timedOut = bubblewrapSandbox({ spawnProcess: () => timedOutChild });
     await expect(timedOut.run({ ...timeoutInput, timeoutMs: 1 })).rejects.toThrow("SKILL_SCRIPT_TIMEOUT");
     expect(timedOutChild.kills).toEqual(["SIGKILL"]);
-    expect(timeoutCleanup).toHaveBeenCalledTimes(1);
 
     const processErrorInput = await createInput("process-error");
     const errorChild = new FakeChild();
-    const errorCleanup = vi.fn(async () => undefined);
-    const failed = dockerSandbox({
+    const failed = bubblewrapSandbox({
       spawnProcess: () => {
         queueMicrotask(() => errorChild.emit("error", new Error("host /private/path")));
         return errorChild;
-      },
-      cleanupRunner: errorCleanup
+      }
     });
     await expect(failed.run(processErrorInput)).rejects.toThrow("SKILL_SCRIPT_PROCESS_ERROR");
-    expect(errorCleanup).toHaveBeenCalledTimes(1);
   });
 
   it("recomputes the deterministic preflight inside the sandbox and never spawns a forged decision", async () => {
     const forgedInput = await createInput("forged-preflight");
     const spawnProcess = vi.fn<SkillScriptSpawn>();
-    const sandbox = dockerSandbox({ spawnProcess });
+    const sandbox = bubblewrapSandbox({ spawnProcess });
     await expect(sandbox.run({ ...forgedInput, preflightFingerprintSha256: "f".repeat(64) }))
       .rejects.toThrow("SKILL_SCRIPT_AUDIT_MISMATCH");
     expect(spawnProcess).not.toHaveBeenCalled();
@@ -208,7 +169,7 @@ describe("Skill script sandbox", () => {
     const spawnProcess = vi.fn<SkillScriptSpawn>();
     const root = runInput.projection.root;
     const moved = `${root}.moved`;
-    const sandbox = dockerSandbox({
+    const sandbox = bubblewrapSandbox({
       spawnProcess,
       beforeSpawn: async () => {
         await fs.rename(root, moved);
@@ -222,7 +183,7 @@ describe("Skill script sandbox", () => {
   it("decodes across chunks with fatal UTF-8 and removes controls and host paths", async () => {
     const runInput = await createInput("decode-output");
     const child = new FakeChild();
-    const sandbox = dockerSandbox({
+    const sandbox = bubblewrapSandbox({
       spawnProcess: () => {
         queueMicrotask(() => {
           child.stdout.emit("data", Buffer.from([0xe4, 0xb8]));
@@ -248,7 +209,7 @@ describe("Skill script sandbox", () => {
   it("rejects an output budget that cannot encode the result before projection or spawn", async () => {
     const runInput = await createInput("invalid-budget");
     const spawnProcess = vi.fn<SkillScriptSpawn>();
-    const sandbox = dockerSandbox({ spawnProcess });
+    const sandbox = bubblewrapSandbox({ spawnProcess });
     await expect(sandbox.run({ ...runInput, outputBudgetBytes: 1 }))
       .rejects.toThrow("SKILL_SCRIPT_LIMIT_INVALID");
     expect(spawnProcess).not.toHaveBeenCalled();
@@ -258,12 +219,11 @@ describe("Skill script sandbox", () => {
     const runInput = await createInput("root-runtime");
     const spawnProcess = vi.fn<SkillScriptSpawn>();
     const sandbox = new StrongIsolatedAgentSkillScriptSandbox({
-      backend: "docker",
-      platform: "darwin",
-      dockerExecutable: "/usr/bin/true",
-      dockerImage: image,
+      backend: "bubblewrap",
+      platform: "linux",
+      bwrapExecutable: "/usr/bin/true",
+      prlimitExecutable: "/usr/bin/true",
       effectiveUid: 0,
-      effectiveGid: 0,
       spawnProcess
     });
     await expect(sandbox.run(runInput)).rejects.toThrow("SKILL_SCRIPT_ISOLATION_UNAVAILABLE");
@@ -274,12 +234,11 @@ describe("Skill script sandbox", () => {
     const runInput = await createInput("hanging-abort");
     const controller = new AbortController();
     const child = new HangingChild();
-    const sandbox = dockerSandbox({
+    const sandbox = bubblewrapSandbox({
       spawnProcess: () => {
         queueMicrotask(() => controller.abort());
         return child;
       },
-      cleanupRunner: async () => undefined,
       cleanupTimeoutMs: 5
     });
     await expect(sandbox.run({ ...runInput, signal: controller.signal }))
@@ -392,23 +351,25 @@ async function createInput(suffix = "default"): Promise<AgentSkillScriptSandboxI
   };
 }
 
-function dockerSandbox(options: {
+function bubblewrapSandbox(options: {
   spawnProcess: SkillScriptSpawn;
-  cleanupRunner?: (input: { file: string; args: readonly string[]; env: Readonly<Record<string, string>>; timeoutMs: number }) => Promise<void>;
   cleanupTimeoutMs?: number;
   beforeSpawn?: () => Promise<void> | void;
 }) {
+  let child: SkillScriptChild | undefined;
   return new StrongIsolatedAgentSkillScriptSandbox({
-    backend: "docker",
-    platform: "darwin",
-    dockerExecutable: "/usr/bin/true",
-    dockerImage: image,
-    dockerEnvironment: {},
+    backend: "bubblewrap",
+    platform: "linux",
+    bwrapExecutable: "/usr/bin/true",
+    prlimitExecutable: "/usr/bin/true",
     effectiveUid: 1_000,
-    effectiveGid: 1_001,
-    containerNameFactory: () => `sunabot-skill-script-${"e".repeat(32)}`,
-    spawnProcess: options.spawnProcess,
-    cleanupRunner: options.cleanupRunner,
+    spawnProcess(file, args, spawnOptions) {
+      child = options.spawnProcess(file, args, spawnOptions);
+      return child;
+    },
+    killProcessGroup(_pid, signal) {
+      child?.kill(signal);
+    },
     cleanupTimeoutMs: options.cleanupTimeoutMs,
     beforeSpawn: options.beforeSpawn
   });

@@ -306,7 +306,11 @@ describe("provider protocols", () => {
   ])("uses the configured normal reply retry limit for %s HTTP requests", async (kind, successfulResponse) => {
     vi.useFakeTimers();
     const provider = new OpenAIProvider(providerConfig(kind));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    if (kind === "codex-responses") {
+      vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("provider-key");
+    } else {
+      vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    }
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new TypeError("network 1"))
       .mockRejectedValueOnce(new TypeError("network 2"))
@@ -325,7 +329,7 @@ describe("provider protocols", () => {
   it("retries a retryable Codex error carried by an HTTP 200 response", async () => {
     vi.useFakeTimers();
     const provider = new OpenAIProvider(providerConfig("codex-responses"));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("provider-key");
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(codexErrorResponse({
         type: "service_unavailable_error",
@@ -395,7 +399,7 @@ describe("provider protocols", () => {
   it("honors a per-request transport timeout for Codex Responses", async () => {
     vi.useFakeTimers();
     const provider = new OpenAIProvider(providerConfig("codex-responses"));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("provider-key");
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockImplementation(() => new Promise<Response>(() => undefined));
 

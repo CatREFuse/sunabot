@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { computed, shallowRef, useTemplateRef, watch } from "vue";
 import type { SelfieReferenceImage } from "../../types";
-import type { WorkbenchBackend } from "../../types/workbench";
-import { workbenchLabel, workbenchResourceKey } from "../../types/workbench";
 import type { SelfieReferenceStatus, SelfieReferenceUpload } from "../../composables/useSelfieReferences";
 import { formatDashboardMetric, formatExactNumber } from "../../utils/numberFormat";
 import AuthenticatedImage from "../ui/AuthenticatedImage.vue";
@@ -20,8 +18,8 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   upload: [entries: readonly SelfieReferenceUpload[]];
-  updateNote: [id: string, note: string, workbench: WorkbenchBackend];
-  remove: [id: string, workbench: WorkbenchBackend];
+  updateNote: [id: string, note: string];
+  remove: [id: string];
 }>();
 const fileInput = useTemplateRef<HTMLInputElement>("fileInput");
 const previewImage = shallowRef<SelfieReferenceImage | null>(null);
@@ -31,9 +29,7 @@ const pendingFiles = shallowRef<readonly File[]>([]);
 const selectionError = shallowRef("");
 const noteSubmission = shallowRef<"upload" | "edit" | null>(null);
 const noteRequestError = shallowRef("");
-const nativeCount = computed(() => props.images.filter((image) => (image.workbench ?? "native") === "native").length);
-const dockerCount = computed(() => props.images.filter((image) => image.workbench === "docker").length);
-const remaining = computed(() => Math.max(0, props.maxImages - nativeCount.value));
+const remaining = computed(() => Math.max(0, props.maxImages - props.images.length));
 const noteMode = computed<"upload" | "edit">(() => editImage.value ? "edit" : "upload");
 const noteItems = computed(() => {
   if (editImage.value) {
@@ -98,7 +94,7 @@ function saveNotes(items: Array<{ id: string; note: string }>) {
     const note = items[0]?.note;
     if (note) {
       noteSubmission.value = "edit";
-      emit("updateNote", editImage.value.id, note, editImage.value.workbench ?? "native");
+      emit("updateNote", editImage.value.id, note);
     }
     return;
   }
@@ -112,7 +108,7 @@ function saveNotes(items: Array<{ id: string; note: string }>) {
 
 function confirmRemove() {
   if (!deleteImage.value) return;
-  emit("remove", deleteImage.value.id, deleteImage.value.workbench ?? "native");
+  emit("remove", deleteImage.value.id);
   deleteImage.value = null;
 }
 
@@ -127,12 +123,12 @@ function formatBytes(bytes: number) {
     <header class="flex flex-col items-stretch justify-between gap-4 sm:flex-row sm:items-end">
       <div class="min-w-0">
         <h2 id="selfie-reference-title" class="section-title">自拍参考图</h2>
-        <p class="mt-1 text-xs text-mute">每个 Workbench 最多 {{ maxImages }} 张，每次自拍选用 1–3 张</p>
+        <p class="mt-1 text-xs text-mute">最多 {{ maxImages }} 张，每次自拍选用 1–3 张</p>
       </div>
       <div class="flex items-center justify-between gap-3 sm:justify-end">
-        <span class="inline-state shrink-0" :data-kind="nativeCount === maxImages ? 'success' : undefined">
-          <i class="bx" :class="nativeCount === maxImages ? 'bx-check-circle' : 'bx-images'" aria-hidden="true"></i>
-          {{ loading ? "读取中" : `Native ${nativeCount} / ${maxImages} · Docker ${dockerCount} / ${maxImages}` }}
+        <span class="inline-state shrink-0" :data-kind="images.length === maxImages ? 'success' : undefined">
+          <i class="bx" :class="images.length === maxImages ? 'bx-check-circle' : 'bx-images'" aria-hidden="true"></i>
+          {{ loading ? "读取中" : `${images.length} / ${maxImages}` }}
         </span>
         <button class="btn btn-primary shrink-0" type="button" :disabled="uploading || loading || remaining === 0" @click="chooseImages">
           <i class="bx" :class="uploading ? 'bx-loader-alt bx-spin' : 'bx-plus'" aria-hidden="true"></i>
@@ -145,8 +141,8 @@ function formatBytes(bytes: number) {
     <p v-if="visibleStatus" class="mt-4 inline-state" :data-kind="visibleStatusKind" aria-live="polite">{{ visibleStatus }}</p>
 
     <div v-if="images.length" class="mt-5 grid grid-cols-3 gap-x-2 gap-y-5 sm:grid-cols-6 sm:gap-x-3 lg:grid-cols-9">
-      <article v-for="image in images" :key="workbenchResourceKey(image.workbench ?? 'native', image.id)" class="group min-w-0 border-b border-line pb-3 transition-colors focus-within:border-display">
-        <button class="block aspect-square w-full overflow-hidden bg-raised" type="button" :aria-label="`查看原图 ${workbenchLabel(image.workbench ?? 'native')} ${image.note}`" @click="previewImage = image">
+      <article v-for="image in images" :key="image.id" class="group min-w-0 border-b border-line pb-3 transition-colors focus-within:border-display">
+        <button class="block aspect-square w-full overflow-hidden bg-raised" type="button" :aria-label="`查看原图 ${image.note}`" @click="previewImage = image">
           <AuthenticatedImage
             :src="image.originalUrl"
             :display-src="image.displayUrl"
@@ -157,18 +153,15 @@ function formatBytes(bytes: number) {
           />
         </button>
         <div class="mt-3 min-w-0">
-          <div class="flex min-w-0 items-center gap-2">
-            <strong class="min-w-0 truncate text-sm font-medium text-display" :title="image.note">{{ image.note }}</strong>
-            <span class="inline-state shrink-0 px-1.5 py-0.5 text-[9px]">{{ workbenchLabel(image.workbench ?? "native") }}</span>
-          </div>
+          <strong class="block min-w-0 truncate text-sm font-medium text-display" :title="image.note">{{ image.note }}</strong>
           <span class="mt-1 block truncate text-[11px] text-mute" :title="image.fileName">{{ image.fileName }}</span>
           <span class="mt-1 block truncate font-mono text-[10px] text-mute" :title="`${formatExactNumber(image.width)} × ${formatExactNumber(image.height)} px · ${formatBytes(image.sizeBytes)}`">
             {{ formatDashboardMetric(image.width) }} × {{ formatDashboardMetric(image.height) }} · {{ formatBytes(image.sizeBytes) }}
           </span>
         </div>
         <div class="-ml-2 mt-1 flex items-center">
-          <button class="icon-btn" type="button" :aria-label="`编辑备注 ${workbenchLabel(image.workbench ?? 'native')} ${image.note}`" :disabled="Boolean(updatingId)" @click="editImage = image"><i class="bx bx-edit" aria-hidden="true"></i></button>
-          <button class="icon-btn text-accent" type="button" :aria-label="`删除 ${workbenchLabel(image.workbench ?? 'native')} ${image.note}`" :disabled="deletingId === workbenchResourceKey(image.workbench ?? 'native', image.id)" @click="deleteImage = image"><i class="bx bx-trash" aria-hidden="true"></i></button>
+          <button class="icon-btn" type="button" :aria-label="`编辑备注 ${image.note}`" :disabled="Boolean(updatingId)" @click="editImage = image"><i class="bx bx-edit" aria-hidden="true"></i></button>
+          <button class="icon-btn text-accent" type="button" :aria-label="`删除 ${image.note}`" :disabled="deletingId === image.id" @click="deleteImage = image"><i class="bx bx-trash" aria-hidden="true"></i></button>
         </div>
       </article>
     </div>

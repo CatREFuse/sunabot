@@ -46,8 +46,7 @@ The preceding assistant sticker must appear in conversation history with one `me
     "forbiddenTools": [
       "selfie",
       "send_file",
-      "native_bash",
-      "docker_bash"
+      "native_bash"
     ],
     "forbiddenSuccessfulTools": [],
     "requiredAvailableTools": [

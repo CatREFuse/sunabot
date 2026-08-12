@@ -1,4 +1,5 @@
 import http from "node:http";
+import net from "node:net";
 import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { normalizedHostname, resolveWebTarget } from "../../adapters/webfetch/urlPolicy.js";
@@ -28,8 +29,8 @@ export async function startSafeWebProxy(): Promise<SafeProxyHandle> {
       response.end();
     });
   });
-  server.on("connect", (_request, client) => {
-    rejectConnect(client);
+  server.on("connect", (request, client, head) => {
+    proxyConnect(request, client, head, budgets);
   });
   server.on("clientError", (_error, socket) => socket.destroy());
   await new Promise<void>((resolve, reject) => {
@@ -50,7 +51,55 @@ export async function startSafeWebProxy(): Promise<SafeProxyHandle> {
 }
 
 export function rejectConnect(client: Duplex) {
-  client.end("HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+  client.end("HTTP/1.1 407 Proxy Authentication Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+}
+
+function proxyConnect(
+  request: http.IncomingMessage,
+  client: Duplex,
+  head: Buffer,
+  budgets: Map<string, RenderBudget>
+) {
+  const budgetId = bearerToken(request.headers["proxy-authorization"])
+    || firstHeader(request.headers[BUDGET_HEADER]);
+  const budget = budgets.get(budgetId);
+  if (!budget || budget.requests >= MAX_RENDER_REQUESTS) {
+    rejectConnect(client);
+    return;
+  }
+  let target: URL;
+  try {
+    target = new URL(`https://${request.url ?? ""}`);
+  } catch {
+    client.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    return;
+  }
+  budget.requests += 1;
+  const upstream = net.connect({
+    host: normalizedHostname(target),
+    port: target.port ? Number(target.port) : 443
+  });
+  const close = () => {
+    upstream.destroy();
+    client.destroy();
+  };
+  const account = (chunk: Buffer) => {
+    budget.bytes += chunk.length;
+    if (budget.bytes > MAX_RENDER_RESPONSE_BYTES) close();
+  };
+  upstream.setTimeout(PROXY_UPSTREAM_TIMEOUT_MS, close);
+  upstream.once("connect", () => {
+    client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    if (head.length > 0) upstream.write(head);
+    client.on("data", account);
+    upstream.on("data", account);
+    client.pipe(upstream);
+    upstream.pipe(client);
+  });
+  upstream.once("error", () => {
+    if (!client.destroyed) client.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+  });
+  client.once("error", close);
 }
 
 async function proxyHttpRequest(
@@ -63,7 +112,8 @@ async function proxyHttpRequest(
     response.end();
     return;
   }
-  const budgetId = firstHeader(request.headers[BUDGET_HEADER]);
+  const budgetId = bearerToken(request.headers["proxy-authorization"])
+    || firstHeader(request.headers[BUDGET_HEADER]);
   const budget = budgets.get(budgetId);
   if (!budget || budget.requests >= MAX_RENDER_REQUESTS) {
     response.writeHead(429);
@@ -124,4 +174,9 @@ function sanitizedResponseHeaders(headers: http.IncomingHttpHeaders) {
 
 function firstHeader(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function bearerToken(value: string | string[] | undefined) {
+  const match = /^Bearer ([^\s]+)$/i.exec(firstHeader(value).trim());
+  return match?.[1] ?? "";
 }

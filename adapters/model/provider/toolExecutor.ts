@@ -3,7 +3,7 @@ import { appendRequestLog } from "../../observability/requestLog.js";
 import type { OpenAIToolDefinition } from "../../../services/agent/promptSystem.js";
 import type { MemoryRecallInput } from "../../../services/memory/memoryService.js";
 import type { KnowledgeSearchInput } from "../../../services/knowledge/public.js";
-import { DOCKER_BASH_TOOL_NAME, NATIVE_BASH_TOOL_NAME } from "../../../services/tools/bashTool.js";
+import { NATIVE_BASH_TOOL_NAME } from "../../../services/tools/bashTool.js";
 import { MEMORY_RECALL_TOOL_NAME, WEBSEARCH_TOOL_NAME } from "../../../services/tools/definitions.js";
 import { GENERATE_IMG_TOOL_NAME, runGenerateImg } from "../../../services/tools/generateImgTool.js";
 import { SELFIE_TOOL_NAME } from "../../../services/tools/selfieTool.js";
@@ -105,7 +105,6 @@ const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [IMPORT_CHAT_EMOJI_TOOL_NAME, runImportChatEmoji],
   [IMPORT_CHAT_SELFIE_TOOL_NAME, runImportChatSelfie],
   [NATIVE_BASH_TOOL_NAME, runNativeBash],
-  [DOCKER_BASH_TOOL_NAME, runDockerBash],
   [WEBSEARCH_TOOL_NAME, runWebSearch],
   [WEBFETCH_TOOL_NAME, runWebFetch],
   [GENERATE_IMG_TOOL_NAME, runImageGeneration],
@@ -576,16 +575,8 @@ async function runNativeBash(
   return runBash(NATIVE_BASH_TOOL_NAME, args, call, options);
 }
 
-async function runDockerBash(
-  args: Record<string, unknown>,
-  call: ResponseFunctionCallItem,
-  options: ProviderCompleteOptions
-) {
-  return runBash(DOCKER_BASH_TOOL_NAME, args, call, options);
-}
-
 async function runBash(
-  toolName: typeof NATIVE_BASH_TOOL_NAME | typeof DOCKER_BASH_TOOL_NAME,
+  toolName: typeof NATIVE_BASH_TOOL_NAME,
   args: Record<string, unknown>,
   call: ResponseFunctionCallItem,
   options: ProviderCompleteOptions

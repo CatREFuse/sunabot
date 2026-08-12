@@ -39,7 +39,7 @@ const REQUIRED_DIRECTORIES = [
   "packages/platform",
   "packages/testkit",
   "components",
-  "deploy/docker",
+  "deploy/napcat",
   "deploy/native",
   "tooling/quality",
   "tests"
@@ -223,10 +223,10 @@ export function auditArchitecture(projectRoot, overrides = {}) {
     } else {
       try {
         const contract = JSON.parse(fs.readFileSync(absolute, "utf8"));
-        if (contract.schemaVersion !== 2) report({
+        if (contract.schemaVersion !== 3) report({
           rule: "runtime-contract",
           source: runtimeContractPath,
-          message: `${runtimeContractPath} must declare schemaVersion 2`
+          message: `${runtimeContractPath} must declare schemaVersion 3`
         });
       } catch (error) {
         report({

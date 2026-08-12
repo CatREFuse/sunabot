@@ -112,16 +112,11 @@ async function readBoundedResponse(response: Response, maxBytes: number) {
 
 function defaultRendererEndpoint() {
   const configured = process.env.SUNABOT_WEBFETCH_RENDERER_URL?.trim();
-  const fallback = process.env.SUNABOT_RUNTIME_MODE === "docker"
-    ? "http://webfetch-renderer:8790"
-    : "http://127.0.0.1:8790";
+  const fallback = "http://127.0.0.1:8790";
   if (!configured) return fallback;
   try {
     const parsed = new URL(configured);
-    const docker = process.env.SUNABOT_RUNTIME_MODE === "docker";
-    const allowedHosts = docker
-      ? new Set(["127.0.0.1", "::1", "webfetch-renderer"])
-      : new Set(["127.0.0.1", "::1"]);
+    const allowedHosts = new Set(["127.0.0.1", "::1"]);
     if (parsed.protocol !== "http:" || parsed.username || parsed.password ||
         parsed.port !== "8790" || parsed.pathname !== "/" || parsed.search || parsed.hash ||
         !allowedHosts.has(parsed.hostname.replace(/^\[|\]$/g, ""))) return fallback;
@@ -134,10 +129,7 @@ function defaultRendererEndpoint() {
 function normalizeRendererEndpoint(value: string) {
   try {
     const parsed = new URL(value);
-    const docker = process.env.SUNABOT_RUNTIME_MODE === "docker";
-    const allowedHosts = docker
-      ? new Set(["127.0.0.1", "::1", "webfetch-renderer"])
-      : new Set(["127.0.0.1", "::1"]);
+    const allowedHosts = new Set(["127.0.0.1", "::1"]);
     if (parsed.protocol !== "http:" || parsed.username || parsed.password ||
         parsed.port !== "8790" || parsed.pathname !== "/" || parsed.search || parsed.hash ||
         !allowedHosts.has(parsed.hostname.replace(/^\[|\]$/g, ""))) return "http://127.0.0.1:8790/";

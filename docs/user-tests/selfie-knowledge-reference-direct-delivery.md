@@ -6,7 +6,7 @@
 
 ## 前置条件
 
-使用全新隔离 workspace、阿罗娜 Agent 的受管自拍参考目录、已授权的文本与图像 Provider，以及 mock MessagingPort。夹具先清空隔离 Native 与 Docker Workbench 的知识目录，再在 Native Workbench 写入普拉娜参考图的 Base64 和带真实 Markdown 图片链接的知识资料页；Agent 必须在同一隔离 Workbench 内把它解码为资料页声明的 `knowledge/references/user-test-plana-reference.png`，不能读取源 workspace、生产知识资料或其他 Agent 目录。
+使用全新隔离 workspace、阿罗娜 Agent 的受管自拍参考目录、已授权的文本与图像 Provider，以及 mock MessagingPort。夹具清空 canonical Workbench 的知识目录，再写入普拉娜参考图的 Base64 和带真实 Markdown 图片链接的知识资料页；Agent 必须在同一隔离 Workbench 内把它解码为资料页声明的 `knowledge/references/user-test-plana-reference.png`，不能读取源 workspace、生产知识资料或其他 Agent 目录。
 
 ## 质量要求
 
@@ -29,18 +29,13 @@
       "workingMemory": [],
       "longTerm": [],
       "userProfiles": [],
-      "resetKnowledge": [
-        "native",
-        "docker"
-      ],
+      "resetKnowledge": true,
       "workbenchFiles": [
         {
-          "backend": "native",
           "path": "knowledge/user-test-plana-visual-reference.md",
           "content": "# 用例专用普拉娜合影参考\n\n![普拉娜用例参考立绘](references/user-test-plana-reference.png)\n\n准备方法：把 knowledge/references/user-test-plana-reference.b64 解码为上面的 PNG，再验证 `knowledge/references/user-test-plana-reference.png` 存在后交给自拍工具。\n\n普拉娜保持白色长发、侧辫、黑色发箍、红色光环和黑白制服。"
         },
         {
-          "backend": "native",
           "path": "knowledge/references/user-test-plana-reference.b64",
           "content": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
         }
@@ -100,7 +95,7 @@
       },
       {
         "id": "verified_reference",
-        "description": "selfie 使用已在清空生产知识资料后的隔离 Native Workbench 中验证存在的 knowledge/references/user-test-plana-reference.png，没有读取或改用源 workspace 的其他参考图。",
+        "description": "selfie 使用已在清空生产知识资料后的隔离 canonical Workbench 中验证存在的 knowledge/references/user-test-plana-reference.png，没有读取或改用源 workspace 的其他参考图。",
         "minimumScore": 4
       },
       {

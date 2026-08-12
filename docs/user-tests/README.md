@@ -45,7 +45,7 @@ npm run user-test -- prepare \
   --confirm-copy-provider-credential
 ```
 
-The destination receives `.sunabot-user-test-workspace.json`. `--agent` selects the source Agent whose `agent.json`, persona files other than `AIR.md`, recognized Agent-local prompt overrides, and recognized system prompt overrides are retained; omit it only when the source default Agent is the intended case identity. Preserved prompt and persona entries must be regular files, and a symbolic link or special file at a retained path fails preparation. The allowlist is applied during the first Agent copy, so `AIR.md`, Markdown/JSONL memory, `data/`, `runtime/`, `cache/`, `.prompt-migration-backups/`, prompt migration state, `voice/`, `files/`, `assets/`, existing extensions, and historical Native/Docker workbench content never enter the destination; a copy-hook failure removes the partial destination. Public prompt content is retained from its symlink-free prompt directory while hidden migration markers and backups are discarded. Preparation then performs the same allowlist as a post-copy check, creates clean managed extension indexes, leaves MCP empty, and installs `workbench-config` from the current release bundle through the production bundled-Skill installer; it never copies a production Skill as a shortcut. Native and Docker workbench directories are created from this clean isolated root when the runtime or a case fixture first resolves them. All case-specific knowledge, media, AIR, memory, files, and other workbench resources must come from `input.fixture`.
+The destination receives `.sunabot-user-test-workspace.json`. `--agent` selects the source Agent whose `agent.json`, persona files other than `AIR.md`, recognized Agent-local prompt overrides, and recognized system prompt overrides are retained; omit it only when the source default Agent is the intended case identity. Preserved prompt and persona entries must be regular files, and a symbolic link or special file at a retained path fails preparation. The allowlist is applied during the first Agent copy, so `AIR.md`, Markdown/JSONL memory, `data/`, `runtime/`, `cache/`, `.prompt-migration-backups/`, prompt migration state, `voice/`, `files/`, `assets/`, existing extensions, and historical workbench content never enter the destination; a copy-hook failure removes the partial destination. Public prompt content is retained from its symlink-free prompt directory while hidden migration markers and backups are discarded. Preparation then performs the same allowlist as a post-copy check, creates clean managed extension indexes, leaves MCP empty, and installs `workbench-config` from the current release bundle through the production bundled-Skill installer; it never copies a production Skill as a shortcut. The current Agent workbench is created from this clean isolated root when the runtime or a case fixture first resolves it. All case-specific knowledge, media, AIR, memory, files, and other workbench resources must come from `input.fixture`.
 
 `--lock-provider-routes` requires both `--provider-id` and a non-empty `--model`. The selected source Provider must exist and use `kind: "codex-responses"`. Preparation keeps only that Provider, makes it the default, fixes `baseUrl` to `https://chatgpt.com/backend-api/codex`, removes unsupported Agent-local Provider collections, strips inline credential fields from the shared and Agent documents, and writes the requested model into both documents for the main reply, image reader, Tone, memory, user-group orchestrator, legacy group-thread route, Codex tool, and Bash audit routes. The isolated environment contains exactly the selected Provider variable and a distinct synthetic OneBot token variable. Preparation enumerates and verifies the Provider container, fixed endpoint, environment names, absence of inline secrets, and every locked provider/model field after bundled-Skill installation; any mismatch or intermediate failure removes the destination. The marker persists the locked Provider、model and the two allowed environment names. Every later `run` repeats the same document、endpoint、environment and isolated Codex-home validation before importing Runtime or constructing a Provider, so prepare-to-run drift fails before external execution. The selected Provider's `imageModel` and unrelated tool Provider settings remain unchanged. During a locked harness run, `websearch`, `webfetch`, `generate_img`, `selfie`, and `send_voice_message` definitions remain visible to the authorized Provider, while execution is locally denied before any external runner. The Codex schema also remains visible when the runtime capability exposes its worker or control contract, but its execution is locally denied unless the workspace marker confirms an explicit Codex auth copy. Native Bash retains its production adversarial approval contract for cases that explicitly require it; the locked Bash audit model uses the selected Provider, and fixture approval must reject network commands. Provider/model arguments without `--lock-provider-routes` are rejected, while prepare without any of the three route-lock arguments retains the existing default-Provider behavior.
 
@@ -53,7 +53,7 @@ Cases that exercise the Codex worker or control contract may append `--copy-code
 
 The destination config binds the selected Agent as `defaultAgentId`, preventing a sampled branch case from running under another Agent's persona. Conversation runs create the case-declared account only inside the isolated registry when the selected Agent has no account yet; they do not copy source account identities or write to the source registry. `run` rejects unmarked workspaces and binds `SUNABOT_WORKSPACE` before importing any Runtime or path module; the harness regression proves the application and queue databases are created only below that destination. Every independent run or network/permission retry prepares a fresh workspace. Reusing the same case digest fails with `USER_TEST_WORKSPACE_CASE_ALREADY_RUN`; a different case that repeats an earlier raw OneBot message fails with `USER_TEST_ONEBOT_EVENT_ALREADY_USED` instead of reusing an earlier Session or outbox. Only a case suite that explicitly requires chained state may reuse one workspace, and every step must have a different case and message ID. Public prompt overrides are copied only from a regular, symlink-free directory inside the source workspace and the destination config is rewritten to its isolated prompt directory. Branch cases replace their declared working memory, long-term memory, and user-profile collections before invoking production code. The mock transport captures outgoing messages, assets, and pokes without connecting to NapCat or sending QQ messages.
 
-On macOS with Colima, a case that requires `docker_bash` must place its isolated destination on a host path shared with the Colima VM, such as this repository's ignored `.user-test-runs/workspaces/` directory under `/Users/...`. A destination below `/private/tmp` is valid for non-Docker cases but cannot be bind-mounted by the default Colima VM and must be recorded as an environment preflight failure rather than a product failure.
+Native Bash cases use the isolated Agent's canonical Workbench directly and do not require a Colima or Docker bind mount. Linux/WSL Bubblewrap cases must run on Linux or WSL; running one on macOS is an environment preflight failure because macOS exposes host Bash only to administrator private chat and authenticated administrator Web Chat.
 
 A live run sends the case prompt together with the Runtime-rendered persona, system prompts, relevant memory/context, and tool schemas to the configured external Provider. Use only a Provider authorized to receive that material. Credential copying and Provider execution are separate explicit gates; neither gate authorizes a real QQ/NapCat send.
 
@@ -70,7 +70,7 @@ npm run user-test -- run \
 
 Conversation cases pass a raw OneBot event through the same parser, forward-message hydration, account-to-Agent delegate, Runtime, Session queue, Provider tool loop, and durable outbox used by the WebSocket path. The declared `actor` controls an in-memory authority projection for that run: admin actors use the event user as administrator, while user actors use a distinct synthetic administrator. This makes cases portable across test accounts without persisting an administrator change. `replyEnabled` is a fixture precondition for an existing enabled conversation. A user-group fixture keeps the production ambient orchestrator path but gives its isolated conversation a 1-second response-window override; completion waits for both ambient orchestration and Session events, so the harness cannot report an empty success while the group timer is still pending.
 
-`input.fixture` makes conversation preconditions executable. It can replace declared working-memory, long-term-memory and user-profile collections, replace a valid `AIR.md`, and create bounded UTF-8 files in the isolated Native or Docker workbench before raw OneBot ingress. Workbench paths are relative, traversal and symbolic-link directory components are rejected, and an existing target fails closed. Use `expected.requiredOutboundKinds` and `forbiddenOutboundKinds` to distinguish `message`, `asset`, and `poke`; total-count assertions alone are insufficient for silent and media cases.
+`input.fixture` makes conversation preconditions executable. It can replace declared working-memory, long-term-memory and user-profile collections, replace a valid `AIR.md`, and create bounded UTF-8 files in the isolated current Agent workbench before raw OneBot ingress. Each `workbenchFiles` item contains exactly `path` and `content`; there is no backend selector. Workbench paths are relative, traversal and symbolic-link directory components are rejected, and an existing target fails closed. Use `expected.requiredOutboundKinds` and `forbiddenOutboundKinds` to distinguish `message`, `asset`, and `poke`; total-count assertions alone are insufficient for silent and media cases.
 
 `input.fixture.conversationMessages` seeds 1–120 declared model-visible history messages into the target conversation through the normal conversation record and persistence path before raw OneBot ingress. Message IDs must be unique, sequences must start at 1 without gaps, timestamps must increase strictly and precede the current event, and user messages must declare `userId`. The new inbound event remains the sole fresh work item.
 
@@ -78,7 +78,7 @@ Conversation cases pass a raw OneBot event through the same parser, forward-mess
 
 `input.fixture.attachmentSources` provides bounded Base64 file bytes for raw OneBot attachment events. The recording transport resolves them only when the request keeps the case `accountId`; reports retain safe resolution evidence and `expected.requiredInboundAttachments` can assert the parsed name, status, format, MIME, byte count, SHA-256, page count and stable handle.
 
-`resetKnowledge` may list `native`, `docker`, or both. Before fixture files are written, the driver resets knowledge only inside a marker-verified isolated user-test workspace and recreates an empty `knowledge/` directory; duplicate or unknown backends are rejected. Use it for chained cases whenever the current step must prove that knowledge or media came only from its own `input.fixture`.
+`resetKnowledge` is a boolean. When it is `true`, the driver resets the canonical Workbench knowledge directory only inside a marker-verified isolated user-test workspace and recreates an empty `knowledge/` directory before fixture files are written. Use it for chained cases whenever the current step must prove that knowledge or media came only from its own `input.fixture`.
 
 Dream cases require logical `now`, `timePolicy: "rebase_to_runtime"`, explicit `workingMemory`, `longTerm`, `userProfiles`, `persona`, `conversations`, `activeTasks`, and nullable `directorSchedule` fields. The driver shifts event timestamps and tasks to one captured runtime clock value, remaps Director items to the target Dream date while preserving their local wall-clock times, replaces the complete memory and conversation collections, creates declared active tasks, commits the declared Director schedule, reloads the declared persona files, and calls the production Dream branch without the manual-trigger notification, so no OneBot message is created. Timeline evidence records the fixture anchor, runtime anchor, offset, Dream schedule date, and Director date without content. `timePolicy: "fixed"` is accepted only as a declarative contract for controlled-clock unit tests and a live `run` rejects it. A Dream run requires a fresh isolated task/Director/Dream-history state; arbitrary prior Dream history, recall counters, system timezone, and per-case selection configuration remain deterministic unit-test responsibilities because production exposes no safe bulk seeding API for them.
 
@@ -115,7 +115,6 @@ Current-message media:
 
 - [`qq-private-pdf-attachment.md`](./qq-private-pdf-attachment.md)
 - [`parse-failed-attachment-export.md`](./parse-failed-attachment-export.md)
-- [`user-private-attachment-docker-workbench.md`](./user-private-attachment-docker-workbench.md)
 - [`current-message-image-reference.md`](./current-message-image-reference.md)
 - [`external-reference-image-addresses.md`](./external-reference-image-addresses.md)
 - [`current-message-image-4k-retry-budget.md`](./current-message-image-4k-retry-budget.md)
@@ -128,8 +127,23 @@ Tone delivery:
 
 Workbench resources:
 
-- [`dual-workbench-resource-addressing.md`](./dual-workbench-resource-addressing.md)
+- [`single-workbench-resource-addressing.md`](./single-workbench-resource-addressing.md)
 - [`bash-skill-repository-install.md`](./bash-skill-repository-install.md)
+
+Native Bash agent loops:
+
+- [`cases/bash-agent-loop/admin-private-native-download.md`](./cases/bash-agent-loop/admin-private-native-download.md)
+- [`cases/bash-agent-loop/admin-group-native-archive.md`](./cases/bash-agent-loop/admin-group-native-archive.md)
+- [`cases/bash-agent-loop/user-private-native-coding-repair.md`](./cases/bash-agent-loop/user-private-native-coding-repair.md)
+- [`cases/bash-agent-loop/user-group-native-download.md`](./cases/bash-agent-loop/user-group-native-download.md)
+
+Tool catalog coverage:
+
+- [`current-system-tools.md`](./current-system-tools.md)
+
+Historical 0.2.0 migration compatibility:
+
+- [`user-private-attachment-docker-workbench.md`](./user-private-attachment-docker-workbench.md)
 
 Codex artifacts:
 
@@ -203,24 +217,50 @@ Fixture Agents do not patch product code. The primary Agent compares reports, re
 
 ## Release manifest gate
 
-Each release lists every required case and its sealed reports in `.user-test-runs/release-manifest.json`. Paths are resolved relative to the manifest. Use `minimumIndependentRuns: 1` for a normal case and a higher value for a core or complex case that needs independent runs and reviewers.
+Each release lists every required executable harness case and its sealed reports in `.user-test-runs/release-manifest.json`. Case paths resolve relative to the manifest and must identify the exact checked-in documents required by the current release coverage contract. The manifest cannot reduce that set, substitute another document with the same case ID, add an unrelated case in place of a required case, or lower its checked-in independent-run quorum.
 
 ```json
 {
   "schemaVersion": 1,
-  "suiteId": "release-0.1.4",
+  "suiteId": "release-0.3.0",
   "sourceRevision": "CURRENT_40_CHARACTER_GIT_REVISION",
   "cases": [
     {
-      "caseDocument": "../docs/user-tests/my-feature.md",
+      "caseDocument": "../docs/user-tests/single-workbench-resource-addressing.md",
       "reports": [
-        "my-feature.sealed.json"
+        "single-workbench.sealed.json"
       ],
       "minimumIndependentRuns": 1
+    },
+    {
+      "caseDocument": "../docs/user-tests/cases/bash-agent-loop/admin-private-native-download.md",
+      "reports": [
+        "native-bash-1.sealed.json",
+        "native-bash-2.sealed.json"
+      ],
+      "minimumIndependentRuns": 2
+    },
+    {
+      "caseDocument": "../docs/user-tests/webfetch-lightpanda-dynamic.md",
+      "reports": [
+        "lightpanda-webfetch-1.sealed.json",
+        "lightpanda-webfetch-2.sealed.json"
+      ],
+      "minimumIndependentRuns": 2
     }
   ]
 }
 ```
+
+The v0.3.0 coverage contract is exact:
+
+| Capability | Canonical case ID | Canonical case document | Minimum independent runs |
+| --- | --- | --- | ---: |
+| Canonical Workbench | `workbench-resources.single-addressing` | `docs/user-tests/single-workbench-resource-addressing.md` | 1 |
+| Native Bash | `bash-agent-loop.admin-private-native-download` | `docs/user-tests/cases/bash-agent-loop/admin-private-native-download.md` | 2 |
+| Lightpanda WebFetch | `webfetch.admin-private-lightpanda-dynamic` | `docs/user-tests/webfetch-lightpanda-dynamic.md` | 2 |
+
+The Lightpanda case remains mandatory release evidence and runs in its declared Linux environment. A macOS run cannot remove it from the manifest. `offline-release-first-run.md`, `soul-package-roundtrip.md`, `native-core-single-container-boundary.md`, migration documents, CLI narratives, and cross-platform acceptance plans are deterministic or field-acceptance specifications; they do not count as executable harness cases and cannot appear in place of the three required documents. CI continues to cover their installer, CLI, Soul, runtime-contract, integration, runtime-smoke, E2E, visual and platform assertions through the dedicated deterministic lanes.
 
 Validate it explicitly:
 
@@ -229,7 +269,55 @@ npm run user-test -- release-gate \
   --manifest .user-test-runs/release-manifest.json
 ```
 
-The gate revalidates every sealed review, requires the current case digest and Git revision, rejects duplicate run IDs or reviewers, and enforces the declared independent-run quorum. `npm run runtime:release` runs this gate before creating a release.
+The gate selects the coverage contract from the checked-in release version, requires the manifest case paths to match that complete canonical set, verifies each canonical document's expected case ID, and then revalidates every sealed review against the current case digest and Git revision. Duplicate run IDs or reviewers remain invalid, and every case must satisfy its declared quorum without dropping below the checked-in minimum. `npm run runtime:release` runs this gate before creating a release. The GitHub tag workflow may publish only after `verify` and the light/dark visual matrix pass, then invokes `runtime:release` for each target architecture; calling the artifact builder directly is not a release path, and missing current-revision evidence fails the workflow before an archive is uploaded.
+
+### Immutable evidence tag
+
+A source tag such as `v0.3.0` requires the annotated evidence tag `user-test-evidence-v0.3.0`. The evidence tag points to an independent root commit whose tree contains exactly one root `release-manifest.json` and the root `*.sealed.json` files referenced by that manifest. Directories, symbolic links, executable files, unreferenced reports, missing reports, and all other paths are rejected. Every file uses Git mode `100644`; report paths in the manifest are direct filenames, while case documents continue to use the required source-tree paths such as `../docs/user-tests/single-workbench-resource-addressing.md` after extraction to `.user-test-runs/`.
+
+The manifest and every sealed report must already contain the source tag's 40-character commit in `sourceRevision`. CI never edits those files. The gate job fetches the annotated evidence tag explicitly, verifies its tree and revision binding, writes the original blob bytes with mode `0600` under `.user-test-runs/`, runs the existing release gate, and pins the evidence commit as a job output. Both architecture jobs fetch the same tag again, reject a changed commit, materialize the same bytes, and run `runtime:release`. Protect `user-test-evidence-v*` from update and deletion in the repository ruleset; creating the evidence tag does not trigger the `v*` release workflow.
+
+Create the evidence commit without changing the source working tree or ordinary Git index. Run this only after the source commit is final, `v0.3.0` points to `HEAD`, the manifest lists direct sealed-report filenames, and the local release gate passes:
+
+```bash
+SOURCE_TAG=v0.3.0
+EVIDENCE_TAG="user-test-evidence-${SOURCE_TAG}"
+EVIDENCE_DIR=.user-test-runs
+
+test "$(git rev-parse HEAD)" = "$(git rev-parse "${SOURCE_TAG}^{commit}")"
+npm run user-test -- release-gate --manifest "$EVIDENCE_DIR/release-manifest.json"
+git rev-parse --verify "refs/tags/$EVIDENCE_TAG" >/dev/null 2>&1 && exit 1
+
+EVIDENCE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/sunabot-evidence.XXXXXXXX")
+trap 'rm -rf -- "$EVIDENCE_TMP"' EXIT
+EVIDENCE_INDEX="$EVIDENCE_TMP/index"
+GIT_INDEX_FILE="$EVIDENCE_INDEX" git read-tree --empty
+
+MANIFEST_BLOB=$(git hash-object -w -- "$EVIDENCE_DIR/release-manifest.json")
+GIT_INDEX_FILE="$EVIDENCE_INDEX" git update-index --add --cacheinfo \
+  100644 "$MANIFEST_BLOB" release-manifest.json
+
+REPORTS=$(node -e '
+  const fs = require("node:fs");
+  const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  const reports = [...new Set(manifest.cases.flatMap((entry) => entry.reports))].sort();
+  if (!reports.length || reports.some((name) => !/^[A-Za-z0-9][A-Za-z0-9._-]*\.sealed\.json$/.test(name))) process.exit(1);
+  process.stdout.write(reports.join("\n"));
+' "$EVIDENCE_DIR/release-manifest.json")
+for REPORT in $REPORTS; do
+  REPORT_BLOB=$(git hash-object -w -- "$EVIDENCE_DIR/$REPORT")
+  GIT_INDEX_FILE="$EVIDENCE_INDEX" git update-index --add --cacheinfo \
+    100644 "$REPORT_BLOB" "$REPORT"
+done
+
+EVIDENCE_TREE=$(GIT_INDEX_FILE="$EVIDENCE_INDEX" git write-tree)
+EVIDENCE_COMMIT=$(printf 'User-test evidence for %s\n' "$SOURCE_TAG" | git commit-tree "$EVIDENCE_TREE")
+git tag -a "$EVIDENCE_TAG" "$EVIDENCE_COMMIT" -m "User-test evidence for $SOURCE_TAG"
+git ls-tree "$EVIDENCE_TAG^{commit}"
+git push origin "refs/tags/$EVIDENCE_TAG:refs/tags/$EVIDENCE_TAG"
+```
+
+`git commit-tree` receives no parent, and the temporary `GIT_INDEX_FILE` keeps the source index untouched. `git tag` and `git push` omit force flags, so an existing local or remote evidence tag stops the procedure instead of replacing evidence.
 
 ## Coverage boundary
 

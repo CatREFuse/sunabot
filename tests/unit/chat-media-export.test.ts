@@ -322,7 +322,7 @@ describe("chat media export", () => {
     )).resolves.toBe("PDF-CODEX-PROJECTION-OK-20260730");
   });
 
-  it("exports group media into Docker Workbench", async () => {
+  it("exports group media into the canonical Workbench", async () => {
     const root = await fixtureRoot();
     const agentWorkspace = path.join(root, "agent");
     const cache = await cacheFixture(root);
@@ -344,9 +344,9 @@ describe("chat media export", () => {
 
     const result = await service.export({ handle: "message:202:image:0" });
 
-    await expect(fs.readFile(path.join(agentWorkspace, "docker-workbench", result.path)))
+    await expect(fs.readFile(path.join(agentWorkspace, "workbench", result.path)))
       .resolves.toEqual(pngBytes);
-    await expect(fs.access(path.join(agentWorkspace, "workbench", result.path))).rejects.toBeTruthy();
+    await expect(fs.access(path.join(agentWorkspace, "docker-workbench", result.path))).rejects.toBeTruthy();
   });
 
   it("rejects unknown handles before resolving any source", async () => {

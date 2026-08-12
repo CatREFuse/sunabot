@@ -1,5 +1,3 @@
-import type { WorkbenchBackend } from "./workbench";
-
 export type EmojiSource = "generated" | "upload";
 export type EmojiSendSize = 64 | 128 | 256 | 512 | 1024;
 
@@ -14,7 +12,6 @@ export interface EmojiRecord {
   originalUrl: string;
   displayUrl: string;
   placeholderUrl: string;
-  workbench?: WorkbenchBackend;
 }
 
 export interface EmojiVersionRecord extends EmojiRecord {

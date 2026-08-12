@@ -86,10 +86,11 @@ describe("Runtime workbench image references", () => {
     )).resolves.toHaveLength(1);
   });
 
-  it("keeps ordinary relative image paths inside the conversation Workbench", async () => {
+  it("resolves ordinary relative image paths from the Agent Workbench in every conversation", async () => {
     const workspace = await temporaryAgentWorkspace();
     const nativeWorkbench = await resolveAgentWorkbench(workspace, "native");
     const dockerWorkbench = await resolveAgentWorkbench(workspace, "docker");
+    expect(dockerWorkbench).toBe(nativeWorkbench);
     const imageBytes = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
       "base64"
@@ -105,13 +106,6 @@ describe("Runtime workbench image references", () => {
       userId: 20_002
     } as ParsedIncomingMessage;
 
-    await expect(assets.resolveImageReferences(
-      dockerIncoming,
-      ["references/plana.png"]
-    )).rejects.toMatchObject({ code: "SEND_FILE_SOURCE_MISSING" });
-
-    await fs.mkdir(path.join(dockerWorkbench, "references"), { recursive: true });
-    await fs.writeFile(path.join(dockerWorkbench, "references", "plana.png"), imageBytes);
     await expect(assets.resolveImageReferences(
       dockerIncoming,
       ["references/plana.png"]

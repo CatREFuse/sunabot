@@ -42,12 +42,12 @@ describe("conversation tool policy", () => {
       disabledTools: ["read_file", "workspace_bash"]
     })).toEqual({
       conversationId: "private:171419991",
-      disabledTools: ["read_file", "native_bash", "docker_bash"]
+      disabledTools: ["read_file", "native_bash"]
     });
     runtime.setConversationToolPolicy({ id: "web:admin", disabledTools: ["codex"] });
 
     expect(applicationDataStore(config).readConversations()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "private:171419991", disabledTools: ["read_file", "native_bash", "docker_bash"] }),
+      expect.objectContaining({ id: "private:171419991", disabledTools: ["read_file", "native_bash"] }),
       expect.objectContaining({ id: "web:admin", disabledTools: ["codex"] })
     ]));
 
@@ -57,7 +57,7 @@ describe("conversation tool policy", () => {
     const reloaded = new SunaRuntime(config, { attachmentService: {} as never });
     runtimes.push(reloaded);
     expect(reloaded.getConversationToolPolicy("private:171419991").disabledTools)
-      .toEqual(["read_file", "native_bash", "docker_bash"]);
+      .toEqual(["read_file", "native_bash"]);
     expect(reloaded.getConversationToolPolicy("web:admin").disabledTools).toEqual(["codex"]);
   });
 });

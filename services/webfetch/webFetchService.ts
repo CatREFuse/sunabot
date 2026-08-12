@@ -92,7 +92,7 @@ export class WebFetchService implements WebFetchToolPort {
     try {
       const validated = validateWebFetchInput(input);
       if (!validated) throw new WebFetchError("INVALID_INPUT", "Invalid WebFetch input.");
-      const canonicalUrl = this.canonicalizeUrl(input.url);
+      const canonicalUrl = requireCredentialFreeWebUrl(this.canonicalizeUrl(validated.url));
       const page = await this.page(canonicalUrl, options.signal);
       const totalBudget = validated.semanticMatch
         ? WEBFETCH_MATCH_TOKEN_BUDGET
@@ -160,7 +160,8 @@ export class WebFetchService implements WebFetchToolPort {
   private async loadPage(url: string, signal: AbortSignal): Promise<CachedPage> {
     const fetched = await this.staticFetch(url, { signal });
     assertNotAborted(signal);
-    const staticContent = await this.extract(fetched.html, fetched.finalUrl).catch((error) => {
+    const fetchedFinalUrl = requireCredentialFreeWebUrl(fetched.finalUrl);
+    const staticContent = await this.extract(fetched.html, fetchedFinalUrl).catch((error) => {
       if (error instanceof WebFetchError && error.code === "CONTENT_EXTRACTION_FAILED") {
         return emptyExtractedContent();
       }
@@ -169,7 +170,7 @@ export class WebFetchService implements WebFetchToolPort {
     assertNotAborted(signal);
     let chosen: { content: ExtractedWebContent; finalUrl: string; mode: "static" | "dynamic" } = {
       content: staticContent,
-      finalUrl: fetched.finalUrl,
+      finalUrl: fetchedFinalUrl,
       mode: "static"
     };
     if (!this.contentIsSufficient(staticContent, fetched.html)) {
@@ -186,7 +187,7 @@ export class WebFetchService implements WebFetchToolPort {
         // Treat the renderer response as an untrusted internal boundary too:
         // only a canonical HTTP(S) URL may become the base for extracted links
         // or be exposed as finalUrl.
-        renderedFinalUrl = await this.validateRenderedUrl(rendered.finalUrl);
+        renderedFinalUrl = requireCredentialFreeWebUrl(await this.validateRenderedUrl(rendered.finalUrl));
       } catch {
         throw new WebFetchError("URL_NOT_ALLOWED", "Renderer returned an invalid URL.");
       }
@@ -231,8 +232,8 @@ function successResult(
 ): WebFetchSuccess {
   return {
     ok: true,
-    url: page.url,
-    finalUrl: page.finalUrl,
+    url: requireCredentialFreeWebUrl(page.url),
+    finalUrl: requireCredentialFreeWebUrl(page.finalUrl),
     title: page.title,
     fetchedAt: page.fetchedAt,
     fetchMode: page.fetchMode,
@@ -243,6 +244,20 @@ function successResult(
     omittedBlockCount: page.omittedBlockCount + selected.omittedBlockCount,
     evidencePolicy: WEBFETCH_EVIDENCE_POLICY
   };
+}
+
+function requireCredentialFreeWebUrl(value: string) {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new WebFetchError("URL_NOT_ALLOWED", "Invalid URL.");
+  }
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname
+    || url.username || url.password) {
+    throw new WebFetchError("URL_NOT_ALLOWED", "URL credentials are not allowed.");
+  }
+  return url.href;
 }
 
 function assertNotAborted(signal: AbortSignal) {

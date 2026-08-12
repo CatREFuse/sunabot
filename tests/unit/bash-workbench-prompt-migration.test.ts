@@ -24,7 +24,7 @@ describe("conversation Bash workbench prompt contract", () => {
       expect((system as { content: string }).content).toContain("`index.md`");
       expect((system as { content: string }).content).toContain("`/workbench`");
       expect((system as { content: string }).content).toContain("当前 Agent 的 `workbench/`");
-      expect((system as { content: string }).content).toContain("独立 `docker-workbench/`");
+      expect((system as { content: string }).content).not.toContain("docker-workbench");
       expect((system as { content: string }).content).toContain("你可以使用本轮实际提供的");
       expect((system as { content: string }).content).toContain("`generate_img`");
       expect((system as { content: string }).content).toContain("`selfie`");
@@ -95,14 +95,14 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="8">');
-    expect(content).toContain('<configuration_directory_index_contract version="5">');
+    expect(content).toContain('<bash_workbench_contract version="9">');
+    expect(content).toContain('<configuration_directory_index_contract version="6">');
     expect(content).toContain("`selfie/references.jsonl`");
     expect(content).not.toContain('<bash_workbench_contract version="1">');
     expect(content).not.toContain('<configuration_directory_index_contract version="1">');
   });
 
-  it("upgrades the persisted v3 workbench contract to the Docker file-loop contract", () => {
+  it("removes the persisted v3 Docker contract while preserving the file loop", () => {
     const template: FinalPromptTemplate = {
       messages: [{
         role: "system",
@@ -119,7 +119,7 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="8">');
+    expect(content).toContain('<bash_workbench_contract version="9">');
     expect(content).toContain("`export_chat_media`");
     expect(content).toContain("`send_file`");
     expect(content).not.toContain('<bash_workbench_contract version="3">');
@@ -142,7 +142,7 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="8">');
+    expect(content).toContain('<bash_workbench_contract version="9">');
     expect(content).toContain("`generate_img`");
     expect(content).toContain("`selfie`");
     expect(content).toContain("`referenceImagePaths`");
@@ -181,7 +181,7 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="8">');
+    expect(content).toContain('<bash_workbench_contract version="9">');
     expect(content).toContain("`sunabot-skill install --archive <relative-zip>`");
     expect(content).not.toContain('<bash_workbench_contract version="7">');
   });

@@ -98,7 +98,7 @@ The Agent exports the exact current image, stores it below `knowledge/`, writes 
       },
       {
         "id": "portable_memory",
-        "description": "The successful add_workmemory call records a real Markdown link whose target starts with knowledge/... and does not store a host, Docker, URL, data path, media handle, or bare path.",
+        "description": "The successful add_workmemory call records a real Markdown link whose target starts with knowledge/... and does not store a host path, URL, data path, media handle, or bare path.",
         "minimumScore": 4
       },
       {

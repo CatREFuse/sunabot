@@ -34,45 +34,37 @@ export function migrateConversationBashToolsTemplate(
 ): FinalPromptTemplate | undefined {
   const canonicalTools = new Map(
     (canonical.tools ?? [])
-      .filter((tool) => tool.function.name === NATIVE_BASH_TOOL_NAME || tool.function.name === DOCKER_BASH_TOOL_NAME)
+      .filter((tool) => tool.function.name === NATIVE_BASH_TOOL_NAME)
       .map((tool) => [tool.function.name, tool])
   );
-  const canonicalDocker = canonicalTools.get(DOCKER_BASH_TOOL_NAME);
-  if (!canonicalDocker) throw new Error("Canonical conversation prompt is missing docker_bash.");
+  const canonicalNative = canonicalTools.get(NATIVE_BASH_TOOL_NAME);
+  if (!canonicalNative) throw new Error("Canonical conversation prompt is missing native_bash.");
 
   const migratedTools = [] as NonNullable<FinalPromptTemplate["tools"]>;
   let legacyDescription: string | undefined;
+  let nativeTool: NonNullable<FinalPromptTemplate["tools"]>[number] | undefined;
+  let insertionIndex: number | undefined;
   let changed = false;
   for (const tool of template.tools ?? []) {
-    if (tool.function.name === LEGACY_BASH_TOOL_NAME) {
+    if (
+      tool.function.name === LEGACY_BASH_TOOL_NAME
+      || tool.function.name === NATIVE_BASH_TOOL_NAME
+      || tool.function.name === DOCKER_BASH_TOOL_NAME
+    ) {
+      insertionIndex ??= migratedTools.length;
+      if (tool.function.name === NATIVE_BASH_TOOL_NAME && !nativeTool) nativeTool = tool;
+      else changed = true;
       legacyDescription ||= tool.function.description;
-      changed = true;
       continue;
-    }
-    if (tool.function.name === NATIVE_BASH_TOOL_NAME || tool.function.name === DOCKER_BASH_TOOL_NAME) {
-      if (migratedTools.some((entry) => entry.function.name === tool.function.name)) {
-        changed = true;
-        continue;
-      }
     }
     migratedTools.push(tool);
   }
 
-  if (!migratedTools.some((tool) => tool.function.name === DOCKER_BASH_TOOL_NAME)) {
-    migratedTools.push(withDescription(canonicalDocker, legacyDescription));
+  if (!nativeTool) {
+    nativeTool = withDescription(canonicalNative, legacyDescription);
     changed = true;
   }
-  const canonicalNative = canonicalTools.get(NATIVE_BASH_TOOL_NAME);
-  if (canonicalNative && !migratedTools.some((tool) => tool.function.name === NATIVE_BASH_TOOL_NAME)) {
-    const dockerIndex = migratedTools.findIndex((tool) => tool.function.name === DOCKER_BASH_TOOL_NAME);
-    migratedTools.splice(Math.max(0, dockerIndex), 0, structuredClone(canonicalNative));
-    changed = true;
-  }
-  if (!canonicalNative) {
-    const filtered = migratedTools.filter((tool) => tool.function.name !== NATIVE_BASH_TOOL_NAME);
-    if (filtered.length !== migratedTools.length) changed = true;
-    if (changed) return { ...template, tools: filtered };
-  }
+  migratedTools.splice(insertionIndex ?? migratedTools.length, 0, nativeTool);
   return changed ? { ...template, tools: migratedTools } : undefined;
 }
 

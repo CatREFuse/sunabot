@@ -141,7 +141,6 @@ async function stageCodexResultArtifactsUnchecked(
         input.publisher ?? chatMediaPublisher,
         publishedTargets
       ),
-      backend,
       allowUnsupportedFiles: true,
       contentAddressedNamePrefix: artifactPublicationPrefix(input.job),
       isCurrent: () => !input.signal.aborted
@@ -161,8 +160,7 @@ async function stageCodexResultArtifactsUnchecked(
           sha256: exported.sha256,
           sizeBytes: exported.byteLength,
           mimeType: exported.mimeType,
-          handle: stableArtifactHandle(input.job.id, index),
-          backend
+          handle: stableArtifactHandle(input.job.id, index)
         });
       }
       assertNotAborted(input.signal);
@@ -288,7 +286,7 @@ function validateDeclaration(value: CodexResultArtifactV1): CodexResultArtifactV
     || typeof value !== "object"
     || value.schemaVersion !== 1
     || value.handle !== undefined
-    || value.backend !== undefined
+    || (value as unknown as Record<string, unknown>).backend !== undefined
     || !SHA256_PATTERN.test(value.sha256)
     || !Number.isSafeInteger(value.sizeBytes)
     || value.sizeBytes < 1
@@ -448,7 +446,7 @@ function readFrozenBackend(value: unknown): AgentWorkbenchBackend | undefined {
   if (backend !== "native" && backend !== "docker") {
     throw codexArtifactError("codex_artifact_backend_invalid");
   }
-  return backend;
+  return "native";
 }
 
 function safeRelativePath(value: unknown) {

@@ -24,7 +24,6 @@ import {
 import { emojiMediaLocation, emojiStore } from "../emojis/emojiStore.js";
 import { loadConfig } from "../config.js";
 import type { AppConfig, ImageResult } from "../types.js";
-import type { AgentWorkbenchBackend } from "../../packages/platform/agentResourceLayout.js";
 import { AdminApiError, badRequest, conflict, notFound } from "./errors.js";
 import {
   readGeneratedEmojiImage,
@@ -70,7 +69,6 @@ export interface EmojiLibraryOptions {
   mutex?: AdminMutationMutex;
   normalizationGate?: EmojiNormalizationGate;
   hooks?: EmojiLibraryOperationHooks;
-  backend?: AgentWorkbenchBackend;
 }
 
 const emojiNormalizationGate = new EmojiNormalizationGate();
@@ -80,19 +78,17 @@ export class EmojiLibraryRepository {
   private readonly mutex: AdminMutationMutex;
   private readonly normalizationGate: EmojiNormalizationGate;
   private readonly hooks: EmojiLibraryOperationHooks;
-  private readonly backend: AgentWorkbenchBackend;
 
   constructor(options: EmojiLibraryOptions = {}) {
     this.getConfig = options.getConfig ?? loadConfig;
     this.mutex = options.mutex ?? adminMutationMutex;
     this.normalizationGate = options.normalizationGate ?? emojiNormalizationGate;
     this.hooks = options.hooks ?? {};
-    this.backend = options.backend ?? "native";
   }
 
   async list(): Promise<EmojiEnvelope> {
     const config = await this.getConfig();
-    return envelope(await filterVerifiedEmojiRecords(config, undefined, this.backend));
+    return envelope(await filterVerifiedEmojiRecords(config));
   }
 
   async upload(input: unknown): Promise<EmojiEnvelope> {
@@ -127,7 +123,7 @@ export class EmojiLibraryRepository {
     const key = requireEmojiKey(keyInput);
     const config = await this.getConfig();
     return this.mutex.runExclusive(async () => {
-      if (!await emojiStore(config, this.backend).delete(key)) {
+      if (!await emojiStore(config).delete(key)) {
         notFound("EMOJI_NOT_FOUND", "表情不存在。");
       }
     });
@@ -138,19 +134,19 @@ export class EmojiLibraryRepository {
     const nextKey = requireEmojiKey(nextKeyInput);
     const config = await this.getConfig();
     return this.mutex.runExclusive(async () => {
-      const result = await emojiStore(config, this.backend).rename(key, nextKey, new Date().toISOString());
+      const result = await emojiStore(config).rename(key, nextKey, new Date().toISOString());
       if (result === "missing") notFound("EMOJI_NOT_FOUND", "表情不存在。");
       if (result === "conflict") conflict("EMOJI_KEY_CONFLICT", "该表情 key 已存在。");
-      return envelope(await filterVerifiedEmojiRecords(config, undefined, this.backend));
+      return envelope(await filterVerifiedEmojiRecords(config));
     });
   }
 
   async listVersions(keyInput: unknown): Promise<EmojiVersionEnvelope> {
     const key = requireEmojiKey(keyInput);
     const config = await this.getConfig();
-    const store = emojiStore(config, this.backend);
+    const store = emojiStore(config);
     if (!store.read(key)) notFound("EMOJI_NOT_FOUND", "表情不存在。");
-    const versions = await filterVerifiedEmojiRecords(config, store.readVersions(key), this.backend);
+    const versions = await filterVerifiedEmojiRecords(config, store.readVersions(key));
     const currentFileName = store.read(key)?.fileName;
     return {
       key,
@@ -166,7 +162,7 @@ export class EmojiLibraryRepository {
     const fileName = requireEmojiFileName(fileNameInput);
     const config = await this.getConfig();
     return this.mutex.runExclusive(async () => {
-      const result = await emojiStore(config, this.backend).deleteVersion(key, fileName);
+      const result = await emojiStore(config).deleteVersion(key, fileName);
       if (result === "missing") notFound("EMOJI_VERSION_NOT_FOUND", "表情版本不存在。");
       if (result === "current") conflict("EMOJI_VERSION_CURRENT", "当前版本不能删除。");
     });
@@ -179,7 +175,7 @@ export class EmojiLibraryRepository {
   ): Promise<EmojiContent> {
     const key = requireEmojiKey(keyInput);
     const config = await this.getConfig();
-    const record = emojiStore(config, this.backend).read(key);
+    const record = emojiStore(config).read(key);
     if (!record) notFound("EMOJI_NOT_FOUND", "表情不存在。");
     if (expectedFileName !== undefined) {
       const version = String(expectedFileName);
@@ -201,7 +197,7 @@ export class EmojiLibraryRepository {
     const key = requireEmojiKey(keyInput);
     const fileName = requireEmojiFileName(fileNameInput);
     const config = await this.getConfig();
-    const record = emojiStore(config, this.backend).readVersion(key, fileName);
+    const record = emojiStore(config).readVersion(key, fileName);
     if (!record) notFound("EMOJI_VERSION_NOT_FOUND", "表情版本不存在。");
     return this.contentFromRecord(config, record, variant);
   }
@@ -213,7 +209,7 @@ export class EmojiLibraryRepository {
   ): Promise<EmojiContent> {
     let bytes: Buffer;
     try {
-      bytes = await readVerifiedEmojiRecordFile(config, record, this.backend);
+      bytes = await readVerifiedEmojiRecordFile(config, record);
     } catch {
       throw new AdminApiError(415, "EMOJI_IMAGE_INVALID", "表情图片无法解码。");
     }
@@ -263,7 +259,7 @@ export class EmojiLibraryRepository {
     const hash = crypto.createHash("sha256").update(normalized.bytes).digest("hex");
     const fileName = `emoji-${hash}.${normalized.format}`;
     return this.mutex.runExclusive(async () => {
-      const store = emojiStore(config, this.backend);
+      const store = emojiStore(config);
       const existing = store.read(key);
       if (!existing && store.readAll().length >= MAX_AGENT_EMOJIS) {
         conflict("EMOJI_LIMIT_REACHED", `表情最多保留 ${MAX_AGENT_EMOJIS} 个。`);
@@ -275,7 +271,7 @@ export class EmojiLibraryRepository {
       ) {
         conflict("EMOJI_VERSION_LIMIT_REACHED", `每个表情最多保留 ${MAX_EMOJI_VERSIONS_PER_KEY} 个版本，请先删除旧版本。`);
       }
-      const location = emojiMediaLocation(config, fileName, this.backend);
+      const location = emojiMediaLocation(config, fileName);
       await writeContentAddressedEmojiFile(location.filePath, normalized.bytes, hash, this.hooks);
       const now = new Date().toISOString();
       await store.upsert({
@@ -288,7 +284,7 @@ export class EmojiLibraryRepository {
         createdAt: existing?.createdAt ?? now,
         updatedAt: now
       });
-      return envelope(await filterVerifiedEmojiRecords(config, undefined, this.backend));
+      return envelope(await filterVerifiedEmojiRecords(config));
     });
   }
 }

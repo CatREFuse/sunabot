@@ -148,7 +148,7 @@ Continue only when the listener belongs to the intended Sunabot workspace. Repor
 
 When the management page shows the administrator login dialog, stop before preview, upload, or create. Hand the exact local management page to the user for sign-in, then resume with the same browser session and repeat the target-absence check. Never inspect password managers, cookies, local storage, session files, or credential files.
 
-If the preferred Chrome connection is unavailable, keep the working in-app management tab for user handoff. Do not bypass authentication with direct SQLite writes or guessed credentials.
+If the preferred browser connection is unavailable, keep the working in-app management tab for user handoff. Do not bypass authentication with direct SQLite writes or guessed credentials.
 
 ### A public role image download follows an unavailable local proxy
 

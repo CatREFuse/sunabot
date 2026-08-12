@@ -47,10 +47,7 @@ import type { ParsedIncomingMessage } from "../types.js";
 import type { ConversationAssetDeliveryDraft, ReplyDelivery } from "./runtimeContracts.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
 import { isRuntimeIncomingMessage, saveConversationRecordsStrict } from "./infrastructure.js";
-import {
-  resolveConversationWorkbench,
-  type ConversationCapabilityContextV1
-} from "../../services/conversations/conversationCapability.js";
+import type { ConversationCapabilityContextV1 } from "../../services/conversations/conversationCapability.js";
 
 import type { SunaRuntime } from "../runtime.js";
 
@@ -128,20 +125,11 @@ export class RuntimeConversationAssets {
     const incomingFingerprint = conversationAssetIncomingFingerprint(options.incoming, target);
     const agentWorkspace = resolveProjectPath(this.host.config.persona.agentWorkspace);
     if (!agentWorkspace) throw new Error("当前 Agent 工作区未配置。");
-    const workbench = conversationAssetWorkbench(
-      options.incoming,
-      this.host.isAdminUser(options.incoming.userId),
-      options.capability
-    );
     const address = voice
-      ? { path: options.input.path, backend: workbench, exactBackend: false }
-      : await resolveWorkbenchImageReferenceAddress(agentWorkspace, workbench, options.input.path);
+      ? { path: options.input.path }
+      : await resolveWorkbenchImageReferenceAddress(agentWorkspace, options.input.path);
     const { relativePath, prepared, rootIdentity } = await this.prepare(
-      { ...options.input, path: address.path },
-      undefined,
-      undefined,
-      address.backend,
-      address.exactBackend
+      { ...options.input, path: address.path }
     );
     if (options.isCurrent && !options.isCurrent()) {
       throw new Error("当前会话回复已关闭，文件未排队。");
@@ -195,25 +183,15 @@ export class RuntimeConversationAssets {
     isCurrent: () => boolean = () => true,
     capability?: Readonly<ConversationCapabilityContextV1>
   ) {
-    const backend = conversationAssetWorkbench(
-      incoming,
-      this.host.isAdminUser(incoming.userId),
-      capability,
-      "image_reference"
-    );
+    void incoming;
+    void capability;
     const agentWorkspace = resolveProjectPath(this.host.config.persona.agentWorkspace);
     if (!agentWorkspace) throw new Error("当前 Agent 工作区未配置。");
     const urls: string[] = [];
     for (const imagePath of [...new Set(paths.map((item) => String(item ?? "").trim()).filter(Boolean))].slice(0, 4)) {
       if (!isCurrent()) throw new Error("当前会话回复已关闭，参考图未读取。");
-      const address = await resolveWorkbenchImageReferenceAddress(agentWorkspace, backend, imagePath);
-      const { prepared } = await this.prepare(
-        { path: address.path, kind: "image" },
-        undefined,
-        undefined,
-        address.backend,
-        address.exactBackend
-      );
+      const address = await resolveWorkbenchImageReferenceAddress(agentWorkspace, imagePath);
+      const { prepared } = await this.prepare({ path: address.path, kind: "image" });
       if (!isCurrent()) throw new Error("当前会话回复已关闭，参考图未读取。");
       urls.push(await archiveConversationImage(this.host.config.persona.defaultAgentId, prepared));
     }
@@ -259,10 +237,7 @@ export class RuntimeConversationAssets {
       }, {
         byteLength: payload.asset.byteLength,
         sha256: payload.asset.sha256
-      }, payload.asset.rootIdentity, conversationAssetWorkbench(
-        authoritativeIncoming,
-        this.host.isAdminUser(authoritativeIncoming.userId)
-      ));
+      }, payload.asset.rootIdentity);
       const conversationImageUrl = prepared.kind === "image"
         ? await archiveConversationImage(payload.target.agentId, prepared)
         : undefined;
@@ -298,7 +273,7 @@ export class RuntimeConversationAssets {
       await context.settleStep("conversation_projection", async (idempotencyKey) => {
         const receipt = context.remoteReceipt ?? remoteReceipt;
         const imageUrl = conversationImageReceiptUrl(receipt, payload.target.agentId, payload.asset.sha256) ??
-          await this.archiveQueuedImage(payload, authoritativeIncoming);
+          await this.archiveQueuedImage(payload);
         const messageId = messagingReceiptMessageId(context.remoteReceipt ?? remoteReceipt) ?? idempotencyKey;
         this.host.recordAssistantMessage(
           authoritativeIncoming,
@@ -330,10 +305,7 @@ export class RuntimeConversationAssets {
     };
   }
 
-  private async archiveQueuedImage(
-    payload: ConversationAssetOutboxPayload,
-    incoming: ParsedIncomingMessage
-  ) {
+  private async archiveQueuedImage(payload: ConversationAssetOutboxPayload) {
     const { prepared } = await this.prepare({
       path: payload.asset.path,
       kind: payload.asset.kind,
@@ -341,61 +313,34 @@ export class RuntimeConversationAssets {
     }, {
       byteLength: payload.asset.byteLength,
       sha256: payload.asset.sha256
-    }, payload.asset.rootIdentity, conversationAssetWorkbench(
-      incoming,
-      this.host.isAdminUser(incoming.userId)
-    ));
+    }, payload.asset.rootIdentity);
     return archiveConversationImage(payload.target.agentId, prepared);
   }
 
   private async prepare(
     input: PrepareOutboundConversationAssetInput,
     expected?: { byteLength: number; sha256: string },
-    expectedRootIdentity?: QueuedConversationAssetRootIdentityV1,
-    preferredWorkbench: "native" | "docker" = "native",
-    exactWorkbench = false
+    expectedRootIdentity?: QueuedConversationAssetRootIdentityV1
   ) {
     try {
       const agentWorkspace = resolveProjectPath(this.host.config.persona.agentWorkspace);
       if (!agentWorkspace) throw new Error("当前 Agent 工作区未配置。");
-      const candidates: readonly ("native" | "docker")[] = expectedRootIdentity
-        ? ([preferredWorkbench, preferredWorkbench === "native" ? "docker" : "native"] as const)
-        : exactWorkbench
-          ? ([preferredWorkbench] as const)
-          : preferredWorkbench === "native"
-            ? (["native", "docker"] as const)
-            : (["docker"] as const);
-      for (const backend of candidates) {
-        try {
-          const workbenchRoot = await resolveAgentWorkbench(agentWorkspace, backend);
-          const rootIdentity = captureOutboundConversationAssetRootIdentity(workbenchRoot);
-          if (expectedRootIdentity && !sameQueuedRootIdentity(expectedRootIdentity, rootIdentity)) {
-            continue;
-          }
-          const resolvedFile = await resolveAgentWorkbenchFile(agentWorkspace, input.path, backend);
-          const relativePath = safeQueuedConversationAssetPath(rootIdentity.canonicalPath, resolvedFile);
-          const delivery = new OutboundConversationAssetDelivery({
-            rootDir: workbenchRoot,
-            rootIdentity
-          });
-          const prepared = await delivery.prepare(input, expected);
-          return { relativePath, prepared, rootIdentity };
-        } catch (error) {
-          const normalized = normalizeOutboundConversationAssetError(error);
-          const mayTryDocker = !expectedRootIdentity
-            && !exactWorkbench
-            && preferredWorkbench === "native"
-            && backend === "native"
-            && normalized instanceof OutboundConversationAssetSourceError
-            && normalized.code === "SEND_FILE_SOURCE_MISSING";
-          if (mayTryDocker) continue;
-          throw normalized;
-        }
+      const workbenchRoot = await resolveAgentWorkbench(agentWorkspace);
+      const rootIdentity = captureOutboundConversationAssetRootIdentity(workbenchRoot);
+      if (expectedRootIdentity && !sameQueuedRootIdentity(expectedRootIdentity, rootIdentity)) {
+        throw new OutboundConversationAssetSourceError(
+          "SEND_FILE_ROOT_CHANGED",
+          "The Agent workbench root changed after the file was queued."
+        );
       }
-      throw new OutboundConversationAssetSourceError(
-        "SEND_FILE_ROOT_CHANGED",
-        "The Agent workbench root changed after the file was queued."
-      );
+      const resolvedFile = await resolveAgentWorkbenchFile(agentWorkspace, input.path);
+      const relativePath = safeQueuedConversationAssetPath(rootIdentity.canonicalPath, resolvedFile);
+      const delivery = new OutboundConversationAssetDelivery({
+        rootDir: workbenchRoot,
+        rootIdentity
+      });
+      const prepared = await delivery.prepare(input, expected);
+      return { relativePath, prepared, rootIdentity };
     } catch (error) {
       throw normalizeOutboundConversationAssetError(error);
     }
@@ -520,20 +465,6 @@ function conversationImageReceiptUrl(value: unknown, agentId: string, sha256: st
   return fileName.startsWith(`${sha256}.`) && /^[a-f0-9]{64}\.[a-z0-9]+$/i.test(fileName)
     ? imageUrl
     : undefined;
-}
-
-function conversationAssetWorkbench(
-  incoming: ParsedIncomingMessage,
-  isAdmin: boolean,
-  capability?: Readonly<ConversationCapabilityContextV1>,
-  purpose: "send_file" | "image_reference" = "send_file"
-): "native" | "docker" {
-  if (capability) {
-    return resolveConversationWorkbench(capability, purpose).primaryBackend;
-  }
-  return isAdmin && incoming.scope === "private" && incoming.groupId === undefined
-    ? "native"
-    : "docker";
 }
 
 function conversationAssetContractError() {

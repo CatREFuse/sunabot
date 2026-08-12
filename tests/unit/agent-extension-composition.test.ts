@@ -116,22 +116,24 @@ describe("Agent extension composition", () => {
     await composition.close();
   });
 
-  it("reuses one projection builder across concurrent stdio server launches", async () => {
+  it("reuses one Bubblewrap projection builder across concurrent stdio server launches", async () => {
     const builders = new Set<McpSandboxProjectionBuilder>();
     vi.spyOn(McpSandboxProjectionBuilder.prototype, "build").mockImplementation(async function () {
       builders.add(this);
       throw new Error("TEST_PROJECTION_STOP");
     });
+    const previousExecPath = process.execPath;
+    process.execPath = "/usr/bin/node";
     const composition = buildAgentExtensionComposition({
       workspaceRoot: "/tmp/sunabot-agent-extension-composition-projection-test",
       agentExists: () => true,
       oauth: false,
       mcpStdio: {
-        backend: "docker",
-        dockerImage: "sunabot-mcp:local",
-        executableManifestSha256: "a".repeat(64)
+        backend: "bubblewrap",
+        executableManifestPath: "/fixture/mcp-executables.json"
       }
     });
+    process.execPath = previousExecPath;
     const internals = composition.mcpRuntimeService as unknown as {
       host: { pool: { factory: { options: { stdioLauncherFor(input: {
         agentId: string;

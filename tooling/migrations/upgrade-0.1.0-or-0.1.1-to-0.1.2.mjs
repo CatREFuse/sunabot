@@ -238,26 +238,35 @@ export async function verifyTargetRelease(projectRoot = root) {
     packageManifest,
     packageLock,
     runtimeContract,
-    releaseCatalog,
-    dockerfile,
-    compose
+    releaseCatalog
   ] = await Promise.all([
     readJson(path.join(projectRoot, "package.json")),
     readJson(path.join(projectRoot, "package-lock.json")),
     readJson(path.join(projectRoot, "deploy", "runtime-contract.json")),
-    fs.readFile(path.join(projectRoot, "packages", "platform", "releaseCatalog.ts"), "utf8"),
-    fs.readFile(path.join(projectRoot, "deploy", "docker", "Dockerfile"), "utf8"),
-    fs.readFile(path.join(projectRoot, "deploy", "docker", "compose.yml"), "utf8")
+    fs.readFile(path.join(projectRoot, "packages", "platform", "releaseCatalog.ts"), "utf8")
   ]);
-  const versions = {
+  const currentVersions = {
     package: packageManifest.version,
     packageLock: packageLock.version,
     packageLockRoot: packageLock.packages?.[""]?.version,
     runtimeContract: runtimeContract.releaseVersion,
-    releaseCatalog: releaseCatalog.match(/CURRENT_RELEASE_VERSION = "([^"]+)"/)?.[1],
+    releaseCatalog: releaseCatalog.match(/CURRENT_RELEASE_VERSION = "([^"]+)"/)?.[1]
+  };
+  assertTargetVersions(currentVersions);
+  const [dockerfile, compose] = await Promise.all([
+    fs.readFile(path.join(projectRoot, "deploy", "docker", "Dockerfile"), "utf8"),
+    fs.readFile(path.join(projectRoot, "deploy", "docker", "compose.yml"), "utf8")
+  ]);
+  const versions = {
+    ...currentVersions,
     dockerfile: dockerfile.match(/ARG SUNABOT_RELEASE_VERSION=([^\s]+)/)?.[1],
     compose: compose.match(/SUNABOT_RELEASE_VERSION:-([^}]+)}/)?.[1]
   };
+  assertTargetVersions(versions);
+  return versions;
+}
+
+function assertTargetVersions(versions) {
   const mismatches = Object.entries(versions)
     .filter(([, version]) => version !== TARGET_VERSION)
     .map(([name, version]) => `${name}=${version ?? "missing"}`);
@@ -267,7 +276,6 @@ export async function verifyTargetRelease(projectRoot = root) {
       `升级脚本需要完整的 ${TARGET_VERSION} 代码，当前版本不一致：${mismatches.join(", ")}`
     );
   }
-  return versions;
 }
 
 async function inspectEmojiAgent(workspace, agentId) {

@@ -15,7 +15,6 @@ import {
   withRequiredDispatchMessage,
   webfetchTool,
   websearchTool,
-  dockerBashTool,
   nativeBashTool,
   writeFileTool
 } from "../tools/public.js";
@@ -306,8 +305,7 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
         noReplyTool,
         readFileTool,
         writeFileTool,
-        ...(!isGroupReply ? [nativeBashTool] : []),
-        dockerBashTool,
+        nativeBashTool,
         websearchTool,
         webfetchTool,
         withRequiredDispatchMessage(generateImgTool),

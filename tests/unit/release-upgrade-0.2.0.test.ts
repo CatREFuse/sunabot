@@ -21,8 +21,9 @@ afterEach(async () => {
 });
 
 describe("0.1.4 to 0.2.0 release upgrade", () => {
-  it("keeps every current release version entry and changelog on 0.2.0", async () => {
-    await expect(verifyTargetRelease(root)).resolves.toEqual({
+  it("validates a complete 0.2.0 target checkout and retains its release history", async () => {
+    const projectRoot = await releaseFixture();
+    await expect(verifyTargetRelease(projectRoot)).resolves.toEqual({
       package: "0.2.0",
       packageLock: "0.2.0",
       packageLockRoot: "0.2.0",
@@ -31,9 +32,8 @@ describe("0.1.4 to 0.2.0 release upgrade", () => {
       dockerfile: "0.2.0",
       compose: "0.2.0"
     });
-    expect(CURRENT_RELEASE_VERSION).toBe("0.2.0");
-    expect(RELEASE_CATALOG.currentVersion).toBe("0.2.0");
-    expect(RELEASE_CATALOG.releases[0]?.version).toBe("0.2.0");
+    expect(CURRENT_RELEASE_VERSION).toBe("0.3.0");
+    expect(RELEASE_CATALOG.currentVersion).toBe("0.3.0");
     expect(RELEASE_CATALOG.releases.filter((release) => release.version === "0.2.0"))
       .toHaveLength(1);
     expect(await fs.readFile(path.join(root, "CHANGELOG.md"), "utf8"))
@@ -42,9 +42,10 @@ describe("0.1.4 to 0.2.0 release upgrade", () => {
 
   it("plans without writing workspace data and reports no data migration", async () => {
     const workspace = await workspaceFixture();
+    const projectRoot = await releaseFixture();
     const before = await directorySnapshot(workspace);
 
-    await expect(planReleaseUpgrade({ projectRoot: root, workspace })).resolves.toMatchObject({
+    await expect(planReleaseUpgrade({ projectRoot, workspace })).resolves.toMatchObject({
       ok: true,
       command: "plan",
       fromVersion: "0.1.4",
@@ -59,9 +60,10 @@ describe("0.1.4 to 0.2.0 release upgrade", () => {
 
   it("stops, creates a recovery point, starts, then runs status and doctor", async () => {
     const workspace = await workspaceFixture();
+    const projectRoot = await releaseFixture();
     const events: string[] = [];
     const result = await applyReleaseUpgrade({
-      projectRoot: root,
+      projectRoot,
       workspace,
       assertNonRoot: () => undefined,
       runCommand: async (_command: string, args: string[]) => {
@@ -92,10 +94,11 @@ describe("0.1.4 to 0.2.0 release upgrade", () => {
 
   it("keeps the service stopped when recovery point creation fails", async () => {
     const workspace = await workspaceFixture();
+    const projectRoot = await releaseFixture();
     const events: string[] = [];
 
     await expect(applyReleaseUpgrade({
-      projectRoot: root,
+      projectRoot,
       workspace,
       assertNonRoot: () => undefined,
       runCommand: async (_command: string, args: string[]) => {
@@ -113,6 +116,24 @@ describe("0.1.4 to 0.2.0 release upgrade", () => {
     expect(events).toEqual(["down", "backup"]);
   });
 });
+
+async function releaseFixture() {
+  const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-target-0.2.0-")));
+  temporaryDirectories.push(projectRoot);
+  await Promise.all([
+    fs.mkdir(path.join(projectRoot, "deploy", "docker"), { recursive: true }),
+    fs.mkdir(path.join(projectRoot, "packages", "platform"), { recursive: true })
+  ]);
+  await Promise.all([
+    fs.writeFile(path.join(projectRoot, "package.json"), '{"version":"0.2.0"}\n'),
+    fs.writeFile(path.join(projectRoot, "package-lock.json"), '{"version":"0.2.0","packages":{"":{"version":"0.2.0"}}}\n'),
+    fs.writeFile(path.join(projectRoot, "deploy", "runtime-contract.json"), '{"releaseVersion":"0.2.0"}\n'),
+    fs.writeFile(path.join(projectRoot, "packages", "platform", "releaseCatalog.ts"), 'export const CURRENT_RELEASE_VERSION = "0.2.0";\n'),
+    fs.writeFile(path.join(projectRoot, "deploy", "docker", "Dockerfile"), "ARG SUNABOT_RELEASE_VERSION=0.2.0\n"),
+    fs.writeFile(path.join(projectRoot, "deploy", "docker", "compose.yml"), "SUNABOT_RELEASE_VERSION: ${SUNABOT_RELEASE_VERSION:-0.2.0}\n")
+  ]);
+  return projectRoot;
+}
 
 async function workspaceFixture() {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-release-0.2.0-"));

@@ -3,39 +3,24 @@ import { resolveAgentWorkbench } from "../agents/public.js";
 
 export interface WorkbenchImageReferenceAddress {
   path: string;
-  backend: "native" | "docker";
-  exactBackend: boolean;
 }
 
-const DOCKER_WORKBENCH_ROOT = "/workbench";
-const DOCKER_NATIVE_PROJECTION_ROOT = "/workbench/native-workbench";
+const VIRTUAL_WORKBENCH_ROOT = "/workbench";
 
 export async function resolveWorkbenchImageReferenceAddress(
   agentWorkspace: string,
-  conversationBackend: "native" | "docker",
   requestedPath: string
 ): Promise<WorkbenchImageReferenceAddress> {
   const requested = requestedPath.trim();
   if (!requested) throw invalidWorkbenchImagePath();
 
-  const nativeProjectionPath = virtualWorkbenchRelative(
-    DOCKER_NATIVE_PROJECTION_ROOT,
-    requested
-  );
-  if (nativeProjectionPath !== undefined) {
+  const virtualPath = virtualWorkbenchRelative(VIRTUAL_WORKBENCH_ROOT, requested);
+  if (virtualPath !== undefined) {
+    if (virtualPath === OBSOLETE_NATIVE_PROJECTION || virtualPath.startsWith(`${OBSOLETE_NATIVE_PROJECTION}${path.sep}`)) {
+      throw outsideAuthorizedWorkbench();
+    }
     return {
-      path: nativeProjectionPath,
-      backend: "native",
-      exactBackend: true
-    };
-  }
-
-  const dockerPath = virtualWorkbenchRelative(DOCKER_WORKBENCH_ROOT, requested);
-  if (dockerPath !== undefined) {
-    return {
-      path: dockerPath,
-      backend: "docker",
-      exactBackend: true
+      path: virtualPath
     };
   }
 
@@ -44,34 +29,25 @@ export async function resolveWorkbenchImageReferenceAddress(
     if (normalized === "knowledge" || normalized.startsWith("knowledge/")) {
       if (normalized === "knowledge" || normalized.includes("../")) throw outsideAuthorizedWorkbench();
       return {
-        path: normalized.split("/").join(path.sep),
-        backend: "native",
-        exactBackend: true
+        path: normalized.split("/").join(path.sep)
       };
     }
     return {
-      path: requested,
-      backend: conversationBackend,
-      exactBackend: false
+      path: requested
     };
   }
 
-  const allowedBackends = conversationBackend === "native"
-    ? (["native", "docker"] as const)
-    : (["docker"] as const);
-  for (const backend of allowedBackends) {
-    const root = await resolveAgentWorkbench(agentWorkspace, backend);
-    const relativePath = physicalWorkbenchRelative(root, requested);
-    if (relativePath !== undefined) {
-      return {
-        path: relativePath,
-        backend,
-        exactBackend: true
-      };
-    }
+  const root = await resolveAgentWorkbench(agentWorkspace);
+  const relativePath = physicalWorkbenchRelative(root, requested);
+  if (relativePath !== undefined) {
+    return {
+      path: relativePath
+    };
   }
   throw outsideAuthorizedWorkbench();
 }
+
+const OBSOLETE_NATIVE_PROJECTION = "native-workbench";
 
 function virtualWorkbenchRelative(root: string, candidate: string) {
   if (candidate !== root && !candidate.startsWith(`${root}/`)) return undefined;

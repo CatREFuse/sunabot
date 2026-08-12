@@ -98,7 +98,7 @@ export function readImportChatSelfieInput(value: unknown): ImportChatSelfieInput
 export const exportChatMediaTool = {
   type: "function",
   name: EXPORT_CHAT_MEDIA_TOOL_NAME,
-  description: "Export one image or file from the current user message or an explicitly quoted message into the current Agent workbench. Use only an exact media handle shown in the current prompt. The tool never accepts a URL, local path, Agent ID, or destination path. It returns a relative workbench path, SHA-256, MIME type, extension, dimensions, and byte length. Native Bash can use the returned path directly; Docker Bash reads the same file through native-workbench/<path>.",
+  description: "Export one image or file from the current user message or an explicitly quoted message into the current Agent workbench. Use only an exact media handle shown in the current prompt. The tool never accepts a URL, local path, Agent ID, or destination path. It returns a relative workbench path, SHA-256, MIME type, extension, dimensions, and byte length. native_bash can use the returned path directly.",
   strict: true,
   parameters: {
     type: "object",
@@ -119,7 +119,7 @@ export const exportChatMediaTool = {
 export const importChatEmojiTool = {
   type: "function",
   name: IMPORT_CHAT_EMOJI_TOOL_NAME,
-  description: "Import one exact image from the current user message or an explicitly quoted message into the current Agent emoji library. This mutating capability is available only in an authorized administrator QQ private chat or group chat. It validates the image, normalizes it, stores it under a SHA-256 name, deduplicates content, and atomically updates emojis.jsonl. Native and Docker resource views address the same authoritative catalog; do not edit emoji files or emojis.jsonl with Bash.",
+  description: "Import one exact image from the current user message or an explicitly quoted message into the current Agent emoji library. This mutating capability is available only in an authorized administrator QQ private chat or group chat. It validates the image, normalizes it, stores it under a SHA-256 name, deduplicates content, and atomically updates emojis.jsonl. Do not edit emoji files or emojis.jsonl with Bash.",
   strict: true,
   parameters: {
     type: "object",
@@ -146,7 +146,7 @@ export const importChatEmojiTool = {
 export const importChatSelfieTool = {
   type: "function",
   name: IMPORT_CHAT_SELFIE_TOOL_NAME,
-  description: "Import one exact image from the current user message or an explicitly quoted message into the current Agent selfie-reference library. This mutating capability is available only in an authorized administrator QQ private chat or group chat. Private chat writes the Native Workbench catalog; group chat writes the Docker Workbench catalog. It validates the image, stores it with a content-derived ID, deduplicates content, and atomically updates references.jsonl.",
+  description: "Import one exact image from the current user message or an explicitly quoted message into the current Agent selfie-reference library. This mutating capability is available only in an authorized administrator QQ private chat or group chat. It validates the image, stores it with a content-derived ID in the current Agent workbench, deduplicates content, and atomically updates references.jsonl.",
   strict: true,
   parameters: {
     type: "object",

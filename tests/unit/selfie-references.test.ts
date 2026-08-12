@@ -609,71 +609,46 @@ describe("selfie reference routes", () => {
     await app.close();
   });
 
-  it("addresses Native and Docker Workbench selfie catalogs independently", async () => {
+  it("uses one canonical selfie catalog and rejects retired source parameters", async () => {
     const config = createAdminTestConfig(root);
-    const repositories = {
-      native: new SelfieReferenceRepository({
-        getConfig: () => config,
-        mutex: new AdminMutationMutex(),
-        backend: "native"
-      }),
-      docker: new SelfieReferenceRepository({
-        getConfig: () => config,
-        mutex: new AdminMutationMutex(),
-        backend: "docker"
-      })
-    };
+    const repository = new SelfieReferenceRepository({
+      getConfig: () => config,
+      mutex: new AdminMutationMutex()
+    });
     const app = Fastify();
     registerSelfieReferenceRoutes(app, {
-      repository: repositories.native,
-      getRepository: (_agentId, backend) => repositories[backend]
+      repository,
+      getRepository: () => repository
     });
 
     const bytes = await image(64, 64, "#eff8ff");
-    const nativeUpload = await app.inject({
-      method: "POST",
-      url: "/api/selfie-references?agentId=plana&workbench=native",
-      payload: {
-        fileName: "native.png",
-        dataBase64: bytes.toString("base64"),
-        note: "Native 参考图"
-      }
-    });
-    expect(nativeUpload.statusCode, nativeUpload.body).toBe(201);
     const upload = await app.inject({
       method: "POST",
-      url: "/api/selfie-references?agentId=plana&workbench=docker",
+      url: "/api/selfie-references?agentId=plana",
       payload: {
-        fileName: "docker.png",
+        fileName: "canonical.png",
         dataBase64: bytes.toString("base64"),
-        note: "Docker 参考图"
+        note: "统一参考图"
       }
     });
     expect(upload.statusCode, upload.body).toBe(201);
     const reference = upload.json().images[0];
-    expect(reference.displayUrl).toContain("&workbench=docker");
+    expect(reference).not.toHaveProperty("workbench");
+    expect(reference.displayUrl).not.toContain("workbench=");
 
-    const [nativeList, dockerList] = await Promise.all([
-      app.inject({ method: "GET", url: "/api/selfie-references?agentId=plana" }),
-      app.inject({ method: "GET", url: "/api/selfie-references?agentId=plana&workbench=docker" })
-    ]);
-    expect(nativeList.json().images).toHaveLength(1);
-    expect(dockerList.json().images).toHaveLength(1);
-    const allList = await app.inject({
+    const list = await app.inject({ method: "GET", url: "/api/selfie-references?agentId=plana" });
+    expect(list.json().images).toEqual([expect.objectContaining({ note: "统一参考图" })]);
+    expect(list.json().images[0]).not.toHaveProperty("workbench");
+    const retired = await app.inject({
       method: "GET",
       url: "/api/selfie-references?agentId=plana&workbench=all"
     });
-    expect(allList.statusCode, allList.body).toBe(200);
-    expect(allList.json().images).toEqual([
-      expect.objectContaining({ note: "Native 参考图", workbench: "native" }),
-      expect.objectContaining({ note: "Docker 参考图", workbench: "docker" })
-    ]);
-    expect(allList.json().images[1].displayUrl).toContain("&workbench=docker");
+    expect(retired.statusCode).toBe(400);
     const content = await app.inject({ method: "GET", url: reference.displayUrl });
     expect(content.statusCode).toBe(200);
     await expect(fs.access(path.join(
       config.persona.agentWorkspace,
-      "docker-workbench",
+      "workbench",
       "selfie",
       reference.fileName
     ))).resolves.toBeUndefined();

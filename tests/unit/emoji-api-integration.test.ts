@@ -228,56 +228,40 @@ describe("emoji production repository and Fastify routes", () => {
     expect((await list("agent-b")).emojis.map((item: { key: string }) => item.key)).toEqual(["开心"]);
   });
 
-  it("addresses Native and Docker Workbench emoji catalogs independently", async () => {
+  it("uses one Agent Workbench and rejects retired source selectors", async () => {
     const agentId = "docker-agent";
-    const nativeUpload = await app.inject({
+    const uploadResponse = await app.inject({
       method: "POST",
-      url: `/api/emojis?agentId=${agentId}&workbench=native`,
+      url: `/api/emojis?agentId=${agentId}`,
       headers: mutationHeaders(),
-      payload: uploadPayload("认真", "native.png", redPng)
+      payload: uploadPayload("认真", "emoji.png", redPng)
     });
-    expect(nativeUpload.statusCode, nativeUpload.body).toBe(200);
-    const dockerUpload = await app.inject({
-      method: "POST",
-      url: `/api/emojis?agentId=${agentId}&workbench=docker`,
-      headers: mutationHeaders(),
-      payload: uploadPayload("开心", "docker.png", greenPng)
-    });
-    expect(dockerUpload.statusCode, dockerUpload.body).toBe(200);
-    const dockerRecord = findEmoji(dockerUpload.json(), "开心");
-    expect(dockerRecord.originalUrl).toContain("&workbench=docker");
-
-    const [nativeList, dockerList] = await Promise.all([
-      app.inject({
-        method: "GET",
-        url: `/api/emojis?agentId=${agentId}`,
-        headers: readHeaders()
-      }),
-      app.inject({
-        method: "GET",
-        url: `/api/emojis?agentId=${agentId}&workbench=docker`,
-        headers: readHeaders()
-      })
-    ]);
-    expect(nativeList.json().emojis).toHaveLength(1);
-    expect(dockerList.json().emojis).toHaveLength(1);
-    const allList = await app.inject({
-      method: "GET",
-      url: `/api/emojis?agentId=${agentId}&workbench=all`,
-      headers: readHeaders()
-    });
-    expect(allList.statusCode, allList.body).toBe(200);
-    expect(allList.json().emojis).toEqual([
-      expect.objectContaining({ key: "认真", workbench: "native" }),
-      expect.objectContaining({ key: "开心", workbench: "docker" })
-    ]);
-    expect(allList.json().emojis[1].originalUrl).toContain("&workbench=docker");
+    expect(uploadResponse.statusCode, uploadResponse.body).toBe(200);
+    const record = findEmoji(uploadResponse.json(), "认真");
+    expect(record).not.toHaveProperty("workbench");
+    expect(record.originalUrl).not.toContain("workbench=");
     await expect(fs.access(path.join(
       requireConfig(agentId).persona.agentWorkspace,
-      "docker-workbench",
+      "workbench",
       "emoji",
-      dockerRecord.fileName
+      record.fileName
     ))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(
+      requireConfig(agentId).persona.agentWorkspace,
+      "docker-workbench"
+    ))).rejects.toMatchObject({ code: "ENOENT" });
+
+    for (const workbench of ["native", "docker", "all"]) {
+      const retired = await app.inject({
+        method: "GET",
+        url: `/api/emojis?agentId=${agentId}&workbench=${workbench}`,
+        headers: readHeaders()
+      });
+      expect(retired.statusCode, retired.body).toBe(400);
+      expect(retired.json()).toMatchObject({
+        error: { code: "WORKBENCH_SOURCE_RETIRED", field: "workbench" }
+      });
+    }
   });
 
   it("keeps uploaded GIF animation through storage, content delivery, and configured resizing", async () => {

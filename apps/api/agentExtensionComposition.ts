@@ -3,7 +3,6 @@ import { AgentExtensionStore } from "../../adapters/filesystem/agentExtensionSto
 import { AgentSkillRuntimeReader } from "../../adapters/filesystem/agentSkillRuntimeReader.js";
 import {
   BubblewrapMcpStdioLauncher,
-  DockerMcpStdioLauncher,
   EncryptedFileMcpCredentialVault,
   EnvironmentMcpServerSecretResolver,
   MCP_OAUTH_ADMIN_SUBJECT,
@@ -13,6 +12,7 @@ import {
   SdkMcpRuntimeClientFactory,
   createControlledMcpOAuthTokenExchange,
   fetchPinnedMcpAddress,
+  resolveMcpBubblewrapExecutable,
   resolveMcpHostname,
   type McpOAuthCredentialVault,
   type McpOAuthLoopbackBrokerOptions,
@@ -59,11 +59,6 @@ export interface AgentExtensionCompositionOptions {
   mcpStdio?: false | {
     backend: "bubblewrap";
     executableManifestPath: string;
-  } | {
-    backend: "docker";
-    dockerExecutable?: string;
-    dockerImage: string;
-    executableManifestSha256: string;
   };
 }
 
@@ -247,32 +242,20 @@ function defaultMcpClientFactory(
   const projectionBuilder = stdioOptions ? new McpSandboxProjectionBuilder({
     workspaceRoot,
     repository: store,
-    ...(stdioOptions.backend === "bubblewrap" ? {
-      executableManifestPath: stdioOptions.executableManifestPath,
-      nodeExecutable: mcpBubblewrapNodeExecutable()
-    } : {
-      executableManifestSha256: stdioOptions.executableManifestSha256
-    })
+    executableManifestPath: stdioOptions.executableManifestPath,
+    nodeExecutable: mcpBubblewrapNodeExecutable()
   }) : undefined;
   return new SdkMcpRuntimeClientFactory({
     secrets: new EnvironmentMcpServerSecretResolver(process.env, { oauthVault }),
-    stdioLauncherFor: async ({ agentId, server, signal }) => {
+    stdioLauncherFor: async ({ agentId, server }) => {
       if (!stdioOptions) throw new Error("MCP_STDIO_ISOLATION_UNAVAILABLE");
       return {
         async launch(spec, handlers) {
-          if (!projectionBuilder || (stdioOptions.backend !== "docker" && stdioOptions.backend !== "bubblewrap")) {
-            throw new Error("MCP_STDIO_ISOLATION_UNAVAILABLE");
-          }
+          if (!projectionBuilder || stdioOptions.backend !== "bubblewrap") throw new Error("MCP_STDIO_ISOLATION_UNAVAILABLE");
           const projection = await projectionBuilder.build({ agentId, server });
-          if (stdioOptions.backend === "docker") {
-            return new DockerMcpStdioLauncher(projection, {
-              abortSignal: signal,
-              dockerExecutable: stdioOptions.dockerExecutable,
-              dockerImage: stdioOptions.dockerImage,
-              dockerEnvironment: process.env.DOCKER_HOST ? { DOCKER_HOST: process.env.DOCKER_HOST } : {}
-            }).launch(spec, handlers);
-          }
-          return new BubblewrapMcpStdioLauncher(projection).launch(spec, handlers);
+          return new BubblewrapMcpStdioLauncher(projection, {
+            bwrap: resolveMcpBubblewrapExecutable()
+          }).launch(spec, handlers);
         }
       };
     },

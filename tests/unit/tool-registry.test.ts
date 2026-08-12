@@ -19,31 +19,29 @@ describe("ToolRegistry", () => {
     const metadata = listToolMetadata();
     const definitions = resolveProviderToolDefinitions({
       bash: {
-        docker: {
-          enabled: true,
-          workspacePath: "/fixture/agent-workspace",
-          backend: "docker",
-          accessMode: "isolated",
-          strictMode: true,
-          isAdmin: false,
-          userRequest: "生成并发送报告",
-          isCurrent: () => true,
-          audit: vi.fn(),
-          approvalContext: {
-            backend: "docker",
-            agentId: "plana",
-            accountId: "primary",
-            transport: "onebot",
-            conversationId: "private:171419991",
-            userId: "171419991"
-          }
+        enabled: true,
+        workspacePath: "/fixture/agent-workspace",
+        backend: "native",
+        accessMode: "isolated",
+        strictMode: true,
+        isAdmin: false,
+        userRequest: "生成并发送报告",
+        isCurrent: () => true,
+        audit: vi.fn(),
+        approvalContext: {
+          backend: "native",
+          agentId: "plana",
+          accountId: "primary",
+          transport: "onebot",
+          conversationId: "private:171419991",
+          userId: "171419991"
         }
       }
     });
     const names = definitions.map((definition) => String(definition.name));
 
     expect(metadata.some((tool) => tool.name === "native_bash")).toBe(true);
-    expect(metadata.some((tool) => tool.name === "docker_bash")).toBe(true);
+    expect(metadata.some((tool) => tool.name === "docker_bash")).toBe(false);
     expect(metadata.some((tool) => tool.name === "bash.run")).toBe(false);
     expect(metadata.map((tool) => tool.name)).toEqual(
       AGENT_TOOL_NAMES.filter((name) => name !== "add_workmemory" && name !== "add_user_profile")
@@ -53,9 +51,9 @@ describe("ToolRegistry", () => {
     expect(metadata.some((tool) => tool.name === "system.time")).toBe(false);
     expect(metadata.some((tool) => tool.name === "onebot.send_message")).toBe(false);
     expect(metadata.some((tool) => tool.name === "provider.test")).toBe(false);
-    expect(names).toEqual(["docker_bash"]);
+    expect(names).toEqual(["native_bash"]);
     expect(providerToolExecutionMode("native_bash")).toBe("inline");
-    expect(providerToolExecutionMode("docker_bash")).toBe("inline");
+    expect(providerToolExecutionMode("docker_bash" as never)).toBeUndefined();
   });
 
   it("does not expose disabled provider tools", () => {
@@ -126,10 +124,10 @@ describe("ToolRegistry", () => {
   });
 
   it("keeps API-only Bash capability metadata separate from executable Provider options", () => {
-    const bash = listToolMetadata({ bashAvailable: { docker: true } }).find((tool) => tool.name === "docker_bash");
+    const bash = listToolMetadata({ bashAvailable: true }).find((tool) => tool.name === "native_bash");
 
     expect(bash).toMatchObject({ available: true });
-    expect(resolveProviderToolDefinitions({ bashAvailable: { docker: true } })).toEqual([]);
+    expect(resolveProviderToolDefinitions({ bashAvailable: true })).toEqual([]);
   });
 
   it("classifies workbench file access as a session scope instead of a runtime failure", () => {
@@ -532,7 +530,6 @@ describe("ToolRegistry", () => {
         enabled: null,
         orchestratorEnabled: null,
         searchImplementation: null,
-        bashAdminBackend: null,
         conversationId: null,
         groupCursor: null,
         groupLimit: null

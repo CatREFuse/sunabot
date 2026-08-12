@@ -6,7 +6,6 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
-import { createDockerBashSupervisor } from "../../adapters/docker/dockerBashSupervisor.js";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
 import { SqliteAdminSessionStore } from "../../adapters/sqlite/adminSessionStore.js";
 import {
@@ -47,10 +46,11 @@ import {
   createWorkspaceBashCapabilityProbe,
   type RuntimeToolCapabilityResolver
 } from "../../services/tools/bashCapability.js";
+import { resolveWorkspaceBashSandboxExecutable } from "../../services/tools/bashSandbox.js";
 import type { SystemConfigRuntimePort } from "../../services/tools/systemConfigTool.js";
-import type { WorkspaceBashRuntimePort } from "../../services/tools/bashRuntime.js";
 import { AgentConfigService } from "../../src/admin/agentConfigService.js";
-import { AgentFileRepository } from "../../src/admin/agentFiles.js";
+import { AgentFileRepository, recoverAgentFileBatchTransactions } from "../../src/admin/agentFiles.js";
+import { AgentSoulService } from "../../src/admin/agentSoul.js";
 import { AdminAuthService } from "../../src/admin/auth.js";
 import { CodexAuthService } from "../../src/admin/codexAuth.js";
 import { ConfigDoctorService, type ConfigDoctorModelRunner } from "../../src/admin/configDoctor.js";
@@ -70,8 +70,8 @@ import { auxiliaryProviderCompleteOptions } from "../../src/runtime/auxiliaryMod
 import type { RuntimeBashAuditPort } from "../../src/runtime/runtimeContracts.js";
 import { ServiceMonitor } from "../../src/serviceMonitor.js";
 import {
-  completeFirstRunBootstrap,
-  inspectFirstRunBootstrap
+  inspectFirstRunBootstrap,
+  inspectFirstRunBootstrapCompletion
 } from "../../tooling/runtime/first-run-state.mjs";
 import { resolveMcpStdioRuntimeOptions } from "../../tooling/runtime/mcp-runtime-config.mjs";
 import { buildRuntimeProbe, collectWorkspaceProbeFacts } from "../../tooling/runtime/probe.mjs";
@@ -126,7 +126,6 @@ export interface CreateAppOptions {
   accountRuntimeReconciler?: false | AccountRuntimeReconcilerPort;
   runtimeProbeClient?: false | RuntimeProbeClientPort;
   bashAudit?: RuntimeBashAuditPort;
-  bashRuntime?: WorkspaceBashRuntimePort;
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
   agentExtensions?: AgentExtensionApiOptions;
   mediaHostnameLookup?: MediaHostnameLookup;
@@ -182,7 +181,13 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     workspaceGateAlreadyChecked: !skipWorkspaceMigrationGate
   });
   await agentRegistry.initialize();
-  const defaultAgentConfig = await agentRegistry.config(config.persona.defaultAgentId, config);
+  const registeredAgentConfigs = await Promise.all((await agentRegistry.list()).map(
+    (agent) => agentRegistry.config(agent.id, config)
+  ));
+  for (const agentConfig of registeredAgentConfigs) await recoverAgentFileBatchTransactions(agentConfig);
+  const defaultAgentConfig = registeredAgentConfigs.find(
+    (agentConfig) => agentConfig.persona.defaultAgentId === config.persona.defaultAgentId
+  )!;
   const agentExtensions = buildAgentExtensionApiComposition(options.agentExtensions, getWorkspaceDir(), agentRegistry);
   if (options.initializeRuntime !== false) {
     await Promise.all((await agentRegistry.list()).map((agent) => (
@@ -201,16 +206,12 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     codexHome: getWorkspacePath(WORKSPACE_LAYOUT.codexHome),
     executable: process.env.SUNABOT_CODEX_EXECUTABLE
   });
-  const bashRuntime = options.bashRuntime ?? createDockerBashSupervisor();
-  const workspaceBashProbes = {
-    native: createWorkspaceBashCapabilityProbe({ backend: "native", runtime: bashRuntime }),
-    docker: createWorkspaceBashCapabilityProbe({ backend: "docker", runtime: bashRuntime })
-  };
+  const workspaceBashProbe = createWorkspaceBashCapabilityProbe({
+    sandbox: { executable: resolveWorkspaceBashSandboxExecutable() }
+  });
   const resolveToolCapabilities = options.resolveToolCapabilities ?? createRuntimeToolCapabilityResolver({
     getCodexStatus: () => codexAuth.status(),
-    getWorkspaceBashCapability: (context) => workspaceBashProbes[context.workspaceBashBackend](
-      context.workspacePath
-    )
+    getWorkspaceBashCapability: (context) => workspaceBashProbe(context.workspacePath)
   });
   const bashAudit = options.bashAudit ?? createBashAuditRuntimePort();
   let systemConfigService: SystemConfigService | undefined;
@@ -224,7 +225,6 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   const createRuntime = (agentConfig: AppConfig) => new SunaRuntime(agentConfig, {
     resolveToolCapabilities,
     bashAudit,
-    bashRuntime,
     bashSkillRepository: agentExtensions.bashSkillRepository,
     systemConfig: systemConfigRuntime,
     agentExtensions: runtimeAgentExtensions,
@@ -271,7 +271,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   agentExtensions.mcpRuntimeService.setReadinessInvalidationHandler((agentId) =>
     agentRuntimeManager.refreshReadiness(agentId).then(() => undefined));
   if (options.initializeRuntime !== false) {
-    const firstRun = await completeFirstRunBootstrap(getWorkspaceDir());
+    const firstRun = await inspectFirstRunBootstrapCompletion(getWorkspaceDir());
     if (firstRun.state === "pending" && "missing" in firstRun && Array.isArray(firstRun.missing)) {
       throw new ServiceError(
         409,
@@ -315,18 +315,26 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
   const agentFiles = new AgentFileRepository({ runtime });
   const agentFilesFor = (agentId: string) => new AgentFileRepository({ runtime: getRuntime(agentId) });
+  const soulAgentFilesFor = (agentId: string) => new AgentFileRepository({
+    runtime: {
+      reloadPrompts: async (agentConfig) => {
+        const agentRuntime = agentRuntimeManager.get(agentId);
+        if (agentRuntime) await agentRuntime.reloadPrompts(agentConfig);
+      },
+      defaultPromptContent: (id) => agentRuntimeManager.get(agentId)?.defaultPromptContent(id) ?? ""
+    }
+  });
+  const agentSoul = new AgentSoulService({ registry: agentRegistry, repositoryFor: soulAgentFilesFor });
   const selfieReferences = new Map<string, SelfieReferenceRepository>();
-  const selfieReferencesFor = (agentId: string, backend: "native" | "docker" = "native") => {
-    const key = `${agentId}:${backend}`;
-    const existing = selfieReferences.get(key);
+  const selfieReferencesFor = (agentId: string) => {
+    const existing = selfieReferences.get(agentId);
     if (existing) return existing;
     const repository = new SelfieReferenceRepository({
       getConfig: () => agentId === config.persona.defaultAgentId
         ? config
-        : agentRegistry.config(agentId, config),
-      backend
+        : agentRegistry.config(agentId, config)
     });
-    selfieReferences.set(key, repository);
+    selfieReferences.set(agentId, repository);
     return repository;
   };
   const configService = new ConfigService({
@@ -454,7 +462,6 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     getRecoveryStatus: () => configService.getRecoveryStatus(),
     startedAt
   });
-
   app.setErrorHandler((error: unknown, request, reply) => {
     if (error instanceof ServiceError) {
       if (error.statusCode === 401 && request.headers.authorization) {
@@ -477,7 +484,6 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
   registerAuthRoutes(app, adminAuth);
   registerAgentExtensionApi(app, agentExtensions, adminAuth);
-
   app.addHook("onSend", async (request, reply, payload) => {
     reply.header("x-content-type-options", "nosniff");
     reply.header("x-frame-options", "DENY");
@@ -493,7 +499,6 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     return payload;
   });
   app.get("/healthz/runtime", async () => ({ schemaVersion: 1, live: true }));
-
   registerMonitoringRoutes(app, {
     startedAt,
     getConfigPath,
@@ -509,17 +514,12 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
 
   app.get("/generated-images/:workbench/:agentId/emoji/:fileName", async (request, reply) => {
     const params = request.params as { workbench?: string; agentId?: string; fileName?: string };
-    const backend = params.workbench === "workbench"
-      ? "native" as const
-      : params.workbench === "docker-workbench"
-        ? "docker" as const
-        : undefined;
     const agentId = String(params.agentId ?? "");
     const fileName = String(params.fileName ?? "");
-    if (!backend || !AGENT_ID_PATTERN.test(agentId) || !isEmojiFileName(fileName)) {
+    if (params.workbench !== "workbench" || !AGENT_ID_PATTERN.test(agentId) || !isEmojiFileName(fileName)) {
       return reply.status(404).send({ code: "NOT_FOUND", message: "Not found." });
     }
-    const location = emojiMediaLocation(getRuntime(agentId).config, fileName, backend);
+    const location = emojiMediaLocation(getRuntime(agentId).config, fileName);
     try {
       const stats = await fsp.lstat(location.filePath);
       if (!stats.isFile() || stats.isSymbolicLink()) {
@@ -564,6 +564,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   registerScheduledTaskRoutes(app, { runtime, getRuntime });
   registerDirectorRoutes(app, { runtime, getRuntime });
   registerAgentRoutes(app, agentRegistry, {
+    soulService: agentSoul,
     decorateAgents: (agents) => agentRuntimeManager.decorateAgents(agents, onebotGateway.getStatus()),
     onAgentCreated: async (agentId) => {
       if (options.initializeRuntime !== false) await agentExtensions.ensureBundledSkills(agentId);
@@ -623,11 +624,11 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     resolveDreamAccountId: (agentId) => resolveDreamAccountId(agentId, onebotGateway, agentRegistry)
   });
   registerKnowledgeRoutes(app, {
-    getService: (agentId, backend) => knowledgeBaseForConfig(getRuntime(agentId).config, backend)
+    getService: (agentId) => knowledgeBaseForConfig(getRuntime(agentId).config)
   });
   registerAgentToolRoutes(app, {
     agentFiles,
-    resolveToolCapabilities: (backend) => runtime.resolveToolCapabilities(backend),
+    resolveToolCapabilities: () => runtime.resolveToolCapabilities(),
     resolveConversationAssetCapability: () => conversationAssetCapabilityFor(config.persona.defaultAgentId, onebotGateway, agentRegistry),
     resolveVoiceCapability: () => voiceApi.resolveCapability(config.persona.defaultAgentId),
     getConfig: () => config,
@@ -636,7 +637,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       return {
         config: agentRuntime.config,
         agentFiles: agentFilesFor(agentId),
-        resolveToolCapabilities: (backend) => agentRuntime.resolveToolCapabilities(backend),
+        resolveToolCapabilities: () => agentRuntime.resolveToolCapabilities(),
         resolveConversationAssetCapability: () => conversationAssetCapabilityFor(agentId, onebotGateway, agentRegistry),
         resolveVoiceCapability: () => voiceApi.resolveCapability(agentId),
         resolveSkillToolCapabilities: () => agentExtensions.skillToolCapabilities(agentId)

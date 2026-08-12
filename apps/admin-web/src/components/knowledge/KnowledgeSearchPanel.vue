@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { KnowledgeSearchMatch } from "../../types/knowledge";
-import { workbenchLabel, workbenchResourceKey } from "../../types/workbench";
 
 defineProps<{
   matches: readonly KnowledgeSearchMatch[];
@@ -45,9 +44,8 @@ function scoreLabel(score: number) {
     </div>
 
     <div v-if="active" aria-live="polite" class="mt-4 border-t border-line">
-      <article v-for="match in matches" :key="workbenchResourceKey(match.workbench ?? 'native', `${match.path}-${match.ordinal}`)" class="border-b border-line py-5">
+      <article v-for="match in matches" :key="`${match.path}-${match.ordinal}`" class="border-b border-line py-5">
         <div class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-mute">
-          <span class="inline-state shrink-0 px-1.5 py-0.5 text-[9px]">{{ workbenchLabel(match.workbench ?? "native") }}</span>
           <strong class="break-all font-medium text-display">{{ match.path }}</strong>
           <span>{{ lineLabel(match) }}</span>
           <span>相关度 {{ scoreLabel(match.score) }}</span>

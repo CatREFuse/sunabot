@@ -151,7 +151,7 @@ describe("conversation API plugin", () => {
     })).json()).toEqual({ conversationId: "private:171419991", disabledTools: ["websearch"] });
     expect(getConversationToolPolicy).toHaveBeenCalledWith("private:171419991");
 
-    const toolsBody = { disabledTools: ["read_file", "docker_bash"] };
+    const toolsBody = { disabledTools: ["read_file", "native_bash"] };
     expect((await app.inject({
       method: "PUT",
       url: "/api/conversations/private%3A171419991/tools?agentId=plana",

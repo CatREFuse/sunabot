@@ -5,12 +5,45 @@
   "components": {
     "node": {
       "version": "24.18.0",
-      "source": "https://hub.docker.com/_/node",
-      "image": "docker.io/library/node:24.18.0-bookworm-slim",
-      "digest": "sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d",
+      "source": "https://nodejs.org/dist/v24.18.0/",
+      "archives": {
+        "linux/amd64": {
+          "file": "node-v24.18.0-linux-x64.tar.xz",
+          "sha256": "55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742"
+        },
+        "linux/arm64": {
+          "file": "node-v24.18.0-linux-arm64.tar.xz",
+          "sha256": "58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6"
+        }
+      },
       "license": "MIT",
       "architectures": ["linux/amd64", "linux/arm64"],
       "smoke": ["node", "--version"]
+    },
+    "lightpanda": {
+      "version": "0.3.3",
+      "source": "https://github.com/lightpanda-io/browser/tree/0.3.3",
+      "license": "AGPL-3.0-only",
+      "redistribution": "binary-with-corresponding-source",
+      "assets": {
+        "linux/amd64": {
+          "file": "lightpanda-x86_64-linux",
+          "url": "https://github.com/lightpanda-io/browser/releases/download/0.3.3/lightpanda-x86_64-linux",
+          "sha256": "b6ab613846f5291cc6bafd7f44ffb9718df51bf00eb83954e1fc5d7f52c7b886"
+        },
+        "linux/arm64": {
+          "file": "lightpanda-aarch64-linux",
+          "url": "https://github.com/lightpanda-io/browser/releases/download/0.3.3/lightpanda-aarch64-linux",
+          "sha256": "db35c06ee074a79c2e039965c404e578748c1d22cb296e853461970ea0c2945f"
+        }
+      },
+      "correspondingSource": {
+        "file": "lightpanda-0.3.3-source.tar.gz",
+        "url": "https://github.com/lightpanda-io/browser/archive/refs/tags/0.3.3.tar.gz",
+        "sha256": "1f6b61cd45812e4cae91522e5c701b15f34cdb4d95372a17bae92b92edc76a8c"
+      },
+      "architectures": ["linux/amd64", "linux/arm64"],
+      "smoke": ["lightpanda", "version"]
     },
     "napcat": {
       "version": "4.15.0",
@@ -40,30 +73,205 @@
       "architectures": ["linux/amd64", "linux/arm64"],
       "smoke": ["node", "node_modules/officeparser/dist/cli.js", "--help"]
     },
-    "fonts-noto-cjk": {
-      "version": "1:20220127+repack1-1",
-      "source": "https://deb.debian.org/debian",
-      "package": "fonts-noto-cjk",
-      "distribution": "debian-bookworm",
-      "license": "OFL-1.1",
-      "architectures": ["linux/amd64", "linux/arm64"],
-      "smoke": ["test", "-d", "/usr/share/fonts/opentype/noto"]
-    },
-    "tini": {
-      "version": "0.19.0-1+b3",
-      "source": "https://deb.debian.org/debian",
-      "package": "tini",
-      "distribution": "debian-bookworm",
-      "license": "MIT",
-      "architectures": ["linux/amd64", "linux/arm64"],
-      "smoke": ["tini", "--version"]
-    },
     "bubblewrap": {
       "version": "0.8.0-2+deb12u1",
-      "source": "https://github.com/containers/bubblewrap",
+      "source": "https://packages.debian.org/bookworm/bubblewrap",
       "package": "bubblewrap",
       "distribution": "debian-bookworm",
       "license": "LGPL-2.0-or-later",
+      "archives": {
+        "linux/amd64": {
+          "file": "bubblewrap_0.8.0-2+deb12u1_amd64.deb",
+          "url": "https://deb.debian.org/debian/pool/main/b/bubblewrap/bubblewrap_0.8.0-2+deb12u1_amd64.deb",
+          "sha256": "3cc9134a3286ad01a323dcd924ba123eb634cefaeec82d774257e06308aeaadb"
+        },
+        "linux/arm64": {
+          "file": "bubblewrap_0.8.0-2+deb12u1_arm64.deb",
+          "url": "https://deb.debian.org/debian/pool/main/b/bubblewrap/bubblewrap_0.8.0-2+deb12u1_arm64.deb",
+          "sha256": "d044ba1d7961d835669035fcd1e11121f1dc960a1a2e1c6489a93ea44e083557"
+        }
+      },
+      "runtimeDependencies": {
+        "linux/amd64": {
+          "loader": "ld-linux-x86-64.so.2",
+          "needed": ["libselinux.so.1", "libcap.so.2", "libc.so.6", "libpcre2-8.so.0"],
+          "libraryPaths": [
+            "lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "lib/x86_64-linux-gnu/libc.so.6",
+            "lib/x86_64-linux-gnu/libcap.so.2",
+            "lib/x86_64-linux-gnu/libselinux.so.1",
+            "usr/lib/x86_64-linux-gnu/libpcre2-8.so.0"
+          ],
+          "archives": [
+            {
+              "package": "libc6",
+              "version": "2.36-9+deb12u14",
+              "file": "libc6_2.36-9+deb12u14_amd64.deb",
+              "url": "https://deb.debian.org/debian/pool/main/g/glibc/libc6_2.36-9+deb12u14_amd64.deb",
+              "sha256": "ba4f88f73dbc3ae9055f3c20f4523bfdbaf1ad13ff95e258924f77d20b4fbedf"
+            },
+            {
+              "package": "libcap2",
+              "version": "1:2.66-4+deb12u3+b1",
+              "file": "libcap2_2.66-4+deb12u3+b1_amd64.deb",
+              "url": "https://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_2.66-4+deb12u3+b1_amd64.deb",
+              "sha256": "8d684c673e7483802a5c447834b0df6fce006eb3a7109e1be412f5ad425bb24f"
+            },
+            {
+              "package": "libselinux1",
+              "version": "3.4-1+b6",
+              "file": "libselinux1_3.4-1+b6_amd64.deb",
+              "url": "https://deb.debian.org/debian/pool/main/libs/libselinux/libselinux1_3.4-1+b6_amd64.deb",
+              "sha256": "2b07f5287b9105f40158b56e4d70cc1652dac56a408f3507b4ab3d061eed425f"
+            },
+            {
+              "package": "libpcre2-8-0",
+              "version": "10.42-1",
+              "file": "libpcre2-8-0_10.42-1_amd64.deb",
+              "url": "https://deb.debian.org/debian/pool/main/p/pcre2/libpcre2-8-0_10.42-1_amd64.deb",
+              "sha256": "030db54f4d76cdfe2bf0e8eb5f9efea0233ab3c7aa942d672c7b63b52dbaf935"
+            }
+          ]
+        },
+        "linux/arm64": {
+          "loader": "ld-linux-aarch64.so.1",
+          "needed": ["libselinux.so.1", "libcap.so.2", "libc.so.6", "libpcre2-8.so.0"],
+          "libraryPaths": [
+            "lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
+            "lib/aarch64-linux-gnu/libc.so.6",
+            "lib/aarch64-linux-gnu/libcap.so.2",
+            "lib/aarch64-linux-gnu/libselinux.so.1",
+            "usr/lib/aarch64-linux-gnu/libpcre2-8.so.0"
+          ],
+          "archives": [
+            {
+              "package": "libc6",
+              "version": "2.36-9+deb12u14",
+              "file": "libc6_2.36-9+deb12u14_arm64.deb",
+              "url": "https://deb.debian.org/debian/pool/main/g/glibc/libc6_2.36-9+deb12u14_arm64.deb",
+              "sha256": "01f4330719fd4f65580e16ea5a0527f372fca750e8f588d26deaf09f2d3b1cf4"
+            },
+            {
+              "package": "libcap2",
+              "version": "1:2.66-4+deb12u3+b1",
+              "file": "libcap2_2.66-4+deb12u3+b1_arm64.deb",
+              "url": "https://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_2.66-4+deb12u3+b1_arm64.deb",
+              "sha256": "b3a21ae1cef9c2f3fa340007100fb0aa934ab6a4d8aed131660de9713db2bb6e"
+            },
+            {
+              "package": "libselinux1",
+              "version": "3.4-1+b6",
+              "file": "libselinux1_3.4-1+b6_arm64.deb",
+              "url": "https://deb.debian.org/debian/pool/main/libs/libselinux/libselinux1_3.4-1+b6_arm64.deb",
+              "sha256": "29201edf23ebae40844d6c289afdb9bba52f927d55096ed1b1cd37e040135edc"
+            },
+            {
+              "package": "libpcre2-8-0",
+              "version": "10.42-1",
+              "file": "libpcre2-8-0_10.42-1_arm64.deb",
+              "url": "https://deb.debian.org/debian/pool/main/p/pcre2/libpcre2-8-0_10.42-1_arm64.deb",
+              "sha256": "b2448d0a8a3db7fbeac231e7ef93811346c1fb5f96ccf6f631701d8a4eb39206"
+            }
+          ]
+        }
+      },
+      "sourceArchives": [
+        {
+          "file": "bubblewrap_0.8.0-2+deb12u1.dsc",
+          "url": "https://deb.debian.org/debian/pool/main/b/bubblewrap/bubblewrap_0.8.0-2+deb12u1.dsc",
+          "sha256": "155ac8bc44bd578a628d76f5b826817d6d091fc82e900ed8158d9921f650a41c"
+        },
+        {
+          "file": "bubblewrap_0.8.0.orig.tar.xz",
+          "url": "https://deb.debian.org/debian/pool/main/b/bubblewrap/bubblewrap_0.8.0.orig.tar.xz",
+          "sha256": "957ad1149db9033db88e988b12bcebe349a445e1efc8a9b59ad2939a113d333a"
+        },
+        {
+          "file": "bubblewrap_0.8.0-2+deb12u1.debian.tar.xz",
+          "url": "https://deb.debian.org/debian/pool/main/b/bubblewrap/bubblewrap_0.8.0-2+deb12u1.debian.tar.xz",
+          "sha256": "37917e8abdd6df1d1118f089e9cf1f9374e1b5bb21c8a70d7de4e9b5dfb10f6d"
+        }
+      ],
+      "runtimeSourceArchives": [
+        {
+          "package": "glibc",
+          "file": "glibc_2.36-9+deb12u14.dsc",
+          "url": "https://deb.debian.org/debian/pool/main/g/glibc/glibc_2.36-9+deb12u14.dsc",
+          "sha256": "cfe1f0b8dc1fa211ce5a45b3725cc38b29f88667f1140ebdca6de35cf9c6f1fd"
+        },
+        {
+          "package": "glibc",
+          "file": "glibc_2.36.orig.tar.xz",
+          "url": "https://deb.debian.org/debian/pool/main/g/glibc/glibc_2.36.orig.tar.xz",
+          "sha256": "a543c02070d46ccaf866957efd13f10c924daa74c86a90a0254db09a92a708ee"
+        },
+        {
+          "package": "glibc",
+          "file": "glibc_2.36-9+deb12u14.debian.tar.xz",
+          "url": "https://deb.debian.org/debian/pool/main/g/glibc/glibc_2.36-9+deb12u14.debian.tar.xz",
+          "sha256": "cf4ac9cd98185452cae3ef34e2e4ee12753e3d93fd0c62c61396d4a47eec902f"
+        },
+        {
+          "package": "libcap2",
+          "file": "libcap2_2.66-4+deb12u3.dsc",
+          "url": "https://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_2.66-4+deb12u3.dsc",
+          "sha256": "56b6fa8db84a0e80b48522cbcafb0353282a7dbb5605c81b021e0862b120d1c9"
+        },
+        {
+          "package": "libcap2",
+          "file": "libcap2_2.66.orig.tar.xz",
+          "url": "https://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_2.66.orig.tar.xz",
+          "sha256": "15c40ededb3003d70a283fe587a36b7d19c8b3b554e33f86129c059a4bb466b2"
+        },
+        {
+          "package": "libcap2",
+          "file": "libcap2_2.66-4+deb12u3.debian.tar.xz",
+          "url": "https://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_2.66-4+deb12u3.debian.tar.xz",
+          "sha256": "124ec52e286e8617a7fb8e576390abbf60f6674e065504459f32af20817eaa13"
+        },
+        {
+          "package": "libselinux",
+          "file": "libselinux_3.4-1.dsc",
+          "url": "https://deb.debian.org/debian/pool/main/libs/libselinux/libselinux_3.4-1.dsc",
+          "sha256": "4035af53388d343f9b5c46ca2867ba32823cf4a2d218ddd590b34ae59c899157"
+        },
+        {
+          "package": "libselinux",
+          "file": "libselinux_3.4.orig.tar.gz",
+          "url": "https://deb.debian.org/debian/pool/main/libs/libselinux/libselinux_3.4.orig.tar.gz",
+          "sha256": "77c294a927e6795c2e98f74b5c3adde9c8839690e9255b767c5fca6acff9b779"
+        },
+        {
+          "package": "libselinux",
+          "file": "libselinux_3.4.orig.tar.gz.asc",
+          "url": "https://deb.debian.org/debian/pool/main/libs/libselinux/libselinux_3.4.orig.tar.gz.asc",
+          "sha256": "5c370bdef7b756697445e6838ba1b2d934f668b244461e36e245f589ec994a24"
+        },
+        {
+          "package": "libselinux",
+          "file": "libselinux_3.4-1.debian.tar.xz",
+          "url": "https://deb.debian.org/debian/pool/main/libs/libselinux/libselinux_3.4-1.debian.tar.xz",
+          "sha256": "046ace4ad0092104bdfb0c6e5187131910216c89b8b81a4bce3c2067615c9196"
+        },
+        {
+          "package": "pcre2",
+          "file": "pcre2_10.42-1.dsc",
+          "url": "https://deb.debian.org/debian/pool/main/p/pcre2/pcre2_10.42-1.dsc",
+          "sha256": "726dafe7a8d07332d4df61edf23f384ddb158b2b263846273d1103b6b9a7c176"
+        },
+        {
+          "package": "pcre2",
+          "file": "pcre2_10.42.orig.tar.gz",
+          "url": "https://deb.debian.org/debian/pool/main/p/pcre2/pcre2_10.42.orig.tar.gz",
+          "sha256": "c33b418e3b936ee3153de2c61cc638e7e4fe3156022a5c77d0711bcbb9d64f1f"
+        },
+        {
+          "package": "pcre2",
+          "file": "pcre2_10.42-1.diff.gz",
+          "url": "https://deb.debian.org/debian/pool/main/p/pcre2/pcre2_10.42-1.diff.gz",
+          "sha256": "8267c3acacb04e8a077235f676187393e295443fc16ff46ddbe5f6476879c8cb"
+        }
+      ],
       "architectures": ["linux/amd64", "linux/arm64"],
       "smoke": ["bwrap", "--version"]
     },

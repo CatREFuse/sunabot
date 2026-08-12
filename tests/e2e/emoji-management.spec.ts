@@ -14,9 +14,7 @@ test("表情可按 Agent 管理、生成、上传与删除", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "表情", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "预设表情", exact: true })).toBeVisible();
   await expect(page.getByText("2 / 11").first()).toBeVisible();
-  await expect(page.getByText("Native 3 · Docker 1", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "门缝小春", exact: true })).toBeVisible();
-  await expect(emojiCard(page, "门缝小春").getByText("Docker", { exact: true })).toBeVisible();
   const sendSize = page.getByRole("group", { name: "表情发送尺寸" });
   await expect(sendSize.getByRole("button", { name: "512", exact: true })).toHaveAttribute("aria-pressed", "true");
   await sendSize.getByRole("button", { name: "128", exact: true }).click();
@@ -80,7 +78,7 @@ test("表情可按 Agent 管理、生成、上传与删除", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "摸鱼中", exact: true })).toHaveCount(0);
 
   const generatedRequest = mock.requests.find((request) => request.path === "/api/emojis/generate" && request.method === "POST");
-  expect(generatedRequest).toMatchObject({ agentId: "plana", workbench: "native", body: { key: "哭" } });
+  expect(generatedRequest).toMatchObject({ agentId: "plana", body: { key: "哭" } });
   const uploadRequest = mock.requests.find((request) => (
     request.path === "/api/emojis" && request.method === "POST" && request.body?.key === "晚安"
   ));
@@ -90,14 +88,13 @@ test("表情可按 Agent 管理、生成、上传与删除", async ({ page }) =>
   expect(String(uploadRequest?.body?.dataBase64).length).toBeGreaterThan(100);
 
   await emojiCard(page, "门缝小春").getByRole("button", { name: "删除 门缝小春" }).click();
-  const dockerRemoveDialog = page.getByRole("dialog").filter({ hasText: "删除“门缝小春”？" });
-  await dockerRemoveDialog.getByRole("button", { name: "删除", exact: true }).click();
+  const removeDialogForGroupReference = page.getByRole("dialog").filter({ hasText: "删除“门缝小春”？" });
+  await removeDialogForGroupReference.getByRole("button", { name: "删除", exact: true }).click();
   await expect(page.getByText("“门缝小春”已删除", { exact: true })).toBeVisible();
   expect(mock.requests).toContainEqual(expect.objectContaining({
     method: "DELETE",
     path: "/api/emojis/%E9%97%A8%E7%BC%9D%E5%B0%8F%E6%98%A5",
-    agentId: "plana",
-    workbench: "docker"
+    agentId: "plana"
   }));
 
   await page.getByRole("button", { name: "当前 Agent：普拉娜" }).click();

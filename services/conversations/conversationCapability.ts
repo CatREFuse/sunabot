@@ -19,7 +19,6 @@ export type ConversationWorkbenchPurpose =
   | "read_file"
   | "write_file"
   | "bash_native"
-  | "bash_docker"
   | "send_file"
   | "portable_knowledge_read"
   | "image_reference"
@@ -44,10 +43,9 @@ const CONVERSATION_ID_PATTERN =
 const WORKBENCH_PURPOSES = new Set<ConversationWorkbenchPurpose>([
   "chat_media_export",
   "catalog_import",
-  "read_file",
-  "write_file",
-  "bash_native",
-  "bash_docker",
+    "read_file",
+    "write_file",
+    "bash_native",
   "send_file",
   "portable_knowledge_read",
   "image_reference",
@@ -108,9 +106,7 @@ export function resolveConversationWorkbench(
       readableBackends: ["native"],
       writableBackends: [],
       fallbackPolicy: "none",
-      nativeProjection: context.transport === "onebot" && !administratorPrivate
-        ? "read_only"
-        : "none",
+      nativeProjection: "none",
       pathPolicy: "native_knowledge_relative"
     });
   }
@@ -126,14 +122,8 @@ export function resolveConversationWorkbench(
     });
   }
   if (purpose === "bash_native") {
-    if (!administratorPrivate) throw conversationCapabilityError();
+    if (context.transport === "web" && !administratorPrivate) throw conversationCapabilityError();
     return exactPlan(purpose, "native");
-  }
-  if (purpose === "bash_docker") {
-    if (context.transport === "web" && !administratorPrivate) {
-      throw conversationCapabilityError();
-    }
-    return exactPlan(purpose, "docker", context.transport === "onebot" ? "read_only" : "none");
   }
   if (purpose === "read_file" || purpose === "write_file") {
     if (context.transport !== "onebot" || !administratorPrivate) {
@@ -150,23 +140,7 @@ export function resolveConversationWorkbench(
   }
   if (context.transport !== "onebot") throw conversationCapabilityError();
 
-  const primaryBackend: AgentWorkbenchBackend = administratorPrivate ? "native" : "docker";
-  if (purpose === "send_file" && primaryBackend === "native") {
-    return frozenPlan({
-      purpose,
-      primaryBackend,
-      readableBackends: ["native", "docker"],
-      writableBackends: ["native"],
-      fallbackPolicy: "source_missing_only",
-      nativeProjection: "none",
-      pathPolicy: "workbench_relative"
-    });
-  }
-  return exactPlan(
-    purpose,
-    primaryBackend,
-    primaryBackend === "docker" ? "read_only" : "none"
-  );
+  return exactPlan(purpose, "native");
 }
 
 function conversationIdentityMatches(

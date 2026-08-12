@@ -3,27 +3,14 @@ import path from "node:path";
 
 export const MCP_OAUTH_VAULT_KEY_ENV = "SUNABOT_MCP_CREDENTIAL_VAULT_KEY";
 export const MCP_STDIO_BACKEND_ENV = "SUNABOT_MCP_STDIO_BACKEND";
-export const MCP_STDIO_DOCKER_IMAGE_ENV = "SUNABOT_MCP_STDIO_DOCKER_IMAGE";
 export const MCP_STDIO_EXECUTABLE_MANIFEST_ENV = "SUNABOT_MCP_STDIO_EXECUTABLE_MANIFEST";
-export const MCP_STDIO_EXECUTABLE_MANIFEST_SHA256_ENV = "SUNABOT_MCP_STDIO_EXECUTABLE_MANIFEST_SHA256";
 
 /**
- * @returns {false | { backend: "docker"; dockerImage: string; executableManifestSha256: string } | { backend: "bubblewrap"; executableManifestPath: string }}
+ * @returns {false | { backend: "bubblewrap"; executableManifestPath: string }}
  */
 export function resolveMcpStdioRuntimeOptions(environment = process.env, platform = process.platform) {
   const backend = String(environment[MCP_STDIO_BACKEND_ENV] ?? "").trim();
   if (!backend || backend === "disabled") return false;
-  if (backend === "docker") {
-    const dockerImage = String(environment[MCP_STDIO_DOCKER_IMAGE_ENV] ?? "").trim();
-    if (!isImmutableDockerImage(dockerImage)) invalid("MCP_STDIO_DOCKER_IMAGE_INVALID");
-    const executableManifestSha256 = String(
-      environment[MCP_STDIO_EXECUTABLE_MANIFEST_SHA256_ENV] ?? ""
-    ).trim();
-    if (!/^[a-f0-9]{64}$/u.test(executableManifestSha256)) {
-      invalid("MCP_STDIO_EXECUTABLE_MANIFEST_SHA256_INVALID");
-    }
-    return { backend, dockerImage, executableManifestSha256 };
-  }
   if (backend === "bubblewrap") {
     if (platform === "darwin" || platform === "win32") invalid("MCP_STDIO_BACKEND_UNAVAILABLE");
     const executableManifestPath = String(environment[MCP_STDIO_EXECUTABLE_MANIFEST_ENV] ?? "").trim();
@@ -44,8 +31,6 @@ export async function inspectMcpRuntimeConfiguration(input = {}) {
     const options = resolveMcpStdioRuntimeOptions(environment, platform);
     if (options === false) {
       stdio = { ok: false, configured: false, backend: "disabled", detail: "stdio MCP is disabled" };
-    } else if (options.backend === "docker") {
-      stdio = { ok: true, configured: true, backend: "docker", detail: "digest-pinned Docker image configured" };
     } else {
       const manifest = await inspectNativeManifest(
         options.executableManifestPath,
@@ -95,11 +80,6 @@ async function inspectNativeManifest(file, expectedUid) {
   } catch {
     return { ok: false, detail: "MCP_STDIO_EXECUTABLE_MANIFEST_INVALID" };
   }
-}
-
-function isImmutableDockerImage(value) {
-  return /^(?:[A-Za-z0-9][A-Za-z0-9._/:+-]{0,190}@)?sha256:[a-f0-9]{64}$/u.test(value) &&
-    !value.includes("..") && !value.includes("//");
 }
 
 function stableCode(error, fallback) {

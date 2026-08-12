@@ -1,10 +1,9 @@
 import { WORKSPACE_BASH_EXECUTION_TIMEOUT_MS } from "./bashRuntime.js";
 
 export const NATIVE_BASH_TOOL_NAME = "native_bash";
-export const DOCKER_BASH_TOOL_NAME = "docker_bash";
 
 function bashToolDefinition(
-  name: typeof NATIVE_BASH_TOOL_NAME | typeof DOCKER_BASH_TOOL_NAME,
+  name: typeof NATIVE_BASH_TOOL_NAME,
   description: string
 ) {
   return {
@@ -33,10 +32,5 @@ function bashToolDefinition(
 
 export const nativeBashTool = bashToolDefinition(
   NATIVE_BASH_TOOL_NAME,
-  "Run a command with the administrator's Native host Bash after an independent adversarial approval agent reviews it. This tool is available only in administrator private conversations."
-);
-
-export const dockerBashTool = bashToolDefinition(
-  DOCKER_BASH_TOOL_NAME,
-  "Run a command in an isolated Docker environment after an independent adversarial approval agent reviews it. The current Agent has a dedicated writable Docker workbench and outbound network access, with no Docker socket; Native workbench, Skill, and MCP configuration are mounted read-only."
+  "Run a Bash command after an independent adversarial approval agent reviews it. Linux and WSL use Bubblewrap with hard resource limits. macOS host execution is available only in administrator private conversations."
 );

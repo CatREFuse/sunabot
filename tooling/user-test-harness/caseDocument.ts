@@ -274,19 +274,8 @@ function validateConversationFixture(value: unknown) {
   ], true);
   const resetKnowledge = fixture.resetKnowledge == null
     ? undefined
-    : array(
-        fixture.resetKnowledge,
-        "USER_TEST_CASE_CONVERSATION_FIXTURE_RESET_KNOWLEDGE_INVALID"
-      ).map((backend) => {
-        if (backend !== "native" && backend !== "docker") {
-          throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_RESET_KNOWLEDGE_INVALID");
-        }
-        return backend;
-      });
-  if (
-    resetKnowledge &&
-    (resetKnowledge.length > 2 || new Set(resetKnowledge).size !== resetKnowledge.length)
-  ) {
+    : fixture.resetKnowledge;
+  if (resetKnowledge != null && typeof resetKnowledge !== "boolean") {
     throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_RESET_KNOWLEDGE_INVALID");
   }
   const files = fixture.workbenchFiles == null
@@ -296,10 +285,7 @@ function validateConversationFixture(value: unknown) {
         "USER_TEST_CASE_CONVERSATION_FIXTURE_FILES_INVALID"
       ).map((item, index) => {
         const file = record(item, "USER_TEST_CASE_CONVERSATION_FIXTURE_FILES_INVALID");
-        exactKeys(file, ["backend", "path", "content"]);
-        if (file.backend !== "native" && file.backend !== "docker") {
-          throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_BACKEND_INVALID");
-        }
+        exactKeys(file, ["path", "content"]);
         const relativePath = boundedText(
           file.path,
           `fixture.workbenchFiles[${index}].path`,
@@ -315,7 +301,6 @@ function validateConversationFixture(value: unknown) {
           throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_PATH_INVALID");
         }
         return {
-          backend: file.backend,
           path: relativePath,
           content: boundedRawText(
             file.content,

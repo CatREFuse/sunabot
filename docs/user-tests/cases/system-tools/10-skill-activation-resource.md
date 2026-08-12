@@ -35,8 +35,8 @@ The report must distinguish activation from resource reading; a successful activ
       "user_id": 171419991,
       "time": 1788000110,
       "sender": {"nickname": "fixture-admin"},
-      "message": "启用当前已审批的 workbench-config，读取 references/workbench-addressing.md，并用两句说明 Docker Bash 如何只读访问 Native Workbench；不要运行脚本。",
-      "raw_message": "启用当前已审批的 workbench-config，读取 references/workbench-addressing.md，并用两句说明 Docker Bash 如何只读访问 Native Workbench；不要运行脚本。"
+      "message": "启用当前已审批的 workbench-config，读取 references/workbench-addressing.md，并用两句说明 Native Bash 如何寻址当前 Agent 的 canonical Workbench；不要运行脚本。",
+      "raw_message": "启用当前已审批的 workbench-config，读取 references/workbench-addressing.md，并用两句说明 Native Bash 如何寻址当前 Agent 的 canonical Workbench；不要运行脚本。"
     }
   },
   "expected": {

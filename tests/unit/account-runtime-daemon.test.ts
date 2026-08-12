@@ -381,8 +381,8 @@ describe("account runtime daemon singleton", () => {
     expect(isAlive(unrelated.pid!)).toBe(true);
 
     const dockerCalls = (await fs.readFile(docker.tracePath, "utf8")).trim().split("\n");
-    expect(dockerCalls).toContain("stop --timeout 30 napcat-fixture core-fixture");
-    expect(dockerCalls).toContain("rm napcat-fixture core-fixture");
+    expect(dockerCalls).toContain("stop --timeout 30 napcat-fixture");
+    expect(dockerCalls).toContain("rm napcat-fixture");
 
     const quarantines = (await fs.readdir(ownerDirectory))
       .filter((name) => name.endsWith(".quarantine"));
@@ -623,7 +623,6 @@ async function createDockerFixture(identity: string) {
   await fs.mkdir(bin, { mode: 0o700 });
   await fs.writeFile(statePath, [
     "napcat-fixture\tnapcat\trunning\t" + project + "-napcat-qq-arona\tqq_arona\tfalse",
-    "core-fixture\tcore\trunning\t" + project + "\t\tfalse",
     ""
   ].join("\n"));
   await fs.writeFile(path.join(bin, "docker"), [
@@ -638,7 +637,6 @@ async function createDockerFixture(identity: string) {
     "fi",
     "case \" $* \" in",
     "  *\"label=com.docker.compose.oneoff=true\"*) exit 0 ;;",
-    "  *\"label=io.sunabot.component=workspace-bash\"*) exit 0 ;;",
     "esac",
     "if [ \"${1:-}\" = \"stop\" ]; then",
     "  sed 's/\\trunning\\t/\\texited\\t/' \"$DOCKER_STATE_FILE\" > \"$DOCKER_STATE_FILE.next\"",
@@ -676,8 +674,7 @@ async function runLauncherDown(
 ) {
   const child = spawn(process.execPath, [
     path.join(projectRoot, "tooling/runtime/launcher.mjs"),
-    "down",
-    "--core=docker"
+    "down"
   ], {
     cwd: projectRoot,
     detached: true,

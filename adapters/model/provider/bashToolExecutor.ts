@@ -1,5 +1,4 @@
 import {
-  DOCKER_BASH_TOOL_NAME,
   NATIVE_BASH_TOOL_NAME,
   isWorkspaceBashProviderOptions,
   runWorkspaceBash,
@@ -9,11 +8,11 @@ import { WORKSPACE_BASH_EXECUTION_TIMEOUT_MS } from "../../../services/tools/bas
 import type { ProviderCompleteOptions } from "./contracts.js";
 
 export async function executeProviderBash(
-  toolName: typeof NATIVE_BASH_TOOL_NAME | typeof DOCKER_BASH_TOOL_NAME,
+  _toolName: typeof NATIVE_BASH_TOOL_NAME,
   args: Record<string, unknown>,
   options: ProviderCompleteOptions
 ) {
-  const bash = toolName === NATIVE_BASH_TOOL_NAME ? options.bash?.native : options.bash?.docker;
+  const bash = options.bash;
   if (!isWorkspaceBashProviderOptions(bash)) return { ok: false, error: "Bash is not enabled." };
   try {
     if (!bash.isCurrent()) return { ok: false, error: "Bash is not enabled." };
@@ -31,7 +30,6 @@ export async function executeProviderBash(
     isCurrent: bash.isCurrent,
     audit: bash.audit,
     approvalContext: bash.approvalContext,
-    runtime: bash.runtime,
     skillRepository: bash.skillRepository,
     ...(bash.confirmedApprovalId ? { confirmedApprovalId: bash.confirmedApprovalId } : {}),
     ...(options.signal ? { abortSignal: options.signal } : {})

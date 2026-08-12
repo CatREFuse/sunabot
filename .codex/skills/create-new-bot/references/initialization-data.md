@@ -16,7 +16,7 @@
 | 层级 | 创建时机 | 数据 |
 | --- | --- | --- |
 | Agent 身份 | `POST /api/agents` | 共享主库 `agents` 注册行、`agent.json`、可选头像 |
-| 干净工作区 | `POST /api/agents` | 8 个人格文件、空工作记忆、自拍提示词、双 Workbench 入口、自拍/表情/Skill/知识库/MCP 空索引 |
+| 干净工作区 | `POST /api/agents` | 8 个人格文件、空工作记忆、自拍提示词、单一 Workbench 入口、自拍/表情/Skill/知识库/MCP 空索引 |
 | Runtime 初始状态 | 创建回调 | `workbench-config` 的安装/审核/启用、Agent 业务库、Session 队列库、附件缓存和调度器初始状态 |
 | 外部与角色素材 | 显式后续操作 | QQ/NapCat、语音、自拍图、表情、知识库、其他 Skills、MCP、系统提示词覆盖、真实 Provider/QQ 验收 |
 
@@ -74,7 +74,6 @@ Agent 的 QQ 账号不会随 Agent 自动创建。账号通过独立接口创建
 立即创建：
 
 - `workbench/index.md`
-- `docker-workbench/index.md`
 - `workbench/selfie/references.jsonl`
 - `workbench/emoji/emojis.jsonl`
 - `workbench/skills/index.json`

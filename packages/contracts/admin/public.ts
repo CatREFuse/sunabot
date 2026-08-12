@@ -82,7 +82,6 @@ export const AGENT_TOOL_NAMES = [
   "send_file",
   "send_voice_message",
   "native_bash",
-  "docker_bash",
   "codex",
   "activate_skill",
   "read_skill_resource",
@@ -181,7 +180,6 @@ export type EmojiSendSize = (typeof EMOJI_SEND_SIZES)[number];
 
 export interface BotBashSettings {
   enabled: boolean;
-  adminPrivateBackend: "native" | "docker";
   auditModel: string;
   strictMode: boolean;
   allowGroup: boolean;
@@ -300,3 +298,18 @@ export interface ImageHistoryRecord {
   model?: string;
   createdAt: string;
 }
+
+export {
+  AGENT_SOUL_FILE_EXTENSION,
+  AGENT_SOUL_SCHEMA,
+  AGENT_SOUL_VERSION
+} from "./agentSoul.js";
+export type {
+  AgentSoulDocument,
+  AgentSoulFile,
+  AgentSoulImportRequest,
+  AgentSoulPreview,
+  AgentSoulPreviewFile,
+  AgentSoulSource,
+  AgentSoulUpload
+} from "./agentSoul.js";

@@ -24,10 +24,8 @@ export {
   webfetchTool
 } from "./webFetchTool.js";
 export {
-  DOCKER_BASH_TOOL_NAME,
   NATIVE_BASH_TOOL_NAME,
   createWorkspaceBashTool,
-  dockerBashTool,
   nativeBashTool,
   workspaceBashTool
 } from "./bashTool.js";
