@@ -83,6 +83,8 @@ Linux amd64/arm64 发行包内置 Node.js `24.18.0`、生产 `node_modules`、Co
 
 GitHub `v<version>` tag 发布必须经过完整 `verify` 与 light/dark visual acceptance，再由 `npm run runtime:release` 分别构建 amd64/arm64 归档并核对平台、版本、组件和 manifest。真实 Provider user test 与 sealed evidence 只在显式授权后作为人工质量流程运行，不阻塞正式发行；任何 deterministic gate、正式构建或归档 manifest 失败都禁止创建 GitHub Release。
 
+发行 workflow 支持对一个已经存在且不可变的版本 tag 手工重跑；该入口的源码 checkout、版本校验、并发键和 GitHub Release 目标都必须绑定输入 tag，不能改写或移动 tag。Ubuntu 24.04 临时构建 runner 显式启用非特权 user namespace 后仍须执行包内 Bubblewrap 的真实隔离探针，探针失败时不得生成归档。
+
 0.2.0 到 0.3.0 必须停服运行 `npm run upgrade:0.3.0 -- plan|apply|verify|rollback`。plan 在资源与 SQLite 零修改状态检查全部 Agent；apply 只合并目标缺失或字节相同的普通文件，创建全 Agent SQLite 与资源恢复点，再归档旧 `docker-workbench/`；冲突时拒绝覆盖。verify 检查单一 Workbench、固定入口、归档与摘要；rollback 只在迁移后资源无 drift 时恢复。更早版本按目标版本逐级执行对应迁移脚本。
 
 ## 8. 灵魂文件
