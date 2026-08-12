@@ -31,13 +31,17 @@ afterEach(async () => {
 describe("selfie reference server registration", () => {
   it("protects the registered API and exposes the WebUI envelope", async () => {
     const config = createAdminTestConfig(root);
+    const workspace = path.join(root, "workspace");
+    const agentRoot = path.join(workspace, "business", "agents");
+    config.persona.agentWorkspace = path.join(agentRoot, "plana");
+    config.persona.systemPromptWorkspace = path.join(workspace, "business", "prompts");
     await fs.mkdir(config.persona.agentWorkspace, { recursive: true });
     const app = await createApp({
       config,
       initializeRuntime: false,
       onebotListener: false,
       agentRegistry: {
-        workspaceRoot: path.dirname(config.persona.agentWorkspace),
+        workspaceRoot: agentRoot,
         allowUnmarkedMigration: true
       }
     });
@@ -65,13 +69,17 @@ describe("selfie reference server registration", () => {
 
   it("keeps default storage injected and manages disabled or stopped registered Agents without runtime", async () => {
     const config = createAdminTestConfig(root);
+    const workspace = path.join(root, "workspace");
+    const agentRoot = path.join(workspace, "business", "agents");
+    config.persona.agentWorkspace = path.join(agentRoot, "plana");
+    config.persona.systemPromptWorkspace = path.join(workspace, "business", "prompts");
     await fs.mkdir(config.persona.agentWorkspace, { recursive: true });
     const built = await buildApp({
       config,
       initializeRuntime: false,
       onebotListener: false,
       agentRegistry: {
-        workspaceRoot: path.dirname(config.persona.agentWorkspace),
+        workspaceRoot: agentRoot,
         allowUnmarkedMigration: true
       }
     });

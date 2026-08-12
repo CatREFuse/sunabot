@@ -12,6 +12,7 @@ import {
   workingMemoryItemsFromFacts
 } from "../../services/memory/public.js";
 import { appendWorkingMemoryDocumentItem } from "../../services/memory/workingMemoryDocument.js";
+import { formatModelTimestamp } from "../../packages/platform/systemTime.js";
 import type { AppConfig } from "../../src/types.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
@@ -263,7 +264,11 @@ describe("working-memory Markdown document", () => {
       dreamDate: "2026-07-24",
       sourceMemoryIds: ["working-a", "long-term-b"]
     });
-    expect(replaced.current.content).toContain("【梦境｜做梦时间：2026-07-24 04:00】\n梦见旧车站漂在海面上。");
+    const visibleDreamTime = formatModelTimestamp(
+      "2026-07-24T04:00:00.000+08:00",
+      replaced.current.items[0]!.timeZone
+    ).slice(0, 16).replace("T", " ");
+    expect(replaced.current.content).toContain(`【梦境｜做梦时间：${visibleDreamTime}】\n梦见旧车站漂在海面上。`);
     expect(replaced.current.items[0]?.content).toBe("梦见旧车站漂在海面上。");
   });
 

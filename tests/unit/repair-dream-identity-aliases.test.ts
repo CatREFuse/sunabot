@@ -869,8 +869,19 @@ function createVerifyLoopSidecarAttack(
       const replacement = fsSync.readFileSync(sidecarPath);
       replacement[replacement.length - 1] = replacement[replacement.length - 1]! ^ 0xff;
       if (mode === "replace") {
-        fsSync.rmSync(sidecarPath);
-        fsSync.writeFileSync(sidecarPath, replacement);
+        const previousSidecarPath = `${sidecarPath}.replaced-${process.pid}-${state.closedCount}`;
+        fsSync.renameSync(sidecarPath, previousSidecarPath);
+        try {
+          fsSync.writeFileSync(sidecarPath, replacement);
+          const after = fsSync.lstatSync(sidecarPath);
+          state.identityBefore = fileIdentity(before);
+          state.identityAfter = fileIdentity(after);
+          state.sizeBefore = before.size;
+          state.sizeAfter = after.size;
+        } finally {
+          fsSync.rmSync(previousSidecarPath, { force: true });
+        }
+        return;
       } else {
         const descriptor = fsSync.openSync(sidecarPath, "r+");
         try {

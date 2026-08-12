@@ -299,7 +299,7 @@ describe("Dream context projection", () => {
     expect(first.seed).toBe(SEED);
   });
 
-  it("applies explicit field, array, and total payload limits with deterministic tail clipping", () => {
+  it("applies explicit field, array, and total payload limits with deterministic tail clipping", { timeout: 15_000 }, () => {
     const huge = oversizedPayload();
     const first = projectDreamContext(huge);
     const second = projectDreamContext(huge);

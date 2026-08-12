@@ -66,9 +66,9 @@ describe("SystemConfigService", () => {
         unavailableReason: "BASH_CONFIG_DISABLED",
         unavailableMessage: "Bash 未启用。",
         isolationRequired: "platform_native",
-        nativeHostExecutionAllowed: true,
+        nativeHostExecutionAllowed: process.platform === "darwin",
         rawHostFallbackAllowed: false,
-        bubblewrapRequired: false
+        bubblewrapRequired: process.platform === "linux"
       },
       groups: {
         total: 2,
@@ -312,9 +312,9 @@ describe("SystemConfigService", () => {
         unavailableReason: "BASH_CONFIG_DISABLED",
         unavailableMessage: "Bash 未启用。",
         isolationRequired: "platform_native",
-        nativeHostExecutionAllowed: true,
+        nativeHostExecutionAllowed: process.platform === "darwin",
         rawHostFallbackAllowed: false,
-        bubblewrapRequired: false
+        bubblewrapRequired: process.platform === "linux"
       },
       recovery: { required: true },
       probe: {

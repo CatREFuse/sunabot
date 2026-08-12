@@ -76,7 +76,7 @@ describe("no_reply provider termination", () => {
 
   it("terminates Codex Responses without delivering sibling assistant text", async () => {
     const provider = new OpenAIProvider(providerConfig("codex-responses"));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("codex-token");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("codex-token");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(codexResponse([
       responseMessage("这段正文不应发送"),
       responseFunctionCall("call-codex-no-reply")
@@ -162,7 +162,7 @@ describe("send_file provider composition", () => {
 
   it("allows Codex Responses sibling text and file callbacks", async () => {
     const provider = new OpenAIProvider(providerConfig("codex-responses"));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("codex-token");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("codex-token");
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(codexResponse([
         responseMessage("这段正文不应发送"),
@@ -279,7 +279,7 @@ describe("cross-round no_reply ordering", () => {
 
   it("allows no_reply after Codex Responses already delivered assistant_text", async () => {
     const provider = new OpenAIProvider(providerConfig("codex-responses"));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("codex-token");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("codex-token");
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(codexResponse([responseFunctionCall("call-progress", "assistant_text", { text: "处理中" })]))
       .mockResolvedValueOnce(codexResponse([responseFunctionCall("call-late-no-reply")]))

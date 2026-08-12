@@ -270,7 +270,11 @@ describe("provider protocols", () => {
     ["codex-responses" as const, "codex.complete", () => codexTextResponse("OK")]
   ])("retries an interrupted %s response body", async (kind, action, successfulResponse) => {
     const provider = new OpenAIProvider(providerConfig(kind));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    if (kind === "codex-responses") {
+      vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("provider-key");
+    } else {
+      vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    }
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(interruptedBodyResponse())
       .mockResolvedValueOnce(successfulResponse());
@@ -368,7 +372,7 @@ describe("provider protocols", () => {
 
   it("surfaces a non-retryable Codex HTTP 200 response error verbatim", async () => {
     const provider = new OpenAIProvider(providerConfig("codex-responses"));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("provider-key");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(codexErrorResponse({
       type: "invalid_request_error",
       code: "invalid_json_schema",
@@ -515,7 +519,7 @@ describe("provider protocols", () => {
     }, {
       imageRetrySleep: async () => undefined
     });
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("test-token");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("test-token");
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(interruptedBodyResponse())
       .mockResolvedValueOnce(interruptedBodyResponse("data: partial"))
@@ -563,7 +567,7 @@ describe("provider protocols", () => {
     }, {
       imageRetrySleep: async () => undefined
     });
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("test-token");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("test-token");
     const image = { url: "/generated-images/recovered.png" };
     const imageWriter = (provider as unknown as {
       imageWriter: { write: (...args: unknown[]) => typeof image };
@@ -588,7 +592,7 @@ describe("provider protocols", () => {
     }, {
       imageRetrySleep: async () => undefined
     });
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("test-token");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("test-token");
     const abort = new Error("cancelled");
     abort.name = "AbortError";
     const fetchMock = vi.spyOn(globalThis, "fetch")
@@ -609,7 +613,7 @@ describe("provider protocols", () => {
     }, {
       imageRetrySleep: async () => undefined
     });
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("test-token");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("test-token");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
       (_input, init) => new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal;

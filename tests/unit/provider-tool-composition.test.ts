@@ -549,7 +549,11 @@ function installRounds(provider: OpenAIProvider, kind: ProviderKind, rounds: Mod
       requestBody: (index = 0) => create.mock.calls[index]?.[0] as Record<string, any>
     };
   }
-  vi.spyOn(provider as never, "getApiKey").mockReturnValue(`${kind}-key`);
+  if (kind === "codex-responses") {
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue(`${kind}-key`);
+  } else {
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue(`${kind}-key`);
+  }
   const fetchMock = vi.spyOn(globalThis, "fetch");
   for (const [roundIndex, round] of rounds.entries()) {
     if (kind === "codex-responses") {

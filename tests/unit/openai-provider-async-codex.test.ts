@@ -710,7 +710,7 @@ function codexProvider(model = "gpt-5.6-terra") {
 }
 
 function mockCodexToken(provider: OpenAIProvider, ...responses: Response[]) {
-  vi.spyOn(provider as never, "getApiKey").mockReturnValue("test-token");
+  vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("test-token");
   return vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
     const response = responses.shift();
     if (!response) throw new Error("Unexpected additional Codex request.");
