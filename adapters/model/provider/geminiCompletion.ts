@@ -1,12 +1,23 @@
 import type { RenderedPromptRequest } from "../../../services/agent/promptSystem.js";
-import type { ChatMessage } from "../../../src/types.js";
+import type { ChatMessage } from "../../../packages/contracts/model/modelGateway.js";
 import type { ProviderAdapterContext, ProviderCompleteOptions, ProviderTurnResult, ResponseFunctionCallItem, TurnToolState } from "./contracts.js";
-import { toChatCompletionMessage } from "./imageInput.js";
+import { parseDataImage, toChatCompletionMessage } from "./imageInput.js";
 import { withLogContext } from "./logger.js";
-import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
+import { toGeminiFunctionDeclaration } from "./promptMapping.js";
+import {
+  claimBusinessToolCalls,
+  resolveMaxToolCalls,
+  resolveToolRoundLimit,
+  toolCallLimitError
+} from "./toolLoopLimits.js";
 import { fetchTextWithTransportRetry, normalizeGeminiBaseUrl, resolveModelRequestMaxAttempts } from "./transport.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
-import { preflightProviderToolResponse } from "./toolResponsePreflight.js";
+import { processProviderToolRound } from "./toolRound.js";
+import { assertMappedProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
+import {
+  assertMemoryToolDecisionsResolved,
+  geminiMemoryToolConfig
+} from "./memoryToolDecisions.js";
 
 export async function completeGeminiGenerateContent(
   context: ProviderAdapterContext,
@@ -23,19 +34,22 @@ export async function completeGeminiGenerateContent(
   const contents = await Promise.all(request.messages
     .filter((message) => message.role !== "system" && message.role !== "developer")
     .map(toGeminiContent));
-  const resolvedDefinitions = context.toolExecutor.resolveDefinitions(options, request.tools);
-  const definitions = resolvedDefinitions.map((tool) => ({
-    name: String(tool.name ?? ""),
-    description: String(tool.description ?? ""),
-    parameters: isRecord(tool.parameters) ? tool.parameters : { type: "object", properties: {} }
-  }));
+  const resolvedDefinitions = context.toolExecutor.resolveDefinitions(
+    options,
+    request.tools,
+    "gemini-generate-content"
+  );
+  const definitions = resolvedDefinitions.map(toGeminiFunctionDeclaration);
+  assertMappedProviderToolDefinitions(definitions, "gemini-generate-content");
   const maxToolCalls = resolveMaxToolCalls(options);
+  const toolRoundLimit = resolveToolRoundLimit(options, maxToolCalls);
 
-  for (let round = 0; round <= maxToolCalls; round += 1) {
+  for (let round = 0; round <= toolRoundLimit; round += 1) {
     const requestBody = {
       systemInstruction: system ? { parts: [{ text: system }] } : undefined,
       contents,
       tools: definitions.length ? [{ functionDeclarations: definitions }] : undefined,
+      toolConfig: geminiMemoryToolConfig(options),
       generationConfig: {
         temperature: context.provider.temperature,
         maxOutputTokens: context.provider.maxOutputTokens,
@@ -79,36 +93,46 @@ export async function completeGeminiGenerateContent(
     const parts = content && Array.isArray(content.parts) ? content.parts.filter(isRecord) : [];
     if (!parts.length) throw new Error("Gemini 没有返回消息。");
     const text = parts.map((part) => typeof part.text === "string" ? part.text : "").filter(Boolean).join("\n").trim();
-    const calls: ResponseFunctionCallItem[] = parts.flatMap((part, index) => isRecord(part.functionCall) && part.functionCall.name
-      ? [{
-          type: "function_call",
-          call_id: `gemini-${round}-${index}`,
-          name: String(part.functionCall.name),
-          arguments: JSON.stringify(isRecord(part.functionCall.args) ? part.functionCall.args : {})
-        }]
-      : []);
-    state.toolCallCount = claimToolCalls(state.toolCallCount, calls.length, maxToolCalls);
+    const calls: ResponseFunctionCallItem[] = parts.flatMap((part, index) => {
+      if (!isRecord(part.functionCall) || !part.functionCall.name) return [];
+      const providerCallId = typeof part.functionCall.id === "string" && part.functionCall.id
+        ? part.functionCall.id
+        : undefined;
+      return [{
+        type: "function_call",
+        call_id: providerCallId ?? `gemini-${round}-${index}`,
+        ...(providerCallId ? { provider_call_id: providerCallId } : {}),
+        name: String(part.functionCall.name),
+        arguments: JSON.stringify(isRecord(part.functionCall.args) ? part.functionCall.args : {})
+      }];
+    });
+    state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, calls, maxToolCalls);
     if (!calls.length) {
+      assertMemoryToolDecisionsResolved(options);
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };
     }
 
-    const preflight = preflightProviderToolResponse(calls, text, options, state);
-    if (!preflight.rejected) {
-      const deferred = context.toolExecutor.deferredTurn(calls, options, resolvedDefinitions, state);
-      if (deferred) return deferred;
-      const noReply = context.toolExecutor.noReplyTurn(calls, options, resolvedDefinitions, state);
-      if (noReply) return noReply;
-      if (text && options.onAssistantText && preflight.emitAssistantText) {
-        await options.onAssistantText(text, "text");
+    const toolRound = await processProviderToolRound({
+      calls,
+      siblingText: text,
+      options,
+      definitions: resolvedDefinitions,
+      state,
+      executor: context.toolExecutor,
+      emitAssistantText: async () => {
+        if (text && options.onAssistantText) await options.onAssistantText(text, "text");
       }
-    }
+    });
+    if (toolRound.terminal) return toolRound.terminal;
     contents.push({ role: "model", parts });
-    const outputs = preflight.rejected ?? await context.toolExecutor.execute(calls, options, resolvedDefinitions, state);
     contents.push({
       role: "user",
-      parts: outputs.map((output, index) => ({
+      parts: toolRound.outputs.map((output, index) => ({
         functionResponse: {
+          ...(typeof calls[index]?.provider_call_id === "string"
+            ? { id: calls[index].provider_call_id }
+            : {}),
           name: calls[index]?.name ?? "tool",
           response: normalizeFunctionResponse(output.output)
         }
@@ -131,11 +155,6 @@ async function toGeminiContent(message: ChatMessage) {
       return data ? [{ inlineData: { mimeType: data.mediaType, data: data.data } }] : [];
     })
   };
-}
-
-function parseDataImage(value: string) {
-  const match = value.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is);
-  return match ? { mediaType: match[1]!, data: match[2]! } : undefined;
 }
 
 function normalizeFunctionResponse(value: unknown) {

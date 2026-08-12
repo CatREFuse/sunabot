@@ -34,6 +34,59 @@ function file(id: string, content: string) {
 describe("PromptsView", () => {
   beforeEach(() => { apiRequest.mockReset(); });
 
+  it("lists and opens the Dream prompt in the system prompt library", async () => {
+    apiRequest.mockImplementation((path: string) => {
+      if (path === "/api/system-prompt-files") {
+        return Promise.resolve({
+          files: [{
+            id: "memory.dream",
+            title: "梦境整理",
+            category: "memory",
+            kind: "final",
+            variables: [],
+            fileName: "memory_dream.json",
+            revision: "dream-r1"
+          }]
+        });
+      }
+      if (path === "/api/system-prompt-files/memory.dream") {
+        return Promise.resolve({
+          ...file("memory.dream", `${JSON.stringify({
+            messages: [
+              { role: "system", content: "整理睡眠记忆" },
+              { role: "user", content: "@{dream.payload}" }
+            ],
+            response_format: { type: "text" }
+          }, null, 2)}\n`),
+          title: "梦境整理",
+          category: "memory",
+          kind: "final",
+          fileName: "memory_dream.json"
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{
+        path: "/system-prompts/:fileId?",
+        component: PromptsView,
+        props: { scope: "system" }
+      }]
+    });
+    await router.push("/system-prompts/memory.dream");
+    await router.isReady();
+    const wrapper = mount(RouterView, { global: { plugins: [router] }, attachTo: document.body });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("梦境整理");
+    expect(wrapper.text()).toContain("memory_dream.json");
+    expect(wrapper.get('[aria-label="system 提示词"]').text()).toContain("整理睡眠记忆");
+    expect(wrapper.get('[aria-label="user 提示词"]').text()).toContain("@{dream.payload}");
+    wrapper.unmount();
+  });
+
   it("ignores a stale file response after the route selects another file", async () => {
     const first = deferred<ReturnType<typeof file>>();
     const second = deferred<ReturnType<typeof file>>();
@@ -61,7 +114,7 @@ describe("PromptsView", () => {
     first.resolve(file("persona.soul", "stale route content"));
     await flushPromises();
 
-    expect((wrapper.get("textarea").element as HTMLTextAreaElement).value).toBe("new route content");
+    expect(wrapper.get('[aria-label="提示词正文"]').text()).toContain("new route content");
     expect(wrapper.text()).not.toContain("stale route content");
     wrapper.unmount();
   });
@@ -93,7 +146,7 @@ describe("PromptsView", () => {
     await flushPromises();
 
     expect(apiRequest).toHaveBeenCalledWith("/api/agent-files/image.selfie-rewrite");
-    expect((wrapper.get("textarea").element as HTMLTextAreaElement).value).toBe("自拍提示词");
+    expect(wrapper.get('[aria-label="system 提示词"]').text()).toContain("自拍提示词");
     wrapper.unmount();
   });
 });

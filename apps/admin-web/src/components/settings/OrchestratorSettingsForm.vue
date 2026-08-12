@@ -3,6 +3,7 @@ import { computed } from "vue";
 import ModelSelect from "./ModelSelect.vue";
 import ReasoningEffortSelect from "./ReasoningEffortSelect.vue";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
+import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 import type { ConfigSectionValueMap, ModelCatalogItem } from "../../types";
 
 const draft = defineModel<ConfigSectionValueMap["orchestrator"]>({ required: true });
@@ -23,18 +24,19 @@ const startupSeconds = computed({
   <section class="grid gap-8">
     <div>
       <h2 class="section-title">群聊编排器</h2>
+      <p class="mt-2 text-sm leading-6 text-mute">控制 Agent 是否主动参与群聊。</p>
     </div>
-    <div class="grid gap-5 sm:grid-cols-2">
-      <ModelSelect v-model="draft.groupThreadModel" :models="models" label="Thread 拆分模型" />
-    </div>
-    <div class="divide-y divide-line border-y border-line">
-      <ToggleSwitch v-model="groupEnabled" label="启用" />
-      <ToggleSwitch v-model="draft.enabled" label="编排器" :disabled="!groupEnabled" />
-      <p v-if="groupEnabled && !draft.enabled" class="py-3 text-xs leading-5 text-mute">使用规则匹配回复</p>
-      <p v-else-if="groupEnabled" class="py-3 text-xs leading-5 text-mute">每个群每分钟最多主动回复 1 次</p>
+    <div class="settings-group grid gap-4">
+      <h3 class="settings-group-title">主动回复</h3>
+      <div class="divide-y divide-line border-y border-line">
+        <ToggleSwitch v-model="groupEnabled" label="启用群聊回复" />
+        <ToggleSwitch v-model="draft.enabled" label="启用编排器" :disabled="!groupEnabled" />
+        <p v-if="groupEnabled && !draft.enabled" class="py-3 text-xs leading-5 text-mute">使用规则匹配回复</p>
+        <p v-else-if="groupEnabled" class="py-3 text-xs leading-5 text-mute">每个群每分钟最多主动回复 1 次</p>
+      </div>
     </div>
     <fieldset
-      class="grid gap-5 sm:grid-cols-2"
+      class="settings-group grid gap-5 sm:grid-cols-2"
       :class="{ 'opacity-50': !groupEnabled || !draft.enabled }"
       :disabled="!groupEnabled || !draft.enabled"
     >
@@ -42,15 +44,15 @@ const startupSeconds = computed({
       <ReasoningEffortSelect v-model="draft.reasoningEffort" :model="draft.userGroupchatOrchestratorModel" :models="models" />
       <label class="field">
         <span class="field-label">消息阈值</span>
-        <input v-model.number="draft.messageThreshold" class="control" type="number" min="0" max="200" step="1">
+        <SettingsConfirmInput v-model.number="draft.messageThreshold" type="number" min="0" max="200" step="1" confirm-label="确认消息阈值" />
       </label>
       <label class="field">
         <span class="field-label">启动时间 / 秒</span>
-        <input v-model.number="startupSeconds" class="control" type="number" min="1" max="3600" step="1">
+        <SettingsConfirmInput v-model.number="startupSeconds" type="number" min="1" max="3600" step="1" confirm-label="确认启动时间" />
       </label>
       <label class="field sm:col-span-2">
         <span class="field-label">提示词文件</span>
-        <input v-model.trim="draft.promptFile" class="control" type="text">
+        <SettingsConfirmInput v-model.trim="draft.promptFile" type="text" confirm-label="确认提示词文件" />
         <RouterLink class="font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/system-prompts/orchestrator.user-group">编辑正文 →</RouterLink>
       </label>
     </fieldset>

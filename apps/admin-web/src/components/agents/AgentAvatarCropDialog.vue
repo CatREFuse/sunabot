@@ -220,7 +220,7 @@ function clamp(value: number, min: number, max: number) {
 
 <style scoped>
 .avatar-crop-dialog { max-height: min(92vh, 760px); }
-.avatar-crop-stage { position: relative; width: min(76vw, 384px); aspect-ratio: 1; border-radius: 9999px; overflow: hidden; background: rgb(var(--color-raised)); box-shadow: inset 0 0 0 1px rgb(var(--color-visible)); }
+.avatar-crop-stage { position: relative; width: min(76vw, 384px); aspect-ratio: 1; border: 1px solid rgb(var(--color-visible)); border-radius: 9999px; overflow: hidden; background: rgb(var(--color-raised)); }
 .avatar-crop-canvas { width: 100%; height: 100%; border-radius: inherit; cursor: grab; touch-action: none; }
 .avatar-crop-canvas:active { cursor: grabbing; }
 .avatar-crop-canvas:focus-visible { outline: 2px solid rgb(var(--color-display)); outline-offset: 4px; }

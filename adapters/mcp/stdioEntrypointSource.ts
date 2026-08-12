@@ -189,7 +189,3 @@ main().catch(exitInvalid);
 export function mcpStdioEntrypointSource(nodeExecutable: "/usr/bin/node" | "/usr/local/bin/node") {
   return `#!${nodeExecutable}${ENTRYPOINT_BODY}`;
 }
-
-export function mcpStdioEntrypointBody() {
-  return ENTRYPOINT_BODY;
-}

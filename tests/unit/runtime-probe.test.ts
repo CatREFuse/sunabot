@@ -73,6 +73,27 @@ describe("versioned runtime readiness probe", () => {
     });
   });
 
+  it("reports the Docker-specific workspace Bash failure for macOS Native Core", () => {
+    const report = buildRuntimeProbe({
+      workspace: { exists: true, migrationState: "trusted", path: "/workspace" },
+      core: { mode: "native", running: true, apiReady: true, onebotReady: true },
+      capabilities: {
+        workspaceBash: {
+          ok: false,
+          code: "DOCKER_BASH_UNAVAILABLE",
+          action: "启动当前 Docker Engine 并准备 sunabot-bash 镜像",
+          detail: "Docker Unix socket unavailable"
+        }
+      }
+    }, { now });
+
+    expect(report.checks.find((item: { id: string }) => item.id === "workspace-bash")).toMatchObject({
+      status: "fail",
+      code: "DOCKER_BASH_UNAVAILABLE",
+      action: "启动当前 Docker Engine 并准备 sunabot-bash 镜像"
+    });
+  });
+
   it("returns stable path and repair action when one target account needs reconciliation", () => {
     const report = buildRuntimeProbe({
       workspace: { exists: true, migrationState: "trusted", path: "/workspace" },

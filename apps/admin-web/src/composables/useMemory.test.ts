@@ -10,7 +10,7 @@ const entry: MemoryEntry = {
   id: "memory-1",
   source: "working",
   sourceTitle: "工作记忆",
-  fileName: "WORKING_MEMORY.jsonl",
+  fileName: "WORKING_MEMORY.md",
   editable: true,
   key: "memory-1",
   value: "已有记忆",
@@ -18,8 +18,13 @@ const entry: MemoryEntry = {
   field: "text"
 };
 const payload: MemoryPayload = {
-  sources: [{ id: "working", title: "工作记忆", fileName: "WORKING_MEMORY.jsonl", editable: true }],
-  entries: [entry]
+  sources: [{ id: "working", title: "工作记忆", fileName: "WORKING_MEMORY.md", editable: false }],
+  entries: [entry],
+  document: {
+    fileName: "WORKING_MEMORY.md",
+    content: "# 工作记忆\n\n完整原文",
+    revision: "revision-plana"
+  }
 };
 
 describe("useMemory", () => {
@@ -43,6 +48,42 @@ describe("useMemory", () => {
     expect(memory.recallActive.value).toBe(false);
     expect(memory.matches.value).toEqual([]);
     expect(memory.entries.value).toEqual([entry]);
+    expect(memory.document.value).toEqual(payload.document);
+  });
+
+  it("loads another Agent's memory after clearing the previous entries", async () => {
+    let resolveArona!: (value: MemoryPayload) => void;
+    const aronaRequest = new Promise<MemoryPayload>((resolve) => { resolveArona = resolve; });
+    apiRequest
+      .mockResolvedValueOnce(payload)
+      .mockReturnValueOnce(aronaRequest);
+    const memory = useMemory();
+    await memory.load("working", "plana");
+
+    const pendingLoad = memory.load("working", "arona");
+    expect(memory.entries.value).toEqual([]);
+
+    resolveArona(payload);
+    await pendingLoad;
+    expect(memory.entries.value).toEqual([entry]);
+  });
+
+  it("clears another Agent's error while its replacement is loading", async () => {
+    let resolveArona!: (value: MemoryPayload) => void;
+    const aronaRequest = new Promise<MemoryPayload>((resolve) => { resolveArona = resolve; });
+    apiRequest
+      .mockRejectedValueOnce(new Error("Plana 记忆读取失败"))
+      .mockReturnValueOnce(aronaRequest);
+    const memory = useMemory();
+    await memory.load("working", "plana");
+    expect(memory.error.value).toBe("Plana 记忆读取失败");
+
+    const pendingLoad = memory.load("working", "arona");
+    expect(memory.error.value).toBe("");
+
+    resolveArona(payload);
+    await pendingLoad;
+    expect(memory.error.value).toBe("");
   });
 
   it("drops sources and entries outside the supported active set", async () => {
@@ -62,5 +103,122 @@ describe("useMemory", () => {
 
     expect(memory.sources.value).toEqual(payload.sources);
     expect(memory.entries.value).toEqual(payload.entries);
+  });
+
+  it("keeps an older Agent response from replacing the active Agent memory", async () => {
+    let resolvePlana!: (value: MemoryPayload) => void;
+    let resolveArona!: (value: MemoryPayload) => void;
+    const planaRequest = new Promise<MemoryPayload>((resolve) => { resolvePlana = resolve; });
+    const aronaRequest = new Promise<MemoryPayload>((resolve) => { resolveArona = resolve; });
+    apiRequest
+      .mockReturnValueOnce(planaRequest)
+      .mockReturnValueOnce(aronaRequest);
+    const memory = useMemory();
+
+    const planaLoad = memory.load("working", "plana");
+    const planaSignal = apiRequest.mock.calls[0]?.[1]?.signal as AbortSignal;
+    const aronaLoad = memory.load("working", "arona");
+    const aronaEntry = { ...entry, id: "arona-memory", text: "阿罗娜的记忆" };
+    const aronaDocument = { ...payload.document!, content: "# 工作记忆\n\n阿罗娜的完整原文", revision: "revision-arona" };
+    resolveArona({ ...payload, entries: [aronaEntry], document: aronaDocument });
+    await aronaLoad;
+    resolvePlana(payload);
+    await planaLoad;
+
+    expect(planaSignal.aborted).toBe(true);
+    expect(apiRequest.mock.calls[0]?.[0]).toBe("/api/memory?source=working&agentId=plana");
+    expect(apiRequest.mock.calls[1]?.[0]).toBe("/api/memory?source=working&agentId=arona");
+    expect(memory.entries.value).toEqual([aronaEntry]);
+    expect(memory.document.value).toEqual(aronaDocument);
+  });
+
+  it("binds recall and mutations to the loaded Agent", async () => {
+    apiRequest.mockImplementation((path: string, options?: RequestInit) => {
+      if (path === "/api/memory?source=working&agentId=plana") return Promise.resolve(payload);
+      if (path === "/api/memory/recall?agentId=plana") return Promise.resolve({ ok: true, query: "已有", matches: [entry] });
+      if (path === "/api/memory?agentId=plana" && options?.method === "POST") return Promise.resolve({ ok: true });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const memory = useMemory();
+
+    await memory.load("working", "plana");
+    await memory.recall("已有", "working", 20, "plana");
+    await memory.create({ source: "working", text: "新增" }, "plana");
+
+    expect(apiRequest.mock.calls.map(([path]) => path)).toEqual([
+      "/api/memory?source=working&agentId=plana",
+      "/api/memory/recall?agentId=plana",
+      "/api/memory?agentId=plana",
+      "/api/memory?source=working&agentId=plana"
+    ]);
+  });
+
+  it("drops a recall response after the Agent changes", async () => {
+    let resolveRecall!: (value: { ok: true; query: string; matches: MemoryEntry[] }) => void;
+    const recallResponse = new Promise<{ ok: true; query: string; matches: MemoryEntry[] }>((resolve) => { resolveRecall = resolve; });
+    apiRequest.mockImplementation((path: string) => {
+      if (path === "/api/memory?source=working&agentId=plana") return Promise.resolve(payload);
+      if (path === "/api/memory/recall?agentId=plana") return recallResponse;
+      if (path === "/api/memory?source=working&agentId=arona") return Promise.resolve({ ...payload, entries: [] });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const memory = useMemory();
+
+    await memory.load("working", "plana");
+    const pendingRecall = memory.recall("旧查询", "working", 20, "plana");
+    await memory.load("working", "arona");
+    resolveRecall({ ok: true, query: "旧查询", matches: [entry] });
+
+    await expect(pendingRecall).resolves.toBe(false);
+    expect(memory.recallActive.value).toBe(false);
+    expect(memory.matches.value).toEqual([]);
+  });
+
+  it("does not reload a stale mutation after the Agent changes", async () => {
+    let resolveMutation!: (value: { ok: true }) => void;
+    const mutationResponse = new Promise<{ ok: true }>((resolve) => { resolveMutation = resolve; });
+    apiRequest.mockImplementation((path: string, options?: RequestInit) => {
+      if (path === "/api/memory?source=working&agentId=plana") return Promise.resolve(payload);
+      if (path === "/api/memory?agentId=plana" && options?.method === "POST") return mutationResponse;
+      if (path === "/api/memory?source=working&agentId=arona") return Promise.resolve({ ...payload, entries: [], document: null });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const memory = useMemory();
+
+    await memory.load("working", "plana");
+    const pendingMutation = memory.create({ source: "working", text: "旧 Agent 新增" }, "plana");
+    await memory.load("working", "arona");
+    resolveMutation({ ok: true });
+
+    await expect(pendingMutation).resolves.toBe(false);
+    expect(apiRequest.mock.calls.map(([path]) => path)).toEqual([
+      "/api/memory?source=working&agentId=plana",
+      "/api/memory?agentId=plana",
+      "/api/memory?source=working&agentId=arona"
+    ]);
+    expect(memory.entries.value).toEqual([]);
+  });
+
+  it("aborts and invalidates an in-flight recall when matches are cleared", async () => {
+    let resolveRecall!: (value: { ok: true; query: string; matches: MemoryEntry[] }) => void;
+    const recallResponse = new Promise<{ ok: true; query: string; matches: MemoryEntry[] }>((resolve) => { resolveRecall = resolve; });
+    apiRequest.mockImplementation((path: string) => {
+      if (path === "/api/memory?source=working&agentId=plana") return Promise.resolve(payload);
+      if (path === "/api/memory/recall?agentId=plana") return recallResponse;
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const memory = useMemory();
+
+    await memory.load("working", "plana");
+    const pendingRecall = memory.recall("待清除", "working", 20, "plana");
+    const recallSignal = apiRequest.mock.calls[1]?.[1]?.signal as AbortSignal;
+    memory.clearMatches();
+    resolveRecall({ ok: true, query: "待清除", matches: [entry] });
+
+    await expect(pendingRecall).resolves.toBe(false);
+    expect(recallSignal.aborted).toBe(true);
+    expect(memory.loading.value).toBe(false);
+    expect(memory.recallActive.value).toBe(false);
+    expect(memory.matches.value).toEqual([]);
   });
 });

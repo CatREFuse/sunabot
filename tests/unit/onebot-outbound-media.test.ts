@@ -4,6 +4,7 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.js";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
@@ -36,6 +37,22 @@ describe("OneBot outbound media adapter", () => {
 
   afterEach(async () => {
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
+  });
+
+  it("always sends plain text as a structured segment", async () => {
+    const gateway = new OneBotGateway(
+      http.createServer(),
+      defaultConfig(),
+      { handleInboundMessage: vi.fn(async () => undefined) }
+    );
+    const sendAction = vi.spyOn(gateway, "sendAction").mockResolvedValue({ status: "ok" });
+
+    await gateway.sendPrivateMessage(99, "[CQ:at,qq=all]纯文本", "primary");
+
+    expect(sendAction.mock.calls[0]?.[1]).toMatchObject({
+      user_id: 99,
+      message: [{ type: "text", data: { text: "[CQ:at,qq=all]纯文本" } }]
+    });
   });
 
   it("maps internal image assets to local paths when NapCat shares the filesystem", async () => {
@@ -98,7 +115,94 @@ describe("OneBot outbound media adapter", () => {
     );
   });
 
-  it("keeps emoji images in their marked positions and inlines every local PNG", async () => {
+  it("encodes a wide generated PNG byte-for-byte without resizing or cropping", async () => {
+    const widePath = path.join(temporaryDirectory, "wide-generated.png");
+    const wideBytes = await sharp({
+      create: {
+        width: 160,
+        height: 90,
+        channels: 3,
+        background: { r: 12, g: 34, b: 56 }
+      }
+    }).png().toBuffer();
+    await fs.writeFile(widePath, wideBytes);
+    const inlineDelivery = new OutboundMediaDelivery({ rootDir: temporaryDirectory });
+
+    const reference = await inlineDelivery.createReference(widePath);
+    const decoded = Buffer.from(reference.slice("base64://".length), "base64");
+
+    expect(decoded.equals(wideBytes)).toBe(true);
+    await expect(sharp(decoded).metadata()).resolves.toMatchObject({
+      width: 160,
+      height: 90,
+      format: "png"
+    });
+  });
+
+  it("rejects a missing generated image before OneBot reports a send", async () => {
+    const inlineDelivery = new OutboundMediaDelivery({
+      rootDir: temporaryDirectory
+    });
+    const gateway = new OneBotGateway(
+      http.createServer(),
+      defaultConfig(),
+      { handleInboundMessage: vi.fn(async () => undefined) },
+      { outboundMedia: inlineDelivery }
+    );
+    const sendAction = vi.spyOn(gateway, "sendAction").mockResolvedValue({ status: "ok" });
+
+    await expect(gateway.send({
+      schemaVersion: 1,
+      id: "missing-generated-image",
+      conversationId: "private:7",
+      accountId: "primary",
+      scope: "private",
+      userId: 7,
+      text: "",
+      media: [{
+        schemaVersion: 1,
+        kind: "image",
+        source: "shared_file",
+        filePath: path.join(temporaryDirectory, "missing.png"),
+        url: "/generated-images/missing.png"
+      }]
+    })).rejects.toThrow(
+      "OUTBOUND_MEDIA_SOURCE_MISSING: Generated image file is unavailable before send."
+    );
+    expect(sendAction).not.toHaveBeenCalled();
+  });
+
+  it("accepts only content-addressed emoji PNGs and GIFs from an Agent workbench", async () => {
+    const workspaceRoot = path.join(temporaryDirectory, "workspace");
+    const generatedRoot = path.join(workspaceRoot, "business", "media", "images");
+    const emojiRoot = path.join(workspaceRoot, "business", "agents", "arona", "workbench", "emoji");
+    const content = Buffer.from("workbench-emoji");
+    const digest = crypto.createHash("sha256").update(content).digest("hex");
+    const emojiPath = path.join(emojiRoot, `emoji-${digest}.png`);
+    const gifPath = path.join(emojiRoot, `emoji-${digest}.gif`);
+    const arbitraryPath = path.join(emojiRoot, "arbitrary.png");
+    await fs.mkdir(generatedRoot, { recursive: true });
+    await fs.mkdir(emojiRoot, { recursive: true });
+    await fs.writeFile(emojiPath, content);
+    await fs.writeFile(gifPath, content);
+    await fs.writeFile(arbitraryPath, content);
+    const inlineDelivery = new OutboundMediaDelivery({
+      rootDir: generatedRoot,
+      workspaceRoot
+    });
+
+    await expect(inlineDelivery.createReference(emojiPath)).resolves.toBe(
+      `base64://${content.toString("base64")}`
+    );
+    await expect(inlineDelivery.createReference(gifPath)).resolves.toBe(
+      `base64://${content.toString("base64")}`
+    );
+    await expect(inlineDelivery.createReference(arbitraryPath)).rejects.toThrow(
+      "content-addressed"
+    );
+  });
+
+  it("maps sticker segments to NapCat image subtype 1 while keeping normal images untyped", async () => {
     const inlineDelivery = new OutboundMediaDelivery({ rootDir: temporaryDirectory });
     const gateway = new OneBotGateway(
       http.createServer(),
@@ -123,7 +227,7 @@ describe("OneBot outbound media adapter", () => {
       ],
       contentSegments: [
         { type: "text", text: "前" },
-        { type: "image", imageIndex: 0 },
+        { type: "sticker", imageIndex: 0 },
         { type: "text", text: "后" },
         { type: "image", imageIndex: 1 }
       ],
@@ -135,8 +239,10 @@ describe("OneBot outbound media adapter", () => {
     expect(message[0]?.data.id).toBe("5");
     expect(message[1]?.data.text).toBe("前");
     expect(message[2]?.data.file).toBe(`base64://${Buffer.from("generated-image").toString("base64")}`);
+    expect(message[2]?.data.sub_type).toBe(1);
     expect(message[3]?.data.text).toBe("后");
     expect(message[4]?.data.file).toBe(`base64://${Buffer.from("agent-generated-image").toString("base64")}`);
+    expect(message[4]?.data).not.toHaveProperty("sub_type");
   });
 
   it("bounds unique image preparation at two while preserving source order", async () => {

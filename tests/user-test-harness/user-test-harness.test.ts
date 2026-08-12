@@ -1,0 +1,2892 @@
+import http from "node:http";
+import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { describe, expect, it, vi } from "vitest";
+import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
+import { RegistryProviderToolExecutor } from "../../adapters/model/provider/toolExecutor.js";
+import { BundledAgentSkillInstaller } from "../../apps/api/bundledAgentSkills.js";
+import { defaultConfig } from "../../src/config.js";
+import {
+  renderWorkingMemoryMarkdown
+} from "../../services/memory/workingMemoryDocument.js";
+import { resolveAgentWorkbench } from "../../services/agents/public.js";
+import {
+  parseUserTestCaseDocument,
+  readUserTestCaseDocument
+} from "../../tooling/user-test-harness/caseDocument.js";
+import { USER_TEST_CASE_MARKER, type UserTestCase } from "../../tooling/user-test-harness/contracts.js";
+import { RecordingMessagingPort } from "../../tooling/user-test-harness/recordingMessagingPort.js";
+import {
+  evaluateHarnessAssertions,
+  evaluateProviderEvidence,
+  extractCalledToolNames,
+  extractConversationUserFacingTextValues,
+  extractProviderToolCatalog,
+  extractToolCallObservations,
+  validateConversationActor
+} from "../../tooling/user-test-harness/assertions.js";
+import { validateAndSealUserTestReport } from "../../tooling/user-test-harness/review.js";
+import { sampleBranchFixture } from "../../tooling/user-test-harness/sample.js";
+import {
+  assertUserTestWorkspace,
+  installIsolatedCodexGuiHome,
+  prepareUserTestWorkspace,
+  resetUserTestKnowledgeDirectory
+} from "../../tooling/user-test-harness/workspace.js";
+import { appendMarkdownReport } from "../../tooling/user-test-harness/markdownReport.js";
+import { gateUserTestReleaseManifest } from "../../tooling/user-test-harness/releaseGate.js";
+import { deriveBranchCaseFromSample } from "../../tooling/user-test-harness/deriveBranchCase.js";
+import {
+  materializeDreamAtRuntime,
+  rebaseDreamTemplateToFixture
+} from "../../tooling/user-test-harness/timeline.js";
+
+describe("user test harness", () => {
+  it("parses a strict executable case from its required Markdown document", () => {
+    const testCase = conversationCase("admin_private", "private", 10001);
+    const parsed = parseUserTestCaseDocument([
+      "# Admin private tool case",
+      "",
+      "This document defines the expected user outcome.",
+      "",
+      USER_TEST_CASE_MARKER,
+      "```json",
+      JSON.stringify(testCase),
+      "```"
+    ].join("\n"));
+
+    expect(parsed).toEqual(testCase);
+  });
+
+  it("validates bounded conversation state fixtures and rejects workbench traversal", () => {
+    const testCase = conversationCase("admin_private", "private", 10001);
+    if (testCase.kind !== "conversation") throw new Error("conversation case required");
+    testCase.input.fixture = {
+      workingMemory: [],
+      longTerm: [],
+      userProfiles: [],
+      resetKnowledge: true,
+      workbenchFiles: [{
+        path: "tool-fixtures/input.txt",
+        content: "fixture input\n"
+      }],
+      attachmentSources: [{
+        fileId: "fixture-file-id",
+        name: "fixture.pdf",
+        contentBase64: "JVBERi0xLjQK"
+      }]
+    };
+    testCase.expected.requiredInboundAttachments = [{
+      messageId: "99",
+      index: 0,
+      name: "fixture.pdf",
+      status: "ready",
+      acquisitionStatus: "acquired",
+      parseStatus: "ready",
+      blobSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      blobSizeBytes: 9,
+      blobMimeType: "application/pdf",
+      format: "pdf",
+      sizeBytes: 9,
+      handle: "message:99:file:0"
+    }];
+    const document = (definition: UserTestCase) => [
+      "# Conversation fixture",
+      USER_TEST_CASE_MARKER,
+      "```json",
+      JSON.stringify(definition),
+      "```"
+    ].join("\n");
+    expect(parseUserTestCaseDocument(document(testCase))).toEqual(testCase);
+
+    const traversal = structuredClone(testCase);
+    if (traversal.kind !== "conversation" || !traversal.input.fixture?.workbenchFiles) {
+      throw new Error("conversation fixture required");
+    }
+    traversal.input.fixture.workbenchFiles[0]!.path = "../outside.txt";
+    expect(() => parseUserTestCaseDocument(document(traversal)))
+      .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_PATH_INVALID");
+
+    const legacyBackend = structuredClone(testCase);
+    if (legacyBackend.kind !== "conversation" || !legacyBackend.input.fixture?.workbenchFiles) {
+      throw new Error("conversation fixture required");
+    }
+    (legacyBackend.input.fixture.workbenchFiles[0] as unknown as Record<string, unknown>)
+      .backend = "native";
+    expect(() => parseUserTestCaseDocument(document(legacyBackend)))
+      .toThrow("USER_TEST_CASE_EXTRA_FIELD");
+
+    const invalidReset = structuredClone(testCase);
+    if (invalidReset.kind !== "conversation" || !invalidReset.input.fixture) {
+      throw new Error("conversation fixture required");
+    }
+    invalidReset.input.fixture.resetKnowledge = ["native"] as never;
+    expect(() => parseUserTestCaseDocument(document(invalidReset)))
+      .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_RESET_KNOWLEDGE_INVALID");
+
+    const invalidBase64 = structuredClone(testCase);
+    if (invalidBase64.kind !== "conversation" || !invalidBase64.input.fixture?.attachmentSources) {
+      throw new Error("conversation attachment fixture required");
+    }
+    invalidBase64.input.fixture.attachmentSources[0]!.contentBase64 = "not-base64";
+    expect(() => parseUserTestCaseDocument(document(invalidBase64)))
+      .toThrow("USER_TEST_CASE_FIXTURE.ATTACHMENTSOURCES[0].CONTENTBASE64_INVALID");
+  });
+
+  it("validates deterministic conversation history and Provider prompt expectations", () => {
+    const testCase = conversationCase("user_private", "private", 20002);
+    if (testCase.kind !== "conversation") throw new Error("conversation case required");
+    testCase.input.fixture = {
+      conversationMessages: [{
+        id: "history-1",
+        sequence: 1,
+        role: "user",
+        text: "HISTORY_TOKEN_1",
+        at: "2026-08-29T09:00:01.000Z",
+        userId: 20002,
+        senderName: "Fixture user"
+      }, {
+        id: "history-2",
+        sequence: 2,
+        role: "assistant",
+        text: "HISTORY_TOKEN_2",
+        at: "2026-08-29T09:00:02.000Z",
+        senderName: "Fixture Bot"
+      }]
+    };
+    testCase.expected.providerPrompt = {
+      promptFamily: "conversation.private-reply",
+      orderedText: ["HISTORY_TOKEN_1", "HISTORY_TOKEN_2"],
+      forbiddenText: ["HISTORY_TOKEN_0"]
+    };
+    const document = (definition: UserTestCase) => [
+      "# Conversation history fixture",
+      USER_TEST_CASE_MARKER,
+      "```json",
+      JSON.stringify(definition),
+      "```"
+    ].join("\n");
+
+    expect(parseUserTestCaseDocument(document(testCase))).toEqual(testCase);
+
+    const sequenceGap = structuredClone(testCase);
+    if (sequenceGap.kind !== "conversation" || !sequenceGap.input.fixture?.conversationMessages) {
+      throw new Error("conversation messages required");
+    }
+    sequenceGap.input.fixture.conversationMessages[1]!.sequence = 3;
+    expect(() => parseUserTestCaseDocument(document(sequenceGap)))
+      .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+
+    const duplicateId = structuredClone(testCase);
+    if (duplicateId.kind !== "conversation" || !duplicateId.input.fixture?.conversationMessages) {
+      throw new Error("conversation messages required");
+    }
+    duplicateId.input.fixture.conversationMessages[1]!.id = "history-1";
+    expect(() => parseUserTestCaseDocument(document(duplicateId)))
+      .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+
+    const reversedTime = structuredClone(testCase);
+    if (reversedTime.kind !== "conversation" || !reversedTime.input.fixture?.conversationMessages) {
+      throw new Error("conversation messages required");
+    }
+    reversedTime.input.fixture.conversationMessages[1]!.at = "2026-08-29T09:00:00.000Z";
+    expect(() => parseUserTestCaseDocument(document(reversedTime)))
+      .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+
+    const missingUserId = structuredClone(testCase);
+    if (missingUserId.kind !== "conversation" || !missingUserId.input.fixture?.conversationMessages) {
+      throw new Error("conversation messages required");
+    }
+    delete missingUserId.input.fixture.conversationMessages[0]!.userId;
+    expect(() => parseUserTestCaseDocument(document(missingUserId)))
+      .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+
+    const overlappingPromptAssertions = structuredClone(testCase);
+    if (!overlappingPromptAssertions.expected.providerPrompt) {
+      throw new Error("Provider prompt expectation required");
+    }
+    overlappingPromptAssertions.expected.providerPrompt.forbiddenText = ["HISTORY_TOKEN_1"];
+    expect(() => parseUserTestCaseDocument(document(overlappingPromptAssertions)))
+      .toThrow("USER_TEST_CASE_PROVIDER_PROMPT_INVALID");
+  });
+
+  it.each([
+    ["admin_private", "private", 10001, undefined],
+    ["user_private", "private", 20002, undefined],
+    ["admin_group", "group", 10001, 30003],
+    ["user_group", "group", 20002, 30003]
+  ] as const)("validates the %s actor and environment", (actor, messageType, userId, groupId) => {
+    const testCase = conversationCase(actor, messageType, userId, groupId);
+    expect(validateConversationActor(testCase, "10001").every((item) => item.passed)).toBe(true);
+  });
+
+  it.each([
+    ["admin_private", "private", 10001, undefined, "private"],
+    ["user_private", "private", 20002, undefined, "private"],
+    ["admin_group", "group", 10001, 30003, "user_group"],
+    ["user_group", "group", 20002, 30003, "user_group"]
+  ] as const)(
+    "routes the %s fixture through the production OneBot parser and delegate",
+    async (_actor, messageType, userId, groupId, expectedScope) => {
+    const handleInboundMessage = vi.fn(async () => undefined);
+    const gateway = new OneBotGateway(
+      http.createServer(),
+      defaultConfig(),
+      { handleInboundMessage }
+    );
+    const transport = new RecordingMessagingPort({ accountId: "primary", selfId: "40004" });
+
+    const inbound = await gateway.ingestEvent({
+      post_type: "message",
+      message_type: messageType,
+      message_id: 99,
+      self_id: 40004,
+      user_id: userId,
+      ...(groupId == null ? {} : { group_id: groupId }),
+      time: 1_788_000_000,
+      sender: { nickname: "admin" },
+      message: [{ type: "text", data: { text: "请使用工具完成任务" } }],
+      raw_message: "请使用工具完成任务"
+    }, {
+      accountId: "primary",
+      selfId: "40004"
+    }, { transport });
+
+    expect(inbound).toMatchObject({
+      accountId: "primary",
+      scope: expectedScope,
+      messageId: 99,
+      userId,
+      text: "请使用工具完成任务"
+    });
+    expect(handleInboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 99 }),
+      transport,
+      { accountId: "primary", selfId: "40004" }
+    );
+    await gateway.close();
+    }
+  );
+
+  it("binds attachment fixtures to the declared OneBot account", async () => {
+    const transport = new RecordingMessagingPort({
+      accountId: "fixture-secondary",
+      selfId: "40004",
+      attachmentSources: [{
+        fileId: "fixture-private-pdf",
+        name: "fixture.pdf",
+        contentBase64: "JVBERi0xLjQK"
+      }]
+    });
+
+    await expect(transport.resolveAttachment({
+      accountId: "fixture-secondary",
+      fileId: "fixture-private-pdf",
+      file: "fixture.pdf"
+    })).resolves.toEqual({
+      kind: "base64",
+      base64: "JVBERi0xLjQK",
+      via: "file_content"
+    });
+    await expect(transport.resolveAttachment({
+      accountId: "primary",
+      fileId: "fixture-private-pdf",
+      file: "fixture.pdf"
+    })).rejects.toThrow("USER_TEST_ATTACHMENT_ACCOUNT_MISMATCH");
+    expect(transport.attachmentResolutionCalls).toEqual([
+      expect.objectContaining({
+        accountId: "fixture-secondary",
+        fileId: "fixture-private-pdf",
+        strategy: "resolve",
+        outcome: "resolved"
+      }),
+      expect.objectContaining({
+        accountId: "primary",
+        fileId: "fixture-private-pdf",
+        strategy: "resolve",
+        outcome: "account_mismatch"
+      })
+    ]);
+  });
+
+  it("requires explicit Dream working-memory and conversation fixtures", () => {
+    const testCase: UserTestCase = {
+      schemaVersion: 1,
+      id: "dream.explicit-input",
+      title: "Dream explicit input",
+      kind: "dream",
+      goal: "Dream uses the supplied working memory and daily conversation.",
+      input: {
+        timePolicy: "rebase_to_runtime",
+        now: "2026-07-26T12:00:00.000+08:00",
+        workingMemory: [{
+          id: "working_fixture_1",
+          content: "The administrator is preparing a release.",
+          occurredAt: "2026-07-26T06:00:00.000+08:00",
+          conversationId: "private:10001",
+          conversationScope: "private",
+          conversationTitle: "Administrator"
+        }],
+        longTerm: [],
+        userProfiles: [],
+        persona: {
+          name: "Fixture Agent",
+          soul: "Grounded fixture persona.",
+          preference: "",
+          user: "",
+          relation: "",
+          air: ""
+        },
+        conversations: [{
+          id: "private:10001",
+          scope: "private",
+          title: "Administrator",
+          userId: 10001,
+          messages: [{
+            id: "message-1",
+            sequence: 1,
+            role: "user",
+            text: "We finished the release checklist.",
+            at: "2026-07-26T07:00:00.000+08:00",
+            userId: 10001,
+            senderName: "Administrator"
+          }]
+        }],
+        activeTasks: [],
+        directorSchedule: null
+      },
+      expected: {},
+      quality: {
+        criteria: [{
+          id: "grounding",
+          description: "The Dream is grounded in the fixture.",
+          minimumScore: 4
+        }]
+      }
+    };
+    const parsed = parseUserTestCaseDocument([
+      "# Dream",
+      USER_TEST_CASE_MARKER,
+      "```json",
+      JSON.stringify(testCase),
+      "```"
+    ].join("\n"));
+    expect(parsed).toEqual(testCase);
+    const incomplete = structuredClone(testCase);
+    if (incomplete.kind !== "dream") throw new Error("test case must be Dream");
+    delete (incomplete.input as Partial<typeof incomplete.input>).userProfiles;
+    expect(() => parseUserTestCaseDocument([
+      "# Incomplete Dream",
+      USER_TEST_CASE_MARKER,
+      "```json",
+      JSON.stringify(incomplete),
+      "```"
+    ].join("\n"))).toThrow("USER_TEST_CASE_FIELD_MISSING");
+  });
+
+  it("rebases branch timelines without mutating facts or losing Director wall-clock time", () => {
+    const dream = dreamCase();
+    if (dream.kind !== "dream") throw new Error("Dream case required");
+    const dreamSource = structuredClone(dream.input);
+    const templateTimeline = rebaseDreamTemplateToFixture(
+      dream.input,
+      "2024-01-02T12:00:00.000+08:00"
+    );
+    expect(templateTimeline.directorSchedule).toMatchObject({
+      date: "2024-01-02",
+      items: [
+        { startAt: "2024-01-02T08:00:00.000+08:00" },
+        { startAt: "2024-01-02T11:00:00.000+08:00" },
+        { startAt: "2024-01-02T18:00:00.000+08:00" }
+      ]
+    });
+    expect(templateTimeline.activeTasks[0]?.runAt)
+      .toBe("2024-01-03T01:00:00.000Z");
+    const materializedDream = materializeDreamAtRuntime(
+      {
+        ...dream.input,
+        now: "2024-01-02T12:00:00.000+08:00",
+        activeTasks: templateTimeline.activeTasks,
+        directorSchedule: templateTimeline.directorSchedule
+      },
+      new Date("2026-07-27T12:00:00.000+08:00")
+    );
+    expect(materializedDream.timeline).toMatchObject({
+      dreamScheduleDate: "2026-07-27",
+      directorScheduleDate: "2026-07-27"
+    });
+    expect(materializedDream.input.directorSchedule?.items[1]?.share.at)
+      .toBe("2026-07-27T11:00:00.000+08:00");
+    expect(dream.input).toEqual(dreamSource);
+  });
+
+  it("rejects fixed branch time in a live runtime without an injected clock", () => {
+    const dream = dreamCase();
+    if (dream.kind !== "dream") throw new Error("Dream case required");
+    expect(() => materializeDreamAtRuntime(
+      { ...dream.input, timePolicy: "fixed" },
+      new Date("2026-07-26T12:00:00.000+08:00")
+    )).toThrow("USER_TEST_BRANCH_FIXED_TIME_REQUIRES_CONTROLLED_CLOCK");
+  });
+
+  it("samples test-account data read-only and redacts numeric identities and names", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-sample-"));
+    const source = path.join(root, "source");
+    const databasePath = path.join(source, "business/data/sunabot.sqlite");
+    const agentRoot = path.join(source, "business/agents/plana");
+    const outputPath = path.join(root, "sample.json");
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.mkdir(agentRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(agentRoot, "WORKING_MEMORY.md"),
+      `${renderWorkingMemoryMarkdown([{
+        id: "working_alice_release",
+        content: "Alice discussed account 123456789 with the bot.",
+        recordedAt: "2026-07-26T06:00:00.000Z",
+        timeZone: "UTC",
+        conversationId: "private:123456789",
+        conversationScope: "private",
+        conversationTitle: "Alice",
+        sourceKind: "admin",
+        occurredAt: "2026-07-26T06:00:00.000Z",
+        userId: "123456789",
+        userIds: [""],
+        userName: "",
+        addressNames: ["", "Alice"],
+        batchId: "",
+        occurredEndAt: "",
+        eventKey: "",
+        causalChainKey: "",
+        sourceMemoryIds: [""],
+        memoryKind: "",
+        realityStatus: "",
+        factuality: "",
+        dreamRunId: "",
+        dreamDate: "",
+        dreamReviewedAt: ""
+      }])}\n`
+    );
+    await fs.writeFile(
+      path.join(agentRoot, "SOUL.md"),
+      "Alice protects /Users/alice/private. Trace 1234567890123456789 must not leave the sampler."
+    );
+    await fs.writeFile(
+      path.join(agentRoot, "USER.md"),
+      "用户此前显示名为“HiddenAlias”，该别名必须替换。"
+    );
+    const database = new DatabaseSync(databasePath);
+    database.exec(`
+      CREATE TABLE conversations (id TEXT PRIMARY KEY, last_at TEXT NOT NULL, data_json TEXT NOT NULL);
+      CREATE TABLE memory_records (
+        source TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        data_json TEXT NOT NULL
+      );
+    `);
+    database.prepare(
+      "INSERT INTO conversations (id, last_at, data_json) VALUES (?, ?, ?)"
+    ).run(
+      "private:123456789",
+      "2026-07-26T07:00:00.000Z",
+      JSON.stringify({
+        id: "private:123456789",
+        scope: "private",
+        userId: 123456789,
+        title: "Alice",
+        messageCount: 5,
+        lastAt: "2026-07-26T07:02:00.000Z",
+        lastText: "[视频：private-release-video.mp4]",
+        messages: [{
+          id: "message-private-123456789-1",
+          sequence: 1,
+          role: "user",
+          userId: 123456789,
+          senderName: "Alice",
+          text: "old-message-outside-limit",
+          at: "2026-07-26T06:58:00.000Z"
+        }, {
+          id: "message-private-123456789-2",
+          sequence: 2,
+          role: "user",
+          userId: 123456789,
+          senderName: "Alice",
+          text: "[回复消息：private-reply-id] 转发小程序 JSON https://example.test/share/1234567890123456789",
+          at: "2026-07-26T06:59:00.000Z"
+        }, {
+          id: "message-private-123456789-3",
+          sequence: 3,
+          role: "user",
+          userId: 123456789,
+          senderName: "Alice",
+          text: "北京市朝阳区幸福路12号3栋。",
+          at: "2026-07-26T07:00:00.000Z",
+          imageUrls: ["https://example.test/private-image"]
+        }, {
+          id: "message-private-123456789-4",
+          sequence: 4,
+          role: "assistant",
+          userId: 123456789,
+          senderName: "Alice",
+          text: "internal-orchestrator-result-must-not-enter-sample",
+          at: "2026-07-26T07:01:00.000Z",
+          visibility: "internal",
+          eventKind: "orchestrator_decision"
+        }, {
+          id: "message-private-123456789-5",
+          sequence: 5,
+          role: "user",
+          userId: 123456789,
+          senderName: "Alice",
+          text: "[视频：private-release-video.mp4]",
+          at: "2026-07-26T07:02:00.000Z"
+        }]
+      })
+    );
+    database.prepare(
+      "INSERT INTO memory_records (source, position, data_json) VALUES (?, ?, ?)"
+    ).run("long_term", 1, JSON.stringify({
+      id: 987654321,
+      userIds: [22334455],
+      groupIds: [99887766],
+      fact: "Alice owns account 123456789. @44556677 [回复消息：77889900] 人物-3a01ef2d",
+      relatedUsers: "相关用户：QQ 99887766（光、静海教主）；QQ 22334455（光）；QQ 33445566（.）。光（QQ 99887766）负责复核。",
+      compressedMessageStart: 20_612,
+      compressedMessageEnd: 20_675,
+      createdAt: "2026-07-26T06:00:00.000Z 至 2026-07-26T07:00:00.000Z",
+      historicalLabel: "2020-01-01T00:00:00.000Z"
+    }));
+    database.prepare(
+      "INSERT INTO memory_records (source, position, data_json) VALUES (?, ?, ?)"
+    ).run("user_profile", 1, JSON.stringify({
+      userId: "123456789",
+      userIds: ["123456789", "22334455"],
+      userName: "Alice",
+      addressNames: ["Alice"],
+      title: "生成",
+      preference: "Alice prefers release notes. 图像生成结果保持边界，各自执行，待导入工作区。"
+    }));
+    database.prepare(
+      "INSERT INTO memory_records (source, position, data_json) VALUES (?, ?, ?)"
+    ).run("user_profile", 2, JSON.stringify({
+      userId: "22334455",
+      userIds: ["22334455"],
+      userName: "Alice",
+      addressNames: ["Alice"],
+      preference: "Alice expects a separate scoped pseudonym."
+    }));
+    database.close();
+    try {
+      const result = await sampleBranchFixture({
+        sourceWorkspace: source,
+        agentId: "plana",
+        outputPath,
+        messageLimit: 4
+      });
+      const sample = await fs.readFile(result.outputPath, "utf8");
+      expect(sample).not.toContain("Alice");
+      expect(sample).not.toContain("HiddenAlias");
+      expect(sample).not.toContain("光");
+      expect(sample).not.toContain("静海教主");
+      expect(sample).not.toContain("123456789");
+      expect(sample).not.toContain("987654321");
+      expect(sample).not.toContain("22334455");
+      expect(sample).not.toContain("99887766");
+      expect(sample).not.toContain("33445566");
+      expect(sample).not.toContain("44556677");
+      expect(sample).not.toContain("77889900");
+      expect(sample).not.toContain("3a01ef2d");
+      expect(sample).not.toContain("2026-07-26");
+      expect(sample).not.toContain("/Users/alice");
+      expect(sample).not.toContain("1234567890123456789");
+      expect(sample).not.toContain("old-message-outside-limit");
+      expect(sample).not.toContain("internal-orchestrator-result-must-not-enter-sample");
+      expect(sample).not.toContain("private-reply-id");
+      expect(sample).not.toContain("private-release-video.mp4");
+      expect(sample).toContain("[forwarded-content-redacted]");
+      expect(sample).toContain("[sensitive-content-redacted]");
+      expect(sample).not.toContain("\"userName\": \"\"");
+      expect(sample).not.toContain("\"addressNames\": [\n        \"\"");
+      for (const key of [
+        "batchId",
+        "occurredEndAt",
+        "eventKey",
+        "causalChainKey",
+        "sourceMemoryIds",
+        "memoryKind",
+        "realityStatus",
+        "factuality",
+        "dreamRunId",
+        "dreamDate",
+        "dreamReviewedAt"
+      ]) {
+        expect(sample).not.toContain(`"${key}"`);
+      }
+      expect(sample).toContain("name-0001");
+      expect(sample).toContain("9000001");
+      expect(sample).toContain("图像生成结果保持边界，各自执行，待导入工作区。");
+      expect(sample).not.toContain("name-00[time]");
+      expect(sample).not.toContain("[number]");
+      expect(sample).not.toContain("[name]");
+      const parsedSample = JSON.parse(sample);
+      expect(parsedSample.fixture).toMatchObject({
+        now: "2024-01-01T02:00:00.000Z",
+        messageSelection: {
+          source: 4,
+          productionEligible: 3,
+          included: 2,
+          mediaSegments: 2,
+          quoteSegments: 1,
+          excluded: {
+            internal: 1,
+            failed: 0,
+            running: 0,
+            other: 0,
+            segmentOnly: 1
+          }
+        },
+        longTerm: [{
+          compressedMessageStart: 0,
+          compressedMessageEnd: 0,
+          createdAt: "2024-01-01T00:00:00.000Z"
+        }]
+      });
+      expect(parsedSample.fixture.userProfiles).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          userId: "9000001",
+          userIds: ["9000001", "9000002"],
+          addressNames: ["name-0001"]
+        }),
+        expect.objectContaining({
+          userId: "9000002",
+          userIds: ["9000002"]
+        })
+      ]));
+      expect(new Set(parsedSample.fixture.userProfiles.map(
+        (profile: { userName: string }) => profile.userName
+      )).size).toBe(2);
+      expect(parsedSample.fixture.conversations[0].messages.map(
+        (message: { sequence: number }) => message.sequence
+      )).toEqual([1, 2]);
+      expect(parsedSample.fixture.conversations[0].messages[1]).toMatchObject({
+        imageCount: 1,
+        quoteCount: 0
+      });
+      expect(parsedSample.fixture.conversations[0].messages[0]).toMatchObject({
+        imageCount: 0,
+        quoteCount: 1
+      });
+      expect(result.counts).toMatchObject({
+        conversations: 1,
+        messages: 2,
+        longTerm: 1,
+        userProfiles: 2
+      });
+      expect(sample).toContain("\"schemaVersion\": 2");
+      expect(sample).toContain("\"irreversible\": true");
+      await expect(sampleBranchFixture({
+        sourceWorkspace: source,
+        agentId: "plana",
+        outputPath: path.join(source, "must-not-write.json")
+      })).rejects.toThrow("USER_TEST_SAMPLE_OUTPUT_INSIDE_SOURCE");
+      const linkedOutputParent = path.join(root, "linked-source");
+      await fs.symlink(source, linkedOutputParent, "dir");
+      await expect(sampleBranchFixture({
+        sourceWorkspace: source,
+        agentId: "plana",
+        outputPath: path.join(linkedOutputParent, "must-not-write-through-link.json")
+      })).rejects.toThrow("USER_TEST_SAMPLE_OUTPUT_PARENT_INVALID");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("derives deterministic executable branch cases only from a reviewed V2 sample", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-derive-"));
+    const samplePath = path.join(root, "sample.json");
+    const templatePath = path.join(root, "template.md");
+    const firstOutput = "derived-a.md";
+    const secondOutput = "derived-b.md";
+    const fixture = {
+      now: "2024-01-01T02:00:00.000Z",
+      workingMemory: [{
+        id: "memory-0001",
+        content: "Synthetic release evidence remains pending.",
+        occurredAt: "2024-01-01T00:00:00.000Z",
+        conversationId: "conversation-0001",
+        conversationScope: "private" as const,
+        conversationTitle: "conversation-0001",
+        sourceKind: "admin" as const
+      }],
+      longTerm: [],
+      userProfiles: [],
+      persona: {
+        name: "fixture-agent",
+        soul: "Keep facts grounded.",
+        preference: "",
+        user: "",
+        relation: "",
+        air: "[sensitive-content-redacted]"
+      },
+      conversations: [{
+        id: "conversation-0001",
+        scope: "private" as const,
+        title: "conversation-0001",
+        userId: 9_000_001,
+        messages: [{
+          id: "message-0001",
+          sequence: 1,
+          role: "user" as const,
+          text: "Do not release before the regression result.",
+          at: "2024-01-01T01:00:00.000Z",
+          userId: 9_000_001,
+          senderName: "name-0001"
+        }]
+      }]
+    };
+    const sample = {
+      schemaVersion: 2,
+      kind: "sunabot.user-test.sanitized-branch-sample",
+      redaction: {
+        version: "sunabot-user-test-v2",
+        irreversible: true,
+        mappingPersisted: false,
+        timestampPolicy: "relative-shifted-utc-minute",
+        freeTextReviewRequired: true
+      },
+      integrity: {
+        canonicalization: "json-stringify-v1",
+        payloadSha256: cryptoDigest(fixture)
+      },
+      fixture
+    };
+    await fs.writeFile(samplePath, JSON.stringify(sample));
+    const templateCase = dreamCase();
+    if (templateCase.kind !== "dream") throw new Error("test template must be Dream");
+    templateCase.input = {
+      ...templateCase.input,
+      activeTasks: [],
+      directorSchedule: null
+    };
+    await fs.writeFile(templatePath, [
+      "# Derived Dream",
+      USER_TEST_CASE_MARKER,
+      "```json",
+      JSON.stringify(templateCase),
+      "```"
+    ].join("\n"));
+    try {
+      await expect(deriveBranchCaseFromSample({
+        samplePath,
+        templatePath,
+        outputRoot: root,
+        outputName: "blocked.md",
+        confirmReviewedSanitizedSample: false
+      })).rejects.toThrow("USER_TEST_SANITIZED_SAMPLE_REVIEW_REQUIRED");
+      await deriveBranchCaseFromSample({
+        samplePath,
+        templatePath,
+        outputRoot: root,
+        outputName: firstOutput,
+        confirmReviewedSanitizedSample: true
+      });
+      await deriveBranchCaseFromSample({
+        samplePath,
+        templatePath,
+        outputRoot: root,
+        outputName: secondOutput,
+        confirmReviewedSanitizedSample: true
+      });
+      const [first, second] = await Promise.all([
+        fs.readFile(path.join(root, firstOutput), "utf8"),
+        fs.readFile(path.join(root, secondOutput), "utf8")
+      ]);
+      expect(first).toBe(second);
+      expect(parseUserTestCaseDocument(first).input).toMatchObject({
+        now: fixture.now,
+        workingMemory: fixture.workingMemory,
+        conversations: fixture.conversations,
+        persona: {
+          air: [
+            "# 场域知识",
+            "",
+            "## 使用边界",
+            "",
+            "当前没有可用于本次脱敏夹具的场域边界。",
+            "",
+            "## 场域约定",
+            "",
+            "当前没有可用于本次脱敏夹具的场域约定。"
+          ].join("\n")
+        }
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes an older conversation referenced by working memory before recent conversations", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-sample-reference-"));
+    const source = path.join(root, "source");
+    const databasePath = path.join(source, "business/data/sunabot.sqlite");
+    const agentRoot = path.join(source, "business/agents/plana");
+    const outputPath = path.join(root, "sample.json");
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.mkdir(agentRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(agentRoot, "WORKING_MEMORY.md"),
+      `${renderWorkingMemoryMarkdown([{
+        id: "working_historical_reference",
+        content: "Referenced historical evidence remains available.",
+        recordedAt: "2026-07-20T06:00:00.000Z",
+        timeZone: "UTC",
+        conversationId: "private:historical-reference",
+        conversationScope: "private",
+        conversationTitle: "Historical reference",
+        sourceKind: "admin",
+        occurredAt: "2026-07-20T06:00:00.000Z",
+        userId: "historical-user",
+        userIds: ["historical-user"],
+        userName: "Historical user",
+        addressNames: ["Historical user"]
+      }])}\n`
+    );
+    const database = new DatabaseSync(databasePath);
+    database.exec(`
+      CREATE TABLE conversations (id TEXT PRIMARY KEY, last_at TEXT NOT NULL, data_json TEXT NOT NULL);
+      CREATE TABLE memory_records (
+        source TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        data_json TEXT NOT NULL
+      );
+    `);
+    const insertConversation = database.prepare(
+      "INSERT INTO conversations (id, last_at, data_json) VALUES (?, ?, ?)"
+    );
+    insertConversation.run(
+      "private:recent",
+      "2026-07-26T07:00:00.000Z",
+      JSON.stringify({
+        id: "private:recent",
+        scope: "private",
+        title: "Recent",
+        messages: [{
+          id: "message-recent",
+          sequence: 1,
+          role: "user",
+          text: "Recent conversation should not displace referenced evidence.",
+          at: "2026-07-26T07:00:00.000Z"
+        }]
+      })
+    );
+    insertConversation.run(
+      "private:historical-reference",
+      "2026-07-20T06:00:00.000Z",
+      JSON.stringify({
+        id: "private:historical-reference",
+        scope: "private",
+        title: "Historical reference",
+        messages: [{
+          id: "message-historical",
+          sequence: 1,
+          role: "user",
+          text: "Referenced historical evidence remains available.",
+          at: "2026-07-20T06:00:00.000Z"
+        }]
+      })
+    );
+    database.close();
+    try {
+      await sampleBranchFixture({
+        sourceWorkspace: source,
+        agentId: "plana",
+        outputPath,
+        conversationLimit: 1,
+        includeWorkingMemoryConversations: true
+      });
+      const sample = JSON.parse(await fs.readFile(outputPath, "utf8"));
+      expect(sample.fixture.conversations).toHaveLength(1);
+      expect(sample.fixture.conversations[0].messages[0].text)
+        .toBe("Referenced historical evidence remains available.");
+      expect(sample.fixture.workingMemory[0].conversationId)
+        .toBe(sample.fixture.conversations[0].id);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+
+  it("prepares the isolated Agent parent with private extension-safe permissions", {
+    timeout: 15_000
+  }, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-prepare-"));
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    await fs.mkdir(path.join(source, "business/config"), { recursive: true });
+    await fs.mkdir(path.join(source, "business/agents/plana"), {
+      recursive: true,
+      mode: 0o700
+    });
+    await fs.mkdir(path.join(source, "business/agents/koharu"), {
+      recursive: true,
+      mode: 0o700
+    });
+    await fs.mkdir(path.join(source, "business/prompts"), { recursive: true });
+    await fs.mkdir(path.join(source, "secrets"), { recursive: true });
+    await fs.writeFile(
+      path.join(source, "business/config/sunabot.json"),
+      JSON.stringify({
+        server: { host: "127.0.0.1", port: 8787 },
+        persona: {
+          defaultAgentId: "plana",
+          agentWorkspace: "workspace/business/agents/plana",
+          systemPromptWorkspace: "workspace/business/prompts"
+        },
+        providers: {
+          defaultProviderId: "fixture",
+          items: [{
+            id: "fixture",
+            kind: "openai-compatible",
+            model: "fixture-model",
+            apiKeyEnv: "FIXTURE_PROVIDER_KEY",
+            envFile: "workspace/secrets/runtime.env"
+          }]
+        },
+        onebot: { accessTokenEnv: "ONEBOT_ACCESS_TOKEN" }
+      })
+    );
+    await fs.writeFile(
+      path.join(source, "secrets/runtime.env"),
+      "FIXTURE_PROVIDER_KEY=fixture-token\n"
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/plana/WORKING_MEMORY.md"),
+      "private source memory\n"
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/SOUL.md"),
+      "Koharu fixture persona\n"
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/agent.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        id: "koharu",
+        name: "Koharu",
+        enabled: true,
+        createdAt: "2026-07-31T00:00:00.000Z",
+        updatedAt: "2026-07-31T00:00:00.000Z",
+        prompts: { overrideSystem: true }
+      })
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/AIR.md"),
+      "private production identities\n"
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/WORKING_MEMORY.md"),
+      "private Koharu source memory\n"
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/plana/LONG_TERM_MEMORY.jsonl"),
+      "{\"fact\":\"private legacy memory\"}\n"
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/LONG_TERM_MEMORY.jsonl"),
+      "{\"fact\":\"private Koharu legacy memory\"}\n"
+    );
+    await fs.mkdir(path.join(source, "business/agents/plana/data"), { recursive: true });
+    await fs.mkdir(path.join(source, "business/agents/koharu/data"), { recursive: true });
+    await fs.writeFile(
+      path.join(source, "business/agents/plana/data/sunabot.sqlite"),
+      "private copied database"
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/data/sunabot.sqlite"),
+      "private copied Koharu database"
+    );
+    await fs.mkdir(
+      path.join(source, "business/agents/koharu/system-prompts"),
+      { recursive: true }
+    );
+    await fs.writeFile(
+      path.join(
+        source,
+        "business/agents/koharu/system-prompts/conversation_private_reply.json"
+      ),
+      "{\"messages\":[{\"role\":\"user\",\"content\":\"@{user.input}\"}]}\n"
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/selfie_prompt_rewrite.json"),
+      "{\"messages\":[{\"role\":\"user\",\"content\":\"fixture selfie\"}]}\n"
+    );
+    for (const [relative, content] of [
+      ["runtime/codex-jobs/history.json", "private runtime"],
+      ["cache/attachments/index.json", "private cache"],
+      [".prompt-migration-backups/history.json", "private backup"],
+      ["voice/profile.json", "private voice"],
+      ["workbench/knowledge/source-only.md", "private native resource"],
+      ["docker-workbench/source-only.md", "private docker resource"],
+      ["files/history.txt", "private file"],
+      ["assets/avatar.png", "private avatar"],
+      ["extensions/mcp/servers.json", "private extension"],
+      [".sunabot-prompt-migrations.json", "private migration state"],
+      ["history.json", "private undeclared root data"]
+    ] as const) {
+      const target = path.join(source, "business/agents/koharu", relative);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, content);
+    }
+    await fs.symlink(
+      path.join(source, "business/agents/koharu/SOUL.md"),
+      path.join(source, "business/agents/koharu/runtime/source-persona-link")
+    );
+    await fs.writeFile(
+      path.join(source, "business/prompts/custom.json"),
+      "{\"fixture\":true}\n"
+    );
+    await fs.mkdir(
+      path.join(source, "business/prompts/.prompt-migration-backups/private"),
+      { recursive: true }
+    );
+    await fs.writeFile(
+      path.join(source, "business/prompts/.prompt-migration-backups/private/00.json"),
+      "{\"private\":\"historical prompt\"}\n"
+    );
+    await fs.writeFile(
+      path.join(source, "business/prompts/.sunabot-prompt-migrations.json"),
+      "{\"private\":\"migration state\"}\n"
+    );
+    const agentSource = path.join(source, "business/agents/koharu");
+    const copySpy = vi.spyOn(fs, "cp");
+    try {
+      await expect(prepareUserTestWorkspace({
+        source,
+        destination: path.join(root, "missing-agent-destination"),
+        confirmCredentialCopy: true,
+        agentId: "missing"
+      })).rejects.toThrow("源 workspace 不存在 Agent：missing");
+      await fs.symlink(
+        path.join(source, "business/agents/koharu/SOUL.md"),
+        path.join(
+          source,
+          "business/agents/koharu/system-prompts/conversation_group_reply.json"
+        )
+      );
+      await expect(prepareUserTestWorkspace({
+        source,
+        destination: path.join(root, "symlink-destination"),
+        confirmCredentialCopy: true,
+        agentId: "koharu"
+      })).rejects.toThrow("USER_TEST_AGENT_WORKSPACE_SYMLINK");
+      await expect(fs.access(
+        path.join(root, "symlink-destination")
+      )).rejects.toMatchObject({ code: "ENOENT" });
+      await fs.unlink(path.join(
+        source,
+        "business/agents/koharu/system-prompts/conversation_group_reply.json"
+      ));
+      await prepareUserTestWorkspace({
+        source,
+        destination,
+        confirmCredentialCopy: true,
+        agentId: "koharu"
+      });
+      const stat = await fs.stat(path.join(destination, "business/agents"));
+      expect(stat.mode & 0o777).toBe(0o700);
+      await expect(fs.access(
+        path.join(destination, "business/agents/koharu/WORKING_MEMORY.md")
+      )).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(
+        path.join(destination, "business/agents/koharu/LONG_TERM_MEMORY.jsonl")
+      )).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(
+        path.join(destination, "business/agents/koharu/data/sunabot.sqlite")
+      )).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(
+        path.join(destination, "business/agents/koharu/SOUL.md"),
+        "utf8"
+      )).toBe("Koharu fixture persona\n");
+      expect(JSON.parse(await fs.readFile(
+        path.join(destination, "business/agents/koharu/agent.json"),
+        "utf8"
+      ))).toMatchObject({ id: "koharu", prompts: { overrideSystem: true } });
+      expect(await fs.readFile(
+        path.join(
+          destination,
+          "business/agents/koharu/system-prompts/conversation_private_reply.json"
+        ),
+        "utf8"
+      )).toContain("@{user.input}");
+      expect(await fs.readFile(
+        path.join(destination, "business/agents/koharu/selfie_prompt_rewrite.json"),
+        "utf8"
+      )).toContain("fixture selfie");
+      expect(await fs.readFile(
+        path.join(destination, "business/prompts/custom.json"),
+        "utf8"
+      )).toBe("{\"fixture\":true}\n");
+      await expect(fs.access(
+        path.join(destination, "business/prompts/.prompt-migration-backups")
+      )).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(
+        path.join(destination, "business/prompts/.sunabot-prompt-migrations.json")
+      )).rejects.toMatchObject({ code: "ENOENT" });
+      for (const relative of [
+        "AIR.md",
+        "runtime",
+        "cache",
+        ".prompt-migration-backups",
+        "voice",
+        "docker-workbench",
+        "files",
+        "assets",
+        "history.json",
+        ".sunabot-prompt-migrations.json"
+      ]) {
+        await expect(fs.access(
+          path.join(destination, "business/agents/koharu", relative)
+        )).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      await expect(fs.access(path.join(
+        destination,
+        "business/agents/koharu/workbench/knowledge/source-only.md"
+      ))).rejects.toMatchObject({ code: "ENOENT" });
+      const mcpIndex = JSON.parse(await fs.readFile(
+        path.join(destination, "business/agents/koharu/extensions/mcp/servers.json"),
+        "utf8"
+      ));
+      expect(mcpIndex.servers).toEqual([]);
+      const skillIndex = JSON.parse(await fs.readFile(
+        path.join(destination, "business/agents/koharu/workbench/skills/index.json"),
+        "utf8"
+      ));
+      expect(skillIndex.skills).toContainEqual(expect.objectContaining({
+        id: "workbench-config",
+        enabled: true,
+        source: { kind: "bundled", bundleId: "workbench-config" }
+      }));
+      await expect(fs.access(path.join(
+        destination,
+        "business/agents/koharu/workbench/skills/workbench-config/SKILL.md"
+      ))).resolves.toBeUndefined();
+      const copiedEntries = await collectRelativePaths(
+        path.join(destination, "business/agents/koharu")
+      );
+      expect(copiedEntries.some((entry) => entry.kind === "symlink")).toBe(false);
+      expect(copySpy.mock.calls.some(([copiedSource]) => (
+        path.resolve(String(copiedSource)) === path.resolve(agentSource)
+      ))).toBe(false);
+      const canonicalWorkbench = await resolveAgentWorkbench(
+        path.join(destination, "business/agents/koharu")
+      );
+      expect(await fs.readdir(canonicalWorkbench)).toContain("skills");
+      const preparedConfig = JSON.parse(await fs.readFile(
+        path.join(destination, "business/config/sunabot.json"),
+        "utf8"
+      ));
+      expect(preparedConfig.persona.systemPromptWorkspace)
+        .toBe("workspace/business/prompts");
+      expect(preparedConfig.persona).toMatchObject({
+        defaultAgentId: "koharu",
+        agentWorkspace: "workspace/business/agents/koharu"
+      });
+      const ordinaryGuiHome = path.join(root, "ordinary-real-codex-home");
+      const ordinaryEnvironment = {
+        SUNABOT_WORKSPACE: destination,
+        SUNABOT_CODEX_GUI_HOME: ordinaryGuiHome
+      };
+      const restoreOrdinaryGuiHome = await installIsolatedCodexGuiHome(
+        ordinaryEnvironment
+      );
+      expect(ordinaryEnvironment.SUNABOT_CODEX_GUI_HOME).toBe(ordinaryGuiHome);
+      restoreOrdinaryGuiHome();
+      const ordinaryProjection = await projectHarnessProviderOptions(
+        destination,
+        { asyncCodex: true, codexControl: true }
+      );
+      expect(ordinaryProjection.wrapped).toBe(false);
+      expect(ordinaryProjection.options.blockedToolExecutions).toBeUndefined();
+      const isolatedWorkbench = path.join(
+        destination,
+        "business/agents/koharu/workbench"
+      );
+      await fs.mkdir(path.join(isolatedWorkbench, "knowledge"), { recursive: true });
+      await fs.writeFile(
+        path.join(isolatedWorkbench, "knowledge/source-only.md"),
+        "copied source knowledge\n"
+      );
+      await resetUserTestKnowledgeDirectory(destination, isolatedWorkbench);
+      await expect(fs.access(
+        path.join(isolatedWorkbench, "knowledge/source-only.md")
+      )).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readdir(path.join(isolatedWorkbench, "knowledge"))).toEqual([]);
+    } finally {
+      copySpy.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("locks every prepared Provider route and removes a workspace changed before final validation", {
+    timeout: 15_000
+  }, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-provider-lock-"));
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    const authDestination = path.join(root, "auth-destination");
+    const invalidDestination = path.join(root, "invalid-destination");
+    const config = defaultConfig() as unknown as Record<string, any>;
+    config.persona.defaultAgentId = "arona";
+    config.persona.agentWorkspace = "workspace/business/agents/arona";
+    config.providers = {
+      defaultProviderId: "unused-provider",
+      items: [{
+        id: "unused-provider",
+        kind: "openai-official",
+        model: "unused-model",
+        apiKeyEnv: "UNUSED_KEY",
+        envFile: "workspace/secrets/runtime.env"
+      }, {
+        id: "open-arona-codex",
+        kind: "codex-responses",
+        model: "source-codex-model",
+        imageModel: "preserved-image-model",
+        apiKeyEnv: "CODEX_ACCESS_TOKEN",
+        apiKey: "shared-provider-inline-secret",
+        envFile: "workspace/secrets/runtime.env"
+      }]
+    };
+    applyOffRouteBot(config.bot, "shared-provider", "shared-model");
+    config.bot.tools.generateImg.provider = "preserved-image-provider";
+    config.bot.tools.websearch.tavilyApiKey = "shared-tavily-inline-secret";
+    config.bot.tools.websearch.tavilyApiKeys = ["shared-tavily-inline-secret-2"];
+    const agentBot = applyOffRouteBot({}, "agent-provider", "agent-model");
+    agentBot.tools.websearch = {
+      tavilyApiKey: "agent-tavily-inline-secret",
+      tavilyApiKeys: ["agent-tavily-inline-secret-2"],
+      tavilyApiKeyEnv: "TAVILY_API_KEY"
+    };
+    const manifest = {
+      schemaVersion: 1,
+      id: "arona",
+      name: "Arona",
+      enabled: true,
+      createdAt: "2026-07-31T00:00:00.000Z",
+      updatedAt: "2026-07-31T00:00:00.000Z",
+      providers: {
+        defaultProviderId: "agent-provider",
+        items: [{ id: "agent-provider", token: "agent-provider-inline-secret" }]
+      },
+      bot: agentBot
+    };
+    await fs.mkdir(path.join(source, "business/config"), { recursive: true });
+    await fs.mkdir(path.join(source, "business/agents/arona"), { recursive: true });
+    await fs.mkdir(path.join(source, "secrets"), { recursive: true });
+    await fs.writeFile(
+      path.join(source, "business/config/sunabot.json"),
+      JSON.stringify(config)
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/arona/agent.json"),
+      JSON.stringify(manifest)
+    );
+    await fs.writeFile(
+      path.join(source, "secrets/runtime.env"),
+      "CODEX_ACCESS_TOKEN=fixture-token\nUNUSED_KEY=unused-token\n"
+    );
+    const codexAuthContent = `${JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: "fixture-codex-auth-token",
+        refresh_token: "fixture-codex-refresh-token"
+      }
+    }, null, 2)}\n`;
+    await fs.mkdir(path.join(source, "secrets/codex"), { recursive: true });
+    await fs.writeFile(
+      path.join(source, "secrets/codex/auth.json"),
+      codexAuthContent
+    );
+    try {
+      await prepareUserTestWorkspace({
+        source,
+        destination,
+        confirmCredentialCopy: true,
+        agentId: "arona",
+        providerId: "open-arona-codex",
+        model: "gpt-5.6-sol",
+        lockProviderRoutes: true
+      });
+      const preparedConfig = JSON.parse(await fs.readFile(
+        path.join(destination, "business/config/sunabot.json"),
+        "utf8"
+      ));
+      const preparedAgent = JSON.parse(await fs.readFile(
+        path.join(destination, "business/agents/arona/agent.json"),
+        "utf8"
+      ));
+      expect(preparedConfig.providers).toMatchObject({
+        defaultProviderId: "open-arona-codex",
+        items: [expect.objectContaining({
+          id: "open-arona-codex",
+          kind: "codex-responses",
+          model: "gpt-5.6-sol",
+          imageModel: "preserved-image-model"
+        })]
+      });
+      expect(preparedConfig.bot.tools.generateImg.provider)
+        .toBe("preserved-image-provider");
+      expect(preparedAgent).not.toHaveProperty("providers");
+      expect(JSON.stringify(preparedConfig)).not.toContain("inline-secret");
+      expect(JSON.stringify(preparedAgent)).not.toContain("inline-secret");
+      const isolatedEnvironmentNames = (await fs.readFile(
+        path.join(destination, "secrets/runtime.env"),
+        "utf8"
+      ))
+        .trim()
+        .split("\n")
+        .map((line) => line.slice(0, line.indexOf("=")))
+        .sort();
+      expect(isolatedEnvironmentNames)
+        .toEqual(["CODEX_ACCESS_TOKEN", "ONEBOT_ACCESS_TOKEN"]);
+      await expect(fs.access(path.join(destination, "secrets/codex/auth.json")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readdir(path.join(destination, "secrets/codex")))
+        .resolves.toEqual([]);
+      const defaultMarker = JSON.parse(await fs.readFile(
+        path.join(destination, ".sunabot-user-test-workspace.json"),
+        "utf8"
+      ));
+      expect(defaultMarker.codexAuthCopied).toBe(false);
+      expect(defaultMarker.providerRouteLock).toEqual({
+        providerId: "open-arona-codex",
+        model: "gpt-5.6-sol",
+        providerApiKeyEnv: "CODEX_ACCESS_TOKEN",
+        onebotAccessTokenEnv: "ONEBOT_ACCESS_TOKEN"
+      });
+      for (const document of [preparedConfig, preparedAgent]) {
+        expectLockedBot(document.bot, "open-arona-codex", "gpt-5.6-sol");
+      }
+      await expect(assertUserTestWorkspace(destination)).resolves.toBe(destination);
+      preparedConfig.providers.items[0].baseUrl = "https://attacker.invalid/codex";
+      await fs.writeFile(
+        path.join(destination, "business/config/sunabot.json"),
+        JSON.stringify(preparedConfig)
+      );
+      await expect(assertUserTestWorkspace(destination)).rejects.toThrow(
+        "USER_TEST_PROVIDER_ROUTE_LOCK_INVALID: shared.providers.items[0]"
+      );
+      preparedConfig.providers.items[0].baseUrl =
+        "https://chatgpt.com/backend-api/codex";
+      await fs.writeFile(
+        path.join(destination, "business/config/sunabot.json"),
+        JSON.stringify(preparedConfig)
+      );
+      await expect(assertUserTestWorkspace(destination)).resolves.toBe(destination);
+
+      await prepareUserTestWorkspace({
+        source,
+        destination: authDestination,
+        confirmCredentialCopy: true,
+        agentId: "arona",
+        providerId: "open-arona-codex",
+        model: "gpt-5.6-sol",
+        lockProviderRoutes: true,
+        copyCodexAuth: true
+      });
+      await expect(fs.readFile(
+        path.join(authDestination, "secrets/codex/auth.json"),
+        "utf8"
+      )).resolves.toBe(codexAuthContent);
+      const authMarker = JSON.parse(await fs.readFile(
+        path.join(authDestination, ".sunabot-user-test-workspace.json"),
+        "utf8"
+      ));
+      expect(authMarker.codexAuthCopied).toBe(true);
+      expect(Object.keys(authMarker).sort()).toEqual([
+        "agentId",
+        "codexAuthCopied",
+        "createdAt",
+        "providerRouteLock",
+        "purpose",
+        "schemaVersion",
+        "sourceDigest"
+      ]);
+      const externalGuiHome = path.join(root, "real-user-codex-home");
+      const defaultEnvironment = {
+        SUNABOT_WORKSPACE: destination,
+        SUNABOT_CODEX_GUI_HOME: externalGuiHome
+      };
+      const restoreDefaultGuiHome = await installIsolatedCodexGuiHome(defaultEnvironment);
+      expect(defaultEnvironment.SUNABOT_CODEX_GUI_HOME).toBe(
+        await fs.realpath(path.join(destination, "secrets/codex"))
+      );
+      expect(defaultEnvironment.SUNABOT_CODEX_GUI_HOME).not.toBe(externalGuiHome);
+      restoreDefaultGuiHome();
+      expect(defaultEnvironment.SUNABOT_CODEX_GUI_HOME).toBe(externalGuiHome);
+      const isolatedEnvironment = {
+        SUNABOT_WORKSPACE: authDestination,
+        SUNABOT_CODEX_GUI_HOME: externalGuiHome
+      };
+      const restoreIsolatedGuiHome = await installIsolatedCodexGuiHome(isolatedEnvironment);
+      expect(isolatedEnvironment.SUNABOT_CODEX_GUI_HOME).toBe(
+        await fs.realpath(path.join(authDestination, "secrets/codex"))
+      );
+      expect(isolatedEnvironment.SUNABOT_CODEX_GUI_HOME).not.toBe(externalGuiHome);
+      restoreIsolatedGuiHome();
+      expect(isolatedEnvironment.SUNABOT_CODEX_GUI_HOME).toBe(externalGuiHome);
+
+      const blockedProjection = await projectHarnessProviderOptions(
+        destination,
+        { asyncCodex: true }
+      );
+      expect(blockedProjection.wrapped).toBe(true);
+      expect(blockedProjection.options.blockedToolExecutions)
+        .toEqual(expect.arrayContaining(["codex"]));
+      for (const control of [false, true]) {
+        const observation = await observeCodexDispatch(
+          {
+            ...blockedProjection.options,
+            codexControl: control
+          },
+          control
+        );
+        expect(observation.deferred).toBeNull();
+        expect(observation.runner).not.toHaveBeenCalled();
+        expect(observation.onToolCall).not.toHaveBeenCalled();
+        expect(observation.output).toMatchObject({
+          ok: false,
+          error: "Tool codex is unavailable in this run."
+        });
+      }
+
+      const allowedProjection = await projectHarnessProviderOptions(
+        authDestination,
+        { asyncCodex: true }
+      );
+      expect(allowedProjection.wrapped).toBe(true);
+      expect(allowedProjection.options.blockedToolExecutions)
+        .not.toEqual(expect.arrayContaining(["codex"]));
+      for (const control of [false, true]) {
+        const observation = await observeCodexDispatch(
+          {
+            ...allowedProjection.options,
+            codexControl: control
+          },
+          control
+        );
+        expect(observation.deferred).toMatchObject({
+          kind: "deferred",
+          toolCall: { name: "codex" }
+        });
+        expect(observation.runner).toHaveBeenCalledOnce();
+        expect(observation.onToolCall).toHaveBeenCalledWith("codex");
+        expect(observation.output).toBeUndefined();
+      }
+
+      const ensureSpy = vi.spyOn(
+        BundledAgentSkillInstaller.prototype,
+        "ensure"
+      ).mockImplementation(async () => {
+        const agentPath = path.join(
+          invalidDestination,
+          "business/agents/arona/agent.json"
+        );
+        const changed = JSON.parse(await fs.readFile(agentPath, "utf8"));
+        changed.bot.orchestrator.groupThreadModel = "missed-route-model";
+        await fs.writeFile(agentPath, JSON.stringify(changed), "utf8");
+      });
+      try {
+        await expect(prepareUserTestWorkspace({
+          source,
+          destination: invalidDestination,
+          confirmCredentialCopy: true,
+          agentId: "arona",
+          providerId: "open-arona-codex",
+          model: "gpt-5.6-sol",
+          lockProviderRoutes: true
+        })).rejects.toThrow(
+          "USER_TEST_PROVIDER_ROUTE_LOCK_INVALID: agent.bot.orchestrator.groupThreadModel"
+        );
+        await expect(fs.access(invalidDestination))
+          .rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        ensureSpy.mockRestore();
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("binds the run command to its isolated workspace before loading runtime modules", {
+    timeout: 30_000
+  }, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-cli-isolation-"));
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    const casePath = path.join(root, "case.md");
+    const duplicateEventCasePath = path.join(root, "duplicate-event-case.md");
+    const reportPath = path.join(root, "run.json");
+    const duplicateReportPath = path.join(root, "duplicate-run.json");
+    const duplicateEventReportPath = path.join(root, "duplicate-event-run.json");
+    const config = defaultConfig();
+    config.bot.adminQq = "10001";
+    config.bot.replyDebounceMs = 0;
+    config.persona.defaultAgentId = "plana";
+    config.persona.agentWorkspace = "workspace/business/agents/plana";
+    config.providers = {
+      defaultProviderId: "fixture-provider",
+      items: [{
+        ...config.providers.items[0]!,
+        id: "fixture-provider",
+        label: "Fixture Provider",
+        kind: "codex-responses",
+        model: "fixture-model",
+        baseUrl: "http://127.0.0.1:1",
+        apiKeyEnv: "FIXTURE_PROVIDER_KEY",
+        envFile: "workspace/secrets/runtime.env"
+      }]
+    };
+    const testCase = conversationCase("user_private", "private", 20002);
+    if (testCase.kind !== "conversation") throw new Error("conversation case required");
+    await fs.mkdir(path.join(source, "business/config"), { recursive: true });
+    await fs.mkdir(path.join(source, "business/agents/plana"), { recursive: true });
+    await fs.mkdir(path.join(source, "secrets"), { recursive: true });
+    await fs.writeFile(
+      path.join(source, "business/config/sunabot.json"),
+      JSON.stringify(config)
+    );
+    await fs.writeFile(
+      path.join(source, "secrets/runtime.env"),
+      "FIXTURE_PROVIDER_KEY=fixture-token\n"
+    );
+    await fs.writeFile(casePath, [
+      "# CLI isolation",
+      USER_TEST_CASE_MARKER,
+      "```json",
+      JSON.stringify(testCase),
+      "```"
+    ].join("\n"));
+    await fs.writeFile(duplicateEventCasePath, [
+      "# CLI duplicate event",
+      USER_TEST_CASE_MARKER,
+      "```json",
+      JSON.stringify({ ...testCase, id: "actor.user_private.duplicate-event" }),
+      "```"
+    ].join("\n"));
+    try {
+      await prepareUserTestWorkspace({
+        source,
+        destination,
+        confirmCredentialCopy: true
+      });
+      const { VITEST: _vitest, ...childEnvironment } = process.env;
+      expect(() => execFileSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          path.resolve("tooling/user-test-harness/cli.ts"),
+          "run",
+          "--case",
+          casePath,
+          "--workspace",
+          destination,
+          "--output",
+          reportPath,
+          "--execute-provider"
+        ],
+        {
+          cwd: path.resolve("."),
+          env: {
+            ...childEnvironment,
+            SUNABOT_USER_TEST_ALLOW_PROVIDER: "1"
+          },
+          stdio: "pipe"
+        }
+      )).toThrow();
+      await expect(fs.access(
+        path.join(destination, "business/data/sunabot.sqlite")
+      )).resolves.toBeUndefined();
+      await expect(fs.access(
+        path.join(source, "business/data/sunabot.sqlite")
+      )).rejects.toMatchObject({ code: "ENOENT" });
+      const report = JSON.parse(await fs.readFile(reportPath, "utf8"));
+      expect(report.execution.error).not.toBe("USER_TEST_SECONDARY_AGENT_NOT_PREPARED");
+      let repeatedCaseError: unknown;
+      try {
+        execFileSync(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            path.resolve("tooling/user-test-harness/cli.ts"),
+            "run",
+            "--case",
+            casePath,
+            "--workspace",
+            destination,
+            "--output",
+            duplicateReportPath,
+            "--execute-provider"
+          ],
+          {
+            cwd: path.resolve("."),
+            env: {
+              ...childEnvironment,
+              SUNABOT_USER_TEST_ALLOW_PROVIDER: "1"
+            },
+            stdio: "pipe"
+          }
+        );
+      } catch (error) {
+        repeatedCaseError = error;
+      }
+      expect(String((repeatedCaseError as { stderr?: Buffer })?.stderr))
+        .toContain("USER_TEST_WORKSPACE_CASE_ALREADY_RUN");
+      await expect(fs.access(duplicateReportPath))
+        .rejects.toMatchObject({ code: "ENOENT" });
+      expect(() => execFileSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          path.resolve("tooling/user-test-harness/cli.ts"),
+          "run",
+          "--case",
+          duplicateEventCasePath,
+          "--workspace",
+          destination,
+          "--output",
+          duplicateEventReportPath,
+          "--execute-provider"
+        ],
+        {
+          cwd: path.resolve("."),
+          env: {
+            ...childEnvironment,
+            SUNABOT_USER_TEST_ALLOW_PROVIDER: "1"
+          },
+          stdio: "pipe"
+        }
+      )).toThrow();
+      const duplicateEvent = JSON.parse(await fs.readFile(duplicateEventReportPath, "utf8"));
+      expect(duplicateEvent.execution).toMatchObject({
+        status: "failed",
+        error: "USER_TEST_ONEBOT_EVENT_ALREADY_USED"
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("seeds 33 messages through raw private and group ingress and exposes the latest 32", {
+    timeout: 30_000
+  }, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-runtime-"));
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    const previousWorkspace = process.env.SUNABOT_WORKSPACE;
+    const previousTimeout = process.env.SUNABOT_USER_TEST_TIMEOUT_MS;
+    const config = defaultConfig();
+    config.bot.adminQq = "10001";
+    config.bot.replyDebounceMs = 0;
+    config.bot.orchestrator.enabled = true;
+    config.persona.defaultAgentId = "koharu";
+    config.persona.agentWorkspace = "workspace/business/agents/koharu";
+    config.providers = {
+      defaultProviderId: "fixture-provider",
+      items: [{
+        ...config.providers.items[0]!,
+        id: "fixture-provider",
+        label: "Fixture Provider",
+        kind: "codex-responses",
+        model: "fixture-model",
+        baseUrl: "https://provider.fixture.invalid",
+        apiKeyEnv: "FIXTURE_PROVIDER_KEY",
+        envFile: "workspace/secrets/runtime.env"
+      }]
+    };
+    await fs.mkdir(path.join(source, "business/config"), { recursive: true });
+    await fs.mkdir(path.join(source, "business/agents/koharu"), {
+      recursive: true,
+      mode: 0o700
+    });
+    await fs.mkdir(path.join(source, "business/agents/koharu/workbench/knowledge"), {
+      recursive: true,
+      mode: 0o700
+    });
+    await fs.mkdir(path.join(source, "secrets"), { recursive: true });
+    await fs.writeFile(
+      path.join(source, "business/config/sunabot.json"),
+      JSON.stringify(config)
+    );
+    await fs.writeFile(
+      path.join(source, "secrets/runtime.env"),
+      "FIXTURE_PROVIDER_KEY=fixture-token\n"
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/workbench/knowledge/source-only.md"),
+      "source knowledge must not survive fixture reset\n"
+    );
+    const providerOutputs = [
+      {
+        text: JSON.stringify({
+          should_reply: true,
+          reason: "The fixture user explicitly requested a result.",
+          reply_to_message_id: "99"
+        })
+      },
+      {
+        text: "",
+        calls: [{
+          name: "add_workmemory",
+          args: { action: "skip", content: null }
+        }]
+      },
+      {
+        text: "夹具主对话已收到。",
+        calls: [{
+          name: "add_user_profile",
+          args: { action: "skip", profile: null, addressNames: null }
+        }]
+      },
+      {
+        text: "",
+        calls: [{
+          name: "add_workmemory",
+          args: { action: "skip", content: null }
+        }]
+      },
+      {
+        text: "夹具私聊已收到。",
+        calls: [{
+          name: "add_user_profile",
+          args: { action: "skip", profile: null, addressNames: null }
+        }]
+      }
+    ];
+    const fetchMock = vi.fn(async () => {
+      const output = providerOutputs.shift();
+      if (!output) throw new Error("unexpected fixture Provider request");
+      return codexSseResponse(output.text, output.calls);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await prepareUserTestWorkspace({
+        source,
+        destination,
+        confirmCredentialCopy: true
+      });
+      process.env.SUNABOT_WORKSPACE = destination;
+      process.env.SUNABOT_USER_TEST_TIMEOUT_MS = "5000";
+      vi.resetModules();
+      const { runRuntimeUserTest } = await import(
+        "../../tooling/user-test-harness/runtimeDriver.js"
+      );
+      const runtimeCase = conversationCase("admin_group", "group", 20002, 30003);
+      if (runtimeCase.kind !== "conversation") throw new Error("conversation case required");
+      const conversationMessages = (prefix: string) => Array.from({ length: 33 }, (_, index) => {
+        const sequence = index + 1;
+        return {
+          id: `${prefix.toLowerCase()}-history-${String(sequence).padStart(2, "0")}`,
+          sequence,
+          role: "user" as const,
+          text: `${prefix}_${String(sequence).padStart(2, "0")}`,
+          at: new Date(Date.parse("2026-08-29T09:00:00.000Z") + sequence * 1_000)
+            .toISOString(),
+          userId: 20002,
+          senderName: "Fixture user"
+        };
+      });
+      const expectedHistory = (prefix: string) => Array.from(
+        { length: 32 },
+        (_, index) => `${prefix}_${String(index + 2).padStart(2, "0")}`
+      );
+      runtimeCase.input.fixture = {
+        resetKnowledge: true,
+        workbenchFiles: [{
+          path: "knowledge/fixture-only.md",
+          content: "fixture input\n"
+        }],
+        conversationMessages: conversationMessages("RUNTIME_GROUP")
+      };
+      runtimeCase.expected.providerPrompt = {
+        promptFamily: "conversation.group-reply",
+        orderedText: expectedHistory("RUNTIME_GROUP"),
+        forbiddenText: ["RUNTIME_GROUP_01"]
+      };
+      const report = await runRuntimeUserTest(runtimeCase, "b".repeat(64));
+      expect(
+        report.execution.status,
+        JSON.stringify({
+          execution: report.execution,
+          branch: report.observation.branch,
+          requestLogs: report.observation.requestLogs
+        }, null, 2)
+      ).toBe("passed");
+      expect(report.execution.assertions.every((assertion) => assertion.passed)).toBe(true);
+      expect(report.execution.assertions).toContainEqual(expect.objectContaining({
+        id: "provider_prompt.ordered:conversation.group-reply",
+        passed: true
+      }));
+      expect(report.observation.tools).toEqual(["add_user_profile", "add_workmemory"]);
+      expect(await fs.readFile(
+        path.join(
+          destination,
+          "business/agents/koharu/workbench/knowledge/fixture-only.md"
+        ),
+        "utf8"
+      )).toBe("fixture input\n");
+      await expect(fs.access(path.join(
+        destination,
+        "business/agents/koharu/workbench/knowledge/source-only.md"
+      ))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(JSON.stringify(report.observation.outbound)).toContain("夹具主对话已收到");
+
+      const privateCase = conversationCase("user_private", "private", 20002);
+      if (privateCase.kind !== "conversation") throw new Error("conversation case required");
+      privateCase.input.fixture = {
+        conversationMessages: conversationMessages("RUNTIME_PRIVATE")
+      };
+      privateCase.expected.providerPrompt = {
+        promptFamily: "conversation.private-reply",
+        orderedText: expectedHistory("RUNTIME_PRIVATE"),
+        forbiddenText: ["RUNTIME_PRIVATE_01"]
+      };
+      const privateReport = await runRuntimeUserTest(privateCase, "c".repeat(64));
+      expect(
+        privateReport.execution.status,
+        JSON.stringify({
+          execution: privateReport.execution,
+          branch: privateReport.observation.branch,
+          requestLogs: privateReport.observation.requestLogs
+        }, null, 2)
+      ).toBe("passed");
+      expect(privateReport.execution.assertions).toContainEqual(expect.objectContaining({
+        id: "provider_prompt.ordered:conversation.private-reply",
+        passed: true
+      }));
+      expect(JSON.stringify(privateReport.observation.outbound)).toContain("夹具私聊已收到");
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.unstubAllGlobals();
+      if (previousWorkspace == null) delete process.env.SUNABOT_WORKSPACE;
+      else process.env.SUNABOT_WORKSPACE = previousWorkspace;
+      if (previousTimeout == null) delete process.env.SUNABOT_USER_TEST_TIMEOUT_MS;
+      else process.env.SUNABOT_USER_TEST_TIMEOUT_MS = previousTimeout;
+      vi.resetModules();
+      await fs.rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 50
+      });
+    }
+  });
+
+  it("drives Dream through its production branch", {
+    timeout: 30_000
+  }, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-branches-"));
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    const previousWorkspace = process.env.SUNABOT_WORKSPACE;
+    const previousTimeout = process.env.SUNABOT_USER_TEST_TIMEOUT_MS;
+    const config = defaultConfig();
+    config.bot.adminQq = "10001";
+    config.persona.defaultAgentId = "koharu";
+    config.persona.agentWorkspace = "workspace/business/agents/koharu";
+    config.providers = {
+      defaultProviderId: "fixture-provider",
+      items: [{
+        ...config.providers.items[0]!,
+        id: "fixture-provider",
+        label: "Fixture Provider",
+        kind: "codex-responses",
+        model: "fixture-model",
+        baseUrl: "https://provider.fixture.invalid",
+        apiKeyEnv: "FIXTURE_PROVIDER_KEY",
+        envFile: "workspace/secrets/runtime.env"
+      }]
+    };
+    await fs.mkdir(path.join(source, "business/config"), { recursive: true });
+    await fs.mkdir(path.join(source, "business/agents/koharu"), {
+      recursive: true,
+      mode: 0o700
+    });
+    await fs.mkdir(path.join(source, "secrets"), { recursive: true });
+    await fs.writeFile(
+      path.join(source, "business/config/sunabot.json"),
+      JSON.stringify(config)
+    );
+    await fs.writeFile(
+      path.join(source, "secrets/runtime.env"),
+      "FIXTURE_PROVIDER_KEY=fixture-token\n"
+    );
+    const providerOutputs = [
+      JSON.stringify({
+        workingMemoryCompression: "0.1.4 必须在回归测试全部通过后发布。",
+        longTermMemoryAdditions: ["回归测试全部通过后才能发布 0.1.4。"],
+        dreamDescription: "我梦见测试清单变成一条发光的路，只有回归测试全部通过，0.1.4 才走向发布终点。"
+      })
+    ];
+    const fetchMock = vi.fn(async () => {
+      const output = providerOutputs.shift();
+      if (!output) throw new Error("unexpected fixture Provider request");
+      return codexSseResponse(output);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await prepareUserTestWorkspace({
+        source,
+        destination,
+        confirmCredentialCopy: true
+      });
+      process.env.SUNABOT_WORKSPACE = destination;
+      process.env.SUNABOT_USER_TEST_TIMEOUT_MS = "30000";
+      vi.resetModules();
+      const { runRuntimeUserTest } = await import(
+        "../../tooling/user-test-harness/runtimeDriver.js"
+      );
+      const dreamReport = await runRuntimeUserTest(
+        dreamCase(),
+        "d".repeat(64)
+      );
+      expect(
+        dreamReport.execution.status,
+        JSON.stringify({
+          execution: dreamReport.execution,
+          branch: dreamReport.observation.branch,
+          requestLogs: dreamReport.observation.requestLogs
+        }, null, 2)
+      ).toBe("passed");
+      expect(dreamReport.execution.assertions.every((assertion) => assertion.passed)).toBe(true);
+      expect(JSON.stringify(dreamReport.observation.branch)).toContain("0.1.4");
+      expect(dreamReport.observation.branch).toMatchObject({
+        seeded: {
+          longTermCount: 1,
+          userProfileCount: 1,
+          activeTaskCount: 1,
+          directorSchedule: {
+            status: "committed",
+            date: dreamReport.observation.branch.seeded.timeline.directorScheduleDate
+          }
+        },
+        run: {
+          output: {
+            workingMemoryCompression: "0.1.4 必须在回归测试全部通过后发布。",
+            longTermMemoryAdditions: ["回归测试全部通过后才能发布 0.1.4。"],
+            dreamDescription: "我梦见测试清单变成一条发光的路，只有回归测试全部通过，0.1.4 才走向发布终点。"
+          }
+        },
+        memory: {
+          after: {
+            longTerm: expect.arrayContaining([
+              expect.objectContaining({ fact: "回归测试全部通过后才能发布 0.1.4。" })
+            ])
+          }
+        }
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+      if (previousWorkspace == null) delete process.env.SUNABOT_WORKSPACE;
+      else process.env.SUNABOT_WORKSPACE = previousWorkspace;
+      if (previousTimeout == null) delete process.env.SUNABOT_USER_TEST_TIMEOUT_MS;
+      else process.env.SUNABOT_USER_TEST_TIMEOUT_MS = previousTimeout;
+      vi.resetModules();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat the Provider tool catalog as invoked tools", () => {
+    const logs = [{
+      category: "model.request",
+      action: "codex.complete",
+      metadata: { toolNames: ["websearch", "send_file"] }
+    }, {
+      category: "tool.call",
+      action: "websearch",
+      request: { arguments: { query: "fixture" } },
+      response: { ok: true }
+    }];
+    expect(extractCalledToolNames(logs)).toEqual(["websearch"]);
+    expect(extractProviderToolCatalog([{
+      category: "model.request",
+      request: {
+        tools: [
+          { name: "websearch" },
+          { function: { name: "send_file" } }
+        ]
+      }
+    }])).toEqual(["send_file", "websearch"]);
+    const availability = evaluateHarnessAssertions({
+      expected: {
+        requiredAvailableTools: ["websearch"],
+        forbiddenAvailableTools: ["codex"]
+      },
+      toolCalls: [],
+      outbound: [],
+      requestLogs: [{
+        category: "model.request",
+        request: { tools: [{ name: "websearch" }] }
+      }]
+    });
+    expect(availability.every((assertion) => assertion.passed)).toBe(true);
+  });
+
+  it("checks every round-zero transport attempt for one prompt family without exposing prompt text", () => {
+    const expected = {
+      providerPrompt: {
+        promptFamily: "conversation.private-reply",
+        orderedText: ["PROMPT_TOKEN_02", "PROMPT_TOKEN_03"],
+        forbiddenText: ["PROMPT_TOKEN_01"]
+      }
+    };
+    const logs = [{
+      category: "model.request",
+      request: { input: "PROMPT_TOKEN_01 belongs to another prompt family" },
+      metadata: { promptFamily: "conversation.tone-rewrite", round: 0 }
+    }, {
+      at: "2026-08-29T09:00:02.000Z",
+      category: "model.request",
+      request: { input: "PROMPT_TOKEN_02 PROMPT_TOKEN_03 PROMPT_TOKEN_01" },
+      metadata: {
+        promptFamily: "conversation.private-reply",
+        round: 0,
+        transportAttempt: 2
+      }
+    }, {
+      at: "2026-08-29T09:00:01.000Z",
+      category: "model.request",
+      request: {
+        input: [
+          { role: "user", content: "PROMPT_TOKEN_02" },
+          { role: "assistant", content: "PROMPT_TOKEN_03" }
+        ]
+      },
+      metadata: {
+        promptFamily: "conversation.private-reply",
+        round: 0,
+        transportAttempt: 1
+      }
+    }, {
+      category: "model.request",
+      request: { input: "PROMPT_TOKEN_02 PROMPT_TOKEN_03 PROMPT_TOKEN_01" },
+      metadata: { promptFamily: "conversation.private-reply", round: 1 }
+    }];
+    const inconsistent = evaluateHarnessAssertions({
+      expected,
+      toolCalls: [],
+      outbound: [],
+      requestLogs: logs
+    });
+    expect(inconsistent.find((assertion) => assertion.id.includes(".request:"))?.passed)
+      .toBe(true);
+    expect(inconsistent.find((assertion) => assertion.id.includes(".ordered:"))?.passed)
+      .toBe(true);
+    expect(inconsistent.find((assertion) => assertion.id.includes(".forbidden:"))?.passed)
+      .toBe(false);
+
+    const consistentLogs = structuredClone(logs);
+    const retry = consistentLogs.find((log) => log.metadata.transportAttempt === 2);
+    if (!retry) throw new Error("retry request required");
+    retry.request = { input: "PROMPT_TOKEN_02 PROMPT_TOKEN_03" };
+    const passed = evaluateHarnessAssertions({
+      expected,
+      toolCalls: [],
+      outbound: [],
+      requestLogs: consistentLogs
+    });
+    expect(passed).toHaveLength(3);
+    expect(passed.every((assertion) => assertion.passed)).toBe(true);
+    expect(JSON.stringify(passed)).not.toContain("belongs to another prompt family");
+
+    const duplicated = evaluateHarnessAssertions({
+      expected,
+      toolCalls: [],
+      outbound: [],
+      requestLogs: [{
+        category: "model.request",
+        request: { input: "PROMPT_TOKEN_02 PROMPT_TOKEN_03 PROMPT_TOKEN_02 PROMPT_TOKEN_01" },
+        metadata: { promptFamily: "conversation.private-reply", round: 0 }
+      }]
+    });
+    expect(duplicated.find((assertion) => assertion.id.includes(".ordered:"))?.passed)
+      .toBe(false);
+    expect(duplicated.find((assertion) => assertion.id.includes(".forbidden:"))?.passed)
+      .toBe(false);
+  });
+
+  it("records dynamic MCP tools and requires a successful tool result", () => {
+    const calls = extractToolCallObservations([{
+      category: "tool.call",
+      action: "mcp__calendar__list_events",
+      request: { callId: "call-1", argumentKeys: ["date"] },
+      response: { ok: false, error: "calendar unavailable" },
+      metadata: { stage: "reply" }
+    }, {
+      category: "tool.call",
+      action: "mcp__calendar__list_events",
+      request: { callId: "call-2", argumentKeys: ["date"] },
+      response: { content: [{ type: "text", text: "no events" }] },
+      metadata: { stage: "reply" }
+    }]);
+    expect(calls).toEqual([
+      expect.objectContaining({
+        name: "mcp__calendar__list_events",
+        callId: "call-1",
+        status: "failed"
+      }),
+      expect.objectContaining({
+        name: "mcp__calendar__list_events",
+        callId: "call-2",
+        status: "succeeded"
+      })
+    ]);
+    expect(extractCalledToolNames([{
+      category: "tool.call",
+      action: "mcp__calendar__list_events",
+      response: { ok: true }
+    }])).toEqual(["mcp__calendar__list_events"]);
+    expect(evaluateHarnessAssertions({
+      expected: { requiredTools: ["mcp__calendar__list_events"] },
+      toolCalls: calls.slice(0, 1),
+      outbound: []
+    })[0]?.passed).toBe(false);
+    expect(evaluateHarnessAssertions({
+      expected: { requiredTools: ["mcp__calendar__list_events"] },
+      toolCalls: calls,
+      outbound: []
+    })[0]?.passed).toBe(true);
+    expect(evaluateHarnessAssertions({
+      expected: { forbiddenSuccessfulTools: ["mcp__calendar__list_events"] },
+      toolCalls: calls.slice(0, 1),
+      outbound: []
+    })[0]?.passed).toBe(true);
+    expect(evaluateHarnessAssertions({
+      expected: { forbiddenSuccessfulTools: ["mcp__calendar__list_events"] },
+      toolCalls: calls,
+      outbound: []
+    })[0]?.passed).toBe(false);
+  });
+
+  it("distinguishes message, asset, and poke outbound evidence", () => {
+    const assertions = evaluateHarnessAssertions({
+      expected: {
+        requiredOutboundKinds: ["poke"],
+        forbiddenOutboundKinds: ["message", "asset"],
+        minimumOutboundCount: 1,
+        maximumOutboundCount: 1
+      },
+      toolCalls: [],
+      outbound: [{ kind: "poke", value: { userId: 10001 } }]
+    });
+    expect(assertions.every((assertion) => assertion.passed)).toBe(true);
+  });
+
+  it("limits conversation text assertions to user-facing text and asset names", () => {
+    const values = extractConversationUserFacingTextValues([{
+      kind: "message",
+      value: {
+        text: "语音功能未启用",
+        media: [{
+          filePath: "/Users/test/internal.png",
+          url: "/generated-images/internal.png"
+        }],
+        contentSegments: [
+          { type: "text", text: "图片已发送" },
+          { type: "image", imageIndex: 0 }
+        ]
+      }
+    }, {
+      kind: "asset",
+      value: {
+        asset: {
+          name: "测试结果.txt",
+          source: "/Users/test/internal.txt"
+        }
+      }
+    }, {
+      kind: "poke",
+      value: { userId: 10001 }
+    }]);
+
+    expect(values).toEqual(["语音功能未启用", "图片已发送", "测试结果.txt"]);
+    const assertions = evaluateHarnessAssertions({
+      expected: {
+        requiredText: ["语音功能未启用", "测试结果.txt"],
+        forbiddenText: ["/Users/", "internal.png"]
+      },
+      toolCalls: [],
+      outbound: [],
+      textValues: values
+    });
+    expect(assertions.every((assertion) => assertion.passed)).toBe(true);
+  });
+
+  it("fails Provider evidence when retries end in a terminal failure", () => {
+    const assertions = evaluateProviderEvidence([{
+      category: "model.response",
+      action: "codex.complete",
+      response: { ok: false, error: "fetch failed", willRetry: false }
+    }, {
+      category: "runtime.action",
+      action: "reply.failed",
+      response: { ok: false }
+    }]);
+    expect(assertions).toEqual([
+      expect.objectContaining({ id: "provider.successful_response", passed: false }),
+      expect.objectContaining({ id: "provider.terminal_failures", passed: false })
+    ]);
+  });
+
+  it("serializes parallel appends to one Markdown report and releases its directory lock", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-report-"));
+    const reportPath = path.join(root, "run.json");
+    const targetPath = path.join(root, "shared.md");
+    const run = {
+      schemaVersion: 1 as const,
+      runId: "parallel-run",
+      caseId: "parallel-case",
+      caseDigest: "a".repeat(64),
+      sourceRevision: "b".repeat(40),
+      kind: "conversation" as const,
+      startedAt: new Date(0).toISOString(),
+      finishedAt: new Date(1).toISOString(),
+      workspaceMode: "isolated" as const,
+      execution: { status: "passed" as const, assertions: [] },
+      observation: { outbound: [], tools: [], toolCalls: [], requestLogs: [] },
+      quality: { status: "pending_review" as const, criteria: [] },
+      verdict: "inconclusive" as const
+    };
+    await fs.writeFile(reportPath, JSON.stringify(run));
+    try {
+      await Promise.all(Array.from({ length: 8 }, (_, index) => appendMarkdownReport({
+        reportPath,
+        targetPath,
+        suite: `Parallel ${index}`
+      })));
+      const markdown = await fs.readFile(targetPath, "utf8");
+      expect(markdown.match(/^## Parallel /gmu)).toHaveLength(8);
+      await appendMarkdownReport({
+        reportPath,
+        targetPath,
+        suite: "Parallel 0"
+      });
+      expect(
+        (await fs.readFile(targetPath, "utf8")).match(/^## Parallel /gmu)
+      ).toHaveLength(8);
+      await expect(fs.stat(`${targetPath}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a passing review when a quality score is below the case threshold", () => {
+    const run = {
+      schemaVersion: 1 as const,
+      runId: "run-1",
+      caseId: "case-1",
+      caseDigest: "a".repeat(64),
+      sourceRevision: "b".repeat(40),
+      kind: "conversation" as const,
+      startedAt: new Date(0).toISOString(),
+      finishedAt: new Date(1).toISOString(),
+      workspaceMode: "isolated" as const,
+      execution: { status: "passed" as const, assertions: [] },
+      observation: { outbound: [], tools: [], toolCalls: [], requestLogs: [] },
+      quality: {
+        status: "pending_review" as const,
+        criteria: [{ id: "accuracy", description: "Facts are accurate.", minimumScore: 4 }]
+      },
+      verdict: "inconclusive" as const
+    };
+
+    expect(() => validateAndSealUserTestReport(run, {
+      schemaVersion: 1,
+      runId: "run-1",
+      caseId: "case-1",
+      reviewer: "fixture-agent",
+      reviewedAt: new Date(2).toISOString(),
+      criteria: [{ id: "accuracy", score: 3, evidence: "One required fact was absent." }],
+      verdict: "pass",
+      summary: "Incomplete answer."
+    })).toThrow("USER_TEST_REVIEW_VERDICT_INVALID");
+  });
+
+  it.each([
+    ["blank reviewer", { reviewer: " " }],
+    ["invalid review time", { reviewedAt: "not-a-time" }],
+    ["blank summary", { summary: " " }]
+  ])("rejects quality review metadata with %s", (_label, override) => {
+    const run = {
+      schemaVersion: 1 as const,
+      runId: "review-metadata-run",
+      caseId: "review-metadata-case",
+      caseDigest: "a".repeat(64),
+      sourceRevision: "b".repeat(40),
+      kind: "conversation" as const,
+      startedAt: new Date(0).toISOString(),
+      finishedAt: new Date(1).toISOString(),
+      workspaceMode: "isolated" as const,
+      execution: { status: "passed" as const, assertions: [] },
+      observation: { outbound: [], tools: [], toolCalls: [], requestLogs: [] },
+      quality: {
+        status: "pending_review" as const,
+        criteria: [{ id: "accuracy", description: "Facts are accurate.", minimumScore: 4 }]
+      },
+      verdict: "inconclusive" as const
+    };
+    expect(() => validateAndSealUserTestReport(run, {
+      schemaVersion: 1,
+      runId: run.runId,
+      caseId: run.caseId,
+      reviewer: "fixture-agent",
+      reviewedAt: new Date(2).toISOString(),
+      criteria: [{
+        id: "accuracy",
+        score: 5,
+        evidence: "The output is grounded in the captured evidence."
+      }],
+      verdict: "pass",
+      summary: "Pass.",
+      ...override
+    })).toThrow("USER_TEST_REVIEW_METADATA_INVALID");
+  });
+
+  it("preserves a blocked execution verdict while keeping it outside the release gate", () => {
+    const run = {
+      schemaVersion: 1 as const,
+      runId: "blocked-run",
+      caseId: "blocked-case",
+      caseDigest: "c".repeat(64),
+      sourceRevision: "b".repeat(40),
+      kind: "dream" as const,
+      startedAt: new Date(0).toISOString(),
+      finishedAt: new Date(1).toISOString(),
+      workspaceMode: "isolated" as const,
+      execution: {
+        status: "blocked" as const,
+        assertions: [],
+        error: "Provider unavailable"
+      },
+      observation: { outbound: [], tools: [], toolCalls: [], requestLogs: [] },
+      quality: {
+        status: "pending_review" as const,
+        criteria: [{
+          id: "availability",
+          description: "The dependency is available.",
+          minimumScore: 4
+        }]
+      },
+      verdict: "blocked" as const
+    };
+    expect(validateAndSealUserTestReport(run, {
+      schemaVersion: 1,
+      runId: "blocked-run",
+      caseId: "blocked-case",
+      reviewer: "fixture-agent",
+      reviewedAt: new Date(2).toISOString(),
+      criteria: [{
+        id: "availability",
+        score: 1,
+        evidence: "The required Provider was unavailable."
+      }],
+      verdict: "blocked",
+      summary: "Execution could not start."
+    }).verdict).toBe("blocked");
+  });
+
+  it("binds the v0.3.0 release gate to the complete canonical case set, revision, run, and reviewer", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-release-"));
+    const manifestPath = path.join(root, "manifest.json");
+    const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    }).trim();
+    const requiredCases = [
+      {
+        caseDocument: path.join(process.cwd(), "docs/user-tests/single-workbench-resource-addressing.md"),
+        minimumIndependentRuns: 1
+      },
+      {
+        caseDocument: path.join(process.cwd(), "docs/user-tests/cases/bash-agent-loop/admin-private-native-download.md"),
+        minimumIndependentRuns: 2
+      },
+      {
+        caseDocument: path.join(process.cwd(), "docs/user-tests/webfetch-lightpanda-dynamic.md"),
+        minimumIndependentRuns: 2
+      }
+    ];
+    const manifestCases = [];
+    for (const requiredCase of requiredCases) {
+      const document = await readUserTestCaseDocument(requiredCase.caseDocument);
+      const reports = [];
+      for (let index = 0; index < requiredCase.minimumIndependentRuns; index += 1) {
+        const reportName = `${document.case.id}.${index + 1}.sealed.json`;
+        reports.push(reportName);
+        await fs.writeFile(path.join(root, reportName), JSON.stringify(releaseSealedReport({
+          document,
+          sourceRevision,
+          runId: `${document.case.id}-run-${index + 1}`,
+          reviewer: `${document.case.id}-reviewer-${index + 1}`
+        })));
+      }
+      manifestCases.push({ ...requiredCase, reports });
+    }
+    const manifest = { schemaVersion: 1, suiteId: "release-0.3.0", sourceRevision, cases: manifestCases };
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
+    try {
+      await expect(gateUserTestReleaseManifest(manifestPath)).resolves.toMatchObject({
+        suiteId: "release-0.3.0",
+        sourceRevision,
+        cases: [
+          { caseId: "workbench-resources.single-addressing", runs: 1, reviewers: 1 },
+          { caseId: "bash-agent-loop.admin-private-native-download", runs: 2, reviewers: 2 },
+          { caseId: "webfetch.admin-private-lightpanda-dynamic", runs: 2, reviewers: 2 }
+        ]
+      });
+      await fs.writeFile(manifestPath, JSON.stringify({
+        ...manifest,
+        sourceRevision: "0".repeat(40)
+      }));
+      await expect(gateUserTestReleaseManifest(manifestPath))
+        .rejects.toThrow("USER_TEST_RELEASE_REVISION_MISMATCH");
+
+      await fs.writeFile(manifestPath, JSON.stringify({ ...manifest, suiteId: "release-unrelated" }));
+      await expect(gateUserTestReleaseManifest(manifestPath))
+        .rejects.toThrow("USER_TEST_RELEASE_SUITE_MISMATCH");
+
+      await fs.writeFile(manifestPath, JSON.stringify({ ...manifest, cases: manifest.cases.slice(0, 1) }));
+      await expect(gateUserTestReleaseManifest(manifestPath))
+        .rejects.toThrow("USER_TEST_RELEASE_COVERAGE_MISMATCH");
+
+      await fs.writeFile(manifestPath, JSON.stringify({
+        ...manifest,
+        cases: manifest.cases.map((entry) => entry.minimumIndependentRuns === 2
+          ? { ...entry, minimumIndependentRuns: 1 }
+          : entry)
+      }));
+      await expect(gateUserTestReleaseManifest(manifestPath))
+        .rejects.toThrow("USER_TEST_RELEASE_COVERAGE_MISSING:bash-agent-loop.admin-private-native-download");
+
+      await fs.writeFile(manifestPath, JSON.stringify({
+        ...manifest,
+        cases: [
+          { ...manifest.cases[0], caseDocument: path.join(process.cwd(), "docs/user-tests/template.md") },
+          ...manifest.cases.slice(1)
+        ]
+      }));
+      await expect(gateUserTestReleaseManifest(manifestPath))
+        .rejects.toThrow("USER_TEST_RELEASE_COVERAGE_MISSING:workbench-resources.single-addressing");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+function releaseSealedReport({
+  document,
+  sourceRevision,
+  runId,
+  reviewer
+}: {
+  document: Awaited<ReturnType<typeof readUserTestCaseDocument>>;
+  sourceRevision: string;
+  runId: string;
+  reviewer: string;
+}) {
+  const run = {
+    schemaVersion: 1 as const,
+    runId,
+    caseId: document.case.id,
+    caseDigest: document.digest,
+    sourceRevision,
+    kind: document.case.kind,
+    startedAt: new Date(0).toISOString(),
+    finishedAt: new Date(1).toISOString(),
+    workspaceMode: "isolated" as const,
+    execution: { status: "passed" as const, assertions: [] },
+    observation: { outbound: [], tools: [], toolCalls: [], requestLogs: [] },
+    quality: { status: "pending_review" as const, criteria: document.case.quality.criteria },
+    verdict: "inconclusive" as const
+  };
+  return validateAndSealUserTestReport(run, {
+    schemaVersion: 1,
+    runId,
+    caseId: document.case.id,
+    reviewer,
+    reviewedAt: new Date(2).toISOString(),
+    criteria: document.case.quality.criteria.map((criterion) => ({
+      id: criterion.id,
+      score: 5,
+      evidence: "The captured result satisfies this release criterion."
+    })),
+    verdict: "pass",
+    summary: "Pass."
+  });
+}
+
+function conversationCase(
+  actor: "admin_private" | "user_private" | "admin_group" | "user_group",
+  messageType: "private" | "group",
+  userId: number,
+  groupId?: number
+): UserTestCase {
+  return {
+    schemaVersion: 1,
+    id: `actor.${actor}`,
+    title: actor,
+    kind: "conversation",
+    goal: "The requested tool is used and the result is returned.",
+    input: {
+      actor,
+      accountId: "primary",
+      selfId: "40004",
+      event: {
+        post_type: "message",
+        message_type: messageType,
+        message_id: 99,
+        self_id: 40004,
+        user_id: userId,
+        ...(groupId ? { group_id: groupId } : {}),
+        time: 1_788_000_000,
+        sender: { nickname: "fixture-user" },
+        message: "hello",
+        raw_message: "hello"
+      }
+    },
+    expected: { minimumOutboundCount: 1 },
+    quality: {
+      criteria: [{
+        id: "accuracy",
+        description: "The answer is accurate and grounded in tool output.",
+        minimumScore: 4
+      }]
+    }
+  };
+}
+
+function dreamCase(): UserTestCase {
+  return {
+    schemaVersion: 1,
+    id: "branch.dream",
+    title: "Dream",
+    kind: "dream",
+    goal: "Dream is grounded in explicit working memory and conversation input.",
+    input: {
+      timePolicy: "rebase_to_runtime",
+      now: "2026-07-26T12:00:00.000+08:00",
+      workingMemory: [{
+        id: "working_fixture_release",
+        content: "0.1.4 必须在回归测试全部通过后发布。",
+        occurredAt: "2026-07-26T06:00:00.000+08:00",
+        conversationId: "private:20002",
+        conversationScope: "private",
+        conversationTitle: "Fixture user",
+        sourceKind: "admin"
+      }],
+      longTerm: [{
+        id: "long_fixture_release",
+        fact: "0.1.4 remains gated by regression evidence.",
+        occurredAt: "2026-07-25T06:00:00.000+08:00",
+        factuality: "fact"
+      }],
+      userProfiles: [{
+        id: "profile_fixture_user",
+        userId: "20002",
+        userName: "Fixture user",
+        fact: "Fixture user asks for regression evidence before release."
+      }],
+      persona: {
+        name: "Fixture Agent",
+        soul: "Keep release statements grounded in test evidence.",
+        preference: "",
+        user: "",
+        relation: "",
+        air: ""
+      },
+      conversations: [{
+        id: "private:20002",
+        scope: "private",
+        title: "Fixture user",
+        userId: 20002,
+        messages: [{
+          id: "dream-message-1",
+          sequence: 1,
+          role: "user",
+          text: "回归测试通过后再发布 0.1.4。",
+          at: "2026-07-26T07:00:00.000+08:00",
+          userId: 20002,
+          senderName: "Fixture user"
+        }]
+      }],
+      activeTasks: [{
+        id: "fixture_release_review",
+        name: "Review release evidence",
+        runAt: "2026-07-27T09:00:00.000+08:00",
+        context: "Review the regression evidence before release.",
+        targetConversationId: "private:20002",
+        mentionUserIds: []
+      }],
+      directorSchedule: directorScheduleFixture()
+    },
+    expected: {
+      requiredText: ["0.1.4", "回归测试"],
+      minimumOutboundCount: 0,
+      maximumOutboundCount: 0
+    },
+    quality: {
+      criteria: [{
+        id: "grounding",
+        description: "The Dream remains grounded in supplied evidence.",
+        minimumScore: 4
+      }]
+    }
+  };
+}
+
+function directorScheduleFixture() {
+  const item = (
+    id: string,
+    startAt: string,
+    endAt: string,
+    share: boolean
+  ) => ({
+    id,
+    startAt,
+    endAt,
+    activity: `Fixture activity ${id}`,
+    location: "Fixture workspace",
+    participants: ["Fixture Agent"],
+    intent: "Keep release evidence grounded.",
+    variant: "fixture",
+    share: share
+      ? {
+          enabled: true,
+          at: startAt,
+          textIntent: "Share verified progress only.",
+          selfiePrompt: "Reviewing a test checklist."
+        }
+      : {
+          enabled: false,
+          at: null,
+          textIntent: null,
+          selfiePrompt: null
+        }
+  });
+  return {
+    schemaVersion: 1 as const,
+    date: "2026-07-26",
+    timeZone: "Asia/Shanghai",
+    theme: "Fixture validation",
+    summary: "Review evidence without claiming an unverified release.",
+    items: [
+      item(
+        "morning",
+        "2026-07-26T08:00:00.000+08:00",
+        "2026-07-26T09:00:00.000+08:00",
+        false
+      ),
+      item(
+        "noon",
+        "2026-07-26T11:00:00.000+08:00",
+        "2026-07-26T12:00:00.000+08:00",
+        true
+      ),
+      item(
+        "evening",
+        "2026-07-26T18:00:00.000+08:00",
+        "2026-07-26T19:00:00.000+08:00",
+        false
+      )
+    ]
+  };
+}
+
+function codexSseResponse(
+  text: string,
+  calls: Array<{ name: string; args: Record<string, unknown> }> = []
+) {
+  const output = [{
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text }]
+  }, ...calls.map((call, index) => ({
+    type: "function_call",
+    name: call.name,
+    call_id: `fixture-call-${index}-${call.name}`,
+    arguments: JSON.stringify(call.args),
+    status: "completed"
+  }))];
+  const events = output.map((item, outputIndex) => ({
+    type: "response.output_item.done",
+    output_index: outputIndex,
+    item
+  }));
+  events.push({
+    type: "response.completed",
+    response: { status: "completed", output }
+  } as never);
+  return new Response(
+    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+    {
+      status: 200,
+      headers: { "content-type": "text/event-stream" }
+    }
+  );
+}
+
+function applyOffRouteBot(
+  bot: Record<string, any>,
+  providerId: string,
+  model: string
+) {
+  bot.replyProviderId = providerId;
+  bot.replyModel = model;
+  bot.imageReader = { ...(bot.imageReader ?? {}), providerId, model };
+  bot.tone = { ...(bot.tone ?? {}), providerId, model };
+  bot.memory = { ...(bot.memory ?? {}), memoryProviderId: providerId, memoryModel: model };
+  bot.orchestrator = {
+    ...(bot.orchestrator ?? {}),
+    userGroupchatOrchestratorProviderId: providerId,
+    userGroupchatOrchestratorModel: model,
+    groupThreadProviderId: providerId,
+    groupThreadModel: model
+  };
+  bot.tools = {
+    ...(bot.tools ?? {}),
+    codex: { ...(bot.tools?.codex ?? {}), model }
+  };
+  bot.bash = { ...(bot.bash ?? {}), auditModel: model };
+  return bot;
+}
+
+function expectLockedBot(
+  bot: Record<string, any>,
+  providerId: string,
+  model: string
+) {
+  expect(bot).toMatchObject({
+    replyProviderId: providerId,
+    replyModel: model,
+    imageReader: { providerId, model },
+    tone: { providerId, model },
+    memory: { memoryProviderId: providerId, memoryModel: model },
+    orchestrator: {
+      userGroupchatOrchestratorProviderId: providerId,
+      userGroupchatOrchestratorModel: model,
+      groupThreadProviderId: providerId,
+      groupThreadModel: model
+    },
+    tools: { codex: { model } },
+    bash: { auditModel: model }
+  });
+}
+
+async function projectHarnessProviderOptions(
+  workspace: string,
+  options: Record<string, any>
+) {
+  const original = vi.fn(async (
+    _provider: unknown,
+    _request: unknown,
+    providerOptions: Record<string, any> = {}
+  ) => providerOptions);
+  const runtime = { completePromptTurn: original };
+  const { installProviderEgressLock } = await import(
+    "../../tooling/user-test-harness/runtimeDriver.js"
+  );
+  await installProviderEgressLock(
+    runtime as never,
+    { SUNABOT_WORKSPACE: workspace }
+  );
+  const wrapped = runtime.completePromptTurn !== original;
+  const projected = await runtime.completePromptTurn(
+    undefined,
+    undefined,
+    options
+  );
+  return { wrapped, options: projected };
+}
+
+async function observeCodexDispatch(
+  options: Record<string, any>,
+  control: boolean
+) {
+  const executor = new RegistryProviderToolExecutor();
+  const onToolCall = vi.fn();
+  const runner = vi.fn();
+  const providerOptions = {
+    ...options,
+    asyncCodex: true,
+    codexControl: control,
+    onToolCall
+  };
+  const definitions = executor.resolveDefinitions(providerOptions);
+  const call = {
+    type: "function_call" as const,
+    name: "codex",
+    call_id: control ? "control-codex" : "worker-codex",
+    arguments: JSON.stringify(control
+      ? {
+          action: "list_sessions",
+          ssh_host: null,
+          task: null,
+          workspace_path: null,
+          thread_id: null,
+          query: null,
+          limit: null,
+          dispatch_message: "正在查询隔离任务。"
+        }
+      : {
+          task: "检查隔离工作区。",
+          kind: "analysis",
+          inputHandles: null,
+          dispatch_message: "正在检查隔离工作区。"
+        })
+  };
+  const deferred = executor.deferredTurn(
+    [call],
+    providerOptions,
+    definitions
+  );
+  if (deferred) runner(deferred.toolCall);
+  const output = deferred
+    ? undefined
+    : JSON.parse(String((await executor.execute(
+        [call],
+        providerOptions,
+        definitions
+      ))[0]?.output));
+  return { deferred, runner, onToolCall, output };
+}
+
+function cryptoDigest(value: unknown) {
+  return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+async function collectRelativePaths(root: string) {
+  const output: Array<{ path: string; kind: "directory" | "file" | "symlink" | "other" }> = [];
+  const visit = async (directory: string, prefix = ""): Promise<void> => {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const relative = path.join(prefix, entry.name);
+      const kind = entry.isSymbolicLink()
+        ? "symlink"
+        : entry.isDirectory()
+          ? "directory"
+          : entry.isFile()
+            ? "file"
+            : "other";
+      output.push({ path: relative, kind });
+      if (kind === "directory") await visit(path.join(directory, entry.name), relative);
+    }
+  };
+  await visit(root);
+  return output;
+}

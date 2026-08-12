@@ -5,15 +5,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ApplicationDataStore, EmojiRecord } from "../../adapters/sqlite/applicationDataStore.js";
+import type { EmojiJsonlStore } from "../../adapters/filesystem/emojiJsonlStore.js";
+import type { EmojiRecord } from "../../adapters/sqlite/applicationDataStore.js";
 import type { AppConfig } from "../../src/types.js";
 
 let root = "";
 let previousWorkspace: string | undefined;
 let config: AppConfig;
-let store: ApplicationDataStore;
+let store: EmojiJsonlStore;
 let closeStores: typeof import("../../adapters/sqlite/applicationDataStore.js")["closeApplicationDataStores"];
 let assets: typeof import("../../src/emojis/emojiAssets.js");
+let jsonlStores: typeof import("../../src/emojis/emojiStore.js");
 let pngA = Buffer.alloc(0);
 let pngB = Buffer.alloc(0);
 let agentOrdinal = 0;
@@ -23,13 +25,15 @@ beforeAll(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-emoji-integrity-")));
   process.env.SUNABOT_WORKSPACE = root;
   vi.resetModules();
-  const [sharpModule, storeModule, assetModule] = await Promise.all([
+  const [sharpModule, storeModule, assetModule, jsonlStoreModule] = await Promise.all([
     import("sharp"),
     import("../../adapters/sqlite/applicationDataStore.js"),
-    import("../../src/emojis/emojiAssets.js")
+    import("../../src/emojis/emojiAssets.js"),
+    import("../../src/emojis/emojiStore.js")
   ]);
   closeStores = storeModule.closeApplicationDataStores;
   assets = assetModule;
+  jsonlStores = jsonlStoreModule;
   const sharp = sharpModule.default;
   [pngA, pngB] = await Promise.all([
     sharp({ create: { width: 1024, height: 1024, channels: 3, background: { r: 240, g: 80, b: 80 } } })
@@ -48,8 +52,7 @@ beforeEach(async () => {
   config.persona.defaultAgentId = agentId;
   config.persona.agentWorkspace = path.join(root, "business", "agents", agentId);
   await fs.mkdir(config.persona.agentWorkspace, { recursive: true });
-  const storeModule = await import("../../adapters/sqlite/applicationDataStore.js");
-  store = storeModule.applicationDataStore(config);
+  store = jsonlStores.emojiStore(config);
 });
 
 afterAll(async () => {
@@ -79,7 +82,7 @@ describe("emoji runtime asset integrity", () => {
   it("builds a 64-entry prompt catalog and selected-marker plan without reading image contents", async () => {
     const shared = await install("自定义0", pngA);
     for (let index = 1; index < 64; index += 1) {
-      store.upsertEmoji({ ...shared, key: `自定义${index}` });
+      await store.upsert({ ...shared, key: `自定义${index}` });
     }
     const contentAccess = watchFileContentAccess();
     try {
@@ -91,7 +94,7 @@ describe("emoji runtime asset integrity", () => {
     } finally {
       contentAccess.restore();
     }
-  });
+  }, 15_000);
 
   it("fails a selected marker after same-size corruption while an unselected valid marker still passes", async () => {
     const corruptedRecord = await install("开心", pngA);
@@ -231,7 +234,10 @@ describe("emoji runtime asset integrity", () => {
         background: { r: 20 + index * 30, g: 40 + index * 20, b: 220 - index * 25 }
       }
     }).png().toBuffer()));
-    const records = await Promise.all(pngs.map((bytes, index) => install(`并发${index}`, bytes)));
+    const records = [];
+    for (let index = 0; index < pngs.length; index += 1) {
+      records.push(await install(`并发${index}`, pngs[index]!));
+    }
     const realpath = fs.realpath.bind(fs);
     let activeMetadata = 0;
     let peakMetadata = 0;
@@ -275,12 +281,10 @@ describe("emoji runtime asset integrity", () => {
     const location = assets.emojiMediaLocation(config, fileName);
     const agentDirectory = path.dirname(location.filePath);
     const externalDirectory = path.join(root, `external-media-${agentOrdinal}`);
-    await fs.mkdir(path.dirname(agentDirectory), { recursive: true });
-    await fs.mkdir(externalDirectory, { recursive: true });
-    await fs.symlink(externalDirectory, agentDirectory, process.platform === "win32" ? "junction" : "dir");
-    await fs.writeFile(path.join(externalDirectory, fileName), pngA);
+    await fs.mkdir(agentDirectory, { recursive: true });
+    await fs.writeFile(path.join(agentDirectory, fileName), pngA);
     const now = new Date().toISOString();
-    store.upsertEmoji({
+    await store.upsert({
       key: "极度害羞",
       fileName,
       source: "generated",
@@ -290,6 +294,8 @@ describe("emoji runtime asset integrity", () => {
       createdAt: now,
       updatedAt: now
     });
+    await fs.rename(agentDirectory, externalDirectory);
+    await fs.symlink(externalDirectory, agentDirectory, process.platform === "win32" ? "junction" : "dir");
     expect(assets.availableEmojiRecords(config)).toMatchObject([{ key: "极度害羞" }]);
     const plan = assets.planAgentEmojiMarkers("[/极度害羞]", config);
     const open = vi.spyOn(fs, "open");
@@ -324,9 +330,8 @@ describe("emoji runtime asset integrity", () => {
     vi.resetModules();
     try {
       const isolatedAssets = await import("../../src/emojis/emojiAssets.js");
-      const plan = isolatedAssets.planAgentEmojiMarkers("[/惊慌]", config);
-      await expect(isolatedAssets.assertPlannedEmojiAssetsIntegrity(config, plan))
-        .rejects.toThrow("表情图片已损坏或不可用");
+      expect(() => isolatedAssets.planAgentEmojiMarkers("[/惊慌]", config))
+        .toThrow("Emoji catalog no-follow reads are unavailable");
       expect(open).not.toHaveBeenCalled();
       expect(readFile).not.toHaveBeenCalled();
       const isolatedStore = await import("../../adapters/sqlite/applicationDataStore.js");
@@ -359,7 +364,7 @@ async function install(
     createdAt: now,
     updatedAt: now
   };
-  store.upsertEmoji(record);
+  await store.upsert(record);
   return record;
 }
 

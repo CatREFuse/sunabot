@@ -1,0 +1,109 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Verify release tag and source versions
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node -e 'const fs=require("node:fs"); const read=(file)=>JSON.parse(fs.readFileSync(file,"utf8")); const pkg=read("package.json"); const pkgLock=read("package-lock.json"); const contract=read("deploy/runtime-contract.json"); const components=read("components/component.lock.json"); const expected=`v${pkg.version}`; if(process.env.RELEASE_TAG!==expected) throw new Error(`release tag ${process.env.RELEASE_TAG} must equal ${expected}`); if(contract.releaseVersion!==pkg.version||pkgLock.version!==pkg.version||pkgLock.packages?.[""]?.version!==pkg.version) throw new Error("package and runtime contract release versions must match"); if(JSON.stringify(contract.supportedPlatforms)!==JSON.stringify(components.supportedPlatforms)) throw new Error("runtime and component release platforms must match");'
+      - name: Verify release tag source commit
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "${RELEASE_TAG}^{commit}")"
+      - run: npm ci
+      - name: Install Chromium for UI acceptance only
+        run: npx playwright install --with-deps chromium
+      - name: Run runtime, unit, harness, integration, smoke, build and E2E gates
+        run: npm run verify
+      - name: Run light and dark visual acceptance
+        run: npm run test:visual
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-gate-results
+          path: |
+            playwright-report
+            test-results
+            benchmark-results
+          if-no-files-found: ignore
+
+  build:
+    needs: gate
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Verify release tag source commit
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "${RELEASE_TAG}^{commit}")"
+      - run: npm ci
+      - name: Build and verify release artifact
+        run: npm run runtime:release -- --output=release
+      - name: Verify release artifact manifest
+        env:
+          RELEASE_PLATFORM: ${{ matrix.platform }}
+        run: node -e 'const fs=require("node:fs"); const {execFileSync}=require("node:child_process"); const pkg=JSON.parse(fs.readFileSync("package.json","utf8")); const lock=JSON.parse(fs.readFileSync("components/component.lock.json","utf8")); const slug=process.env.RELEASE_PLATFORM; const platform=slug.replace(/^linux-/,"linux/"); const archive=`release/sunabot-${pkg.version}-${slug}.tar.gz`; const manifest=JSON.parse(execFileSync("tar",["-xOf",archive,"./release-manifest.json"],{encoding:"utf8"})); const expected={node:lock.components.node.version,lightpanda:lock.components.lightpanda.version,bubblewrap:lock.components.bubblewrap.version,napcat:lock.components.napcat.version,codexCli:lock.components["codex-cli"].version}; if(manifest.releaseVersion!==pkg.version||manifest.platform!==platform||JSON.stringify(manifest.components)!==JSON.stringify(expected)) throw new Error("release artifact manifest does not match package and component versions");'
+      - if: matrix.platform == 'linux-amd64'
+        run: cp install.sh release/install.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sunabot-${{ matrix.platform }}
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sunabot-*
+          path: release
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          files: release/*

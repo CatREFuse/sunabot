@@ -31,6 +31,11 @@ export interface AgentRegistryRepository {
   updateAgentAccount(
     record: Pick<AgentAccountRegistryRow, "id" | "label" | "qqId" | "enabled" | "updatedAt">
   ): boolean;
+  transferAgentAccountIdentity(
+    accountId: string,
+    qqId: string,
+    updatedAt: string
+  ): { updated: boolean; previousAccountId?: string };
   deleteAgentAccount(id: string): boolean;
   nextAgentAccountWebuiPort(): number;
 }

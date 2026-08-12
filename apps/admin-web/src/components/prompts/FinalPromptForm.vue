@@ -25,6 +25,7 @@ const messageGroupVariables = computed(() => props.variables.filter((variable) =
 const schemaText = shallowRef("");
 const schemaError = shallowRef("");
 const activeSection = shallowRef("message-0");
+const messageSlots = new Map<number, InstanceType<typeof FinalPromptMessageSlot>>();
 const validationKind = shallowRef<"" | "success" | "error">("");
 const validationMessage = shallowRef("");
 const workspaceSections = computed<FinalPromptWorkspaceSection[]>(() => {
@@ -94,6 +95,18 @@ function reorderMessage(index: number, target: number) {
 
 function removeMessage(index: number) {
   mutate((document) => { document.messages.splice(index, 1); });
+}
+
+function insertVariable(name: string) {
+  const section = workspaceSections.value.find((item) => item.id === activeSection.value);
+  if (section?.kind === "message" && typeof section.index === "number") {
+    messageSlots.get(section.index)?.insertVariable(name);
+  }
+}
+
+function setMessageSlot(index: number, instance: unknown) {
+  if (instance) messageSlots.set(index, instance as InstanceType<typeof FinalPromptMessageSlot>);
+  else messageSlots.delete(index);
 }
 
 function testTemplate() {
@@ -174,6 +187,8 @@ function updateSchema(value: string) {
     schemaError.value = error instanceof Error ? error.message : "JSON 格式错误";
   }
 }
+
+defineExpose({ insertVariable });
 </script>
 
 <template>
@@ -219,6 +234,7 @@ function updateSchema(value: string) {
               && typeof section.index === 'number'
               && parsed.document.messages[section.index] !== undefined
           "
+          :ref="(instance) => setMessageSlot(section.index!, instance)"
           :message="parsed.document.messages[section.index]!"
           :index="section.index"
           :total="parsed.document.messages.length"
@@ -300,6 +316,8 @@ function updateSchema(value: string) {
               :key="index"
               :tool="tool"
               :index="index"
+              :variables="variables"
+              :semantic-xml="semanticXml"
               @update="updateTool(index, $event)"
               @remove="removeTool(index)"
             />

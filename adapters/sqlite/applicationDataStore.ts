@@ -1,22 +1,24 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { getWorkspacePath, resolveProjectPath } from "../../src/config.js";
-import type { AppConfig, ConversationRecord, ImageHistoryRecord } from "../../src/types.js";
+import { getWorkspacePath, resolveProjectPath } from "../../packages/platform/projectPaths.js";
+import type { AppConfig, ImageHistoryRecord } from "../../packages/contracts/admin/public.js";
+import type { ConversationRecord } from "../../packages/contracts/messaging/messages.js";
+import type {
+  RequestLogBusinessNode,
+  RequestLogMemoryTool
+} from "../../packages/contracts/observability/requestLogPresentation.js";
 import type { MemoryPersistenceProvider } from "../../services/memory/persistence.js";
+import type { ScheduledTaskStore } from "../../services/scheduling/public.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { currentAgentRuntimeConfig } from "../../packages/platform/runtimeAgentContext.js";
-import {
-  isValidEmojiKey,
-  normalizeEmojiKey
-} from "../../services/emojis/emojiCatalog.js";
+import { readMemorySourceSnapshot } from "./memoryRevisionStore.js";
 import { migrateApplicationDataSchema } from "./applicationDataSchema.js";
-import {
-  GroupThreadStateStore,
-  type CommitGroupThreadStateInput,
-  type CommitGroupThreadStateResult,
-  type GroupThreadStateRecord
-} from "./groupThreadStateStore.js";
+import { EmojiStore, type EmojiRecord, type EmojiVersionRecord } from "./emojiStore.js";
+import { SqliteScheduledTaskStore } from "./scheduledTaskStore.js";
+import { SqliteDirectorStore } from "./directorStore.js";
+import { SqliteDreamStore } from "./dreamStore.js";
+import { ImageHistoryStore } from "./imageHistoryStore.js";
 import {
   ModelCallStore,
   type ModelCallAggregateRow,
@@ -24,17 +26,13 @@ import {
 } from "./modelCallStore.js";
 
 export type { ModelCallAggregateRow, ModelCallModelAggregateRow } from "./modelCallStore.js";
-export type {
-  CommitGroupThreadStateInput,
-  CommitGroupThreadStateResult,
-  GroupThreadStateRecord
-} from "./groupThreadStateStore.js";
+export type { EmojiRecord, EmojiVersionRecord } from "./emojiStore.js";
+export { generatedImageHistoryRecords } from "./imageHistoryStore.js";
 
 export type MemoryDataSource = "working" | "long_term" | "user_profile";
 
 type JsonObject = Record<string, unknown>;
 type SqlRow = Record<string, unknown>;
-
 export interface AgentRegistryRow {
   id: string;
   name: string;
@@ -52,17 +50,6 @@ export interface AgentAccountRegistryRow {
   qqId?: string;
   enabled: boolean;
   webuiPort: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface EmojiRecord {
-  key: string;
-  fileName: string;
-  source: "upload" | "generated";
-  sizeBytes: number;
-  width: number;
-  height: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -113,8 +100,12 @@ export const sqliteMemoryPersistence: MemoryPersistenceProvider = {
 
 export class ApplicationDataStore {
   private readonly database: DatabaseSync;
-  private readonly groupThreads: GroupThreadStateStore;
   private readonly modelCalls: ModelCallStore;
+  private readonly emojis: EmojiStore;
+  private readonly imageHistory: ImageHistoryStore;
+  readonly scheduledTasks: ScheduledTaskStore;
+  readonly director: SqliteDirectorStore;
+  readonly dreams: SqliteDreamStore;
 
   constructor(readonly databasePath: string) {
     if (databasePath !== ":memory:") {
@@ -127,7 +118,12 @@ export class ApplicationDataStore {
     this.database.exec("PRAGMA busy_timeout = 5000");
     this.modelCalls = new ModelCallStore(this.database);
     migrateApplicationDataSchema(this.database, this.modelCalls);
-    this.groupThreads = new GroupThreadStateStore(this.database);
+    this.emojis = new EmojiStore(this.database);
+    this.imageHistory = new ImageHistoryStore(this.database);
+    this.scheduledTasks = new SqliteScheduledTaskStore(this.database);
+    this.director = new SqliteDirectorStore(this.database);
+    this.dreams = new SqliteDreamStore(this.database);
+    initializeLongTermRecallTracking(this);
   }
 
   close() {
@@ -227,6 +223,25 @@ export class ApplicationDataStore {
     return Number(result.changes) > 0;
   }
 
+  transferAgentAccountIdentity(accountId: string, qqId: string, updatedAt: string) {
+    return this.transaction(() => {
+      const target = this.database.prepare("SELECT id FROM agent_accounts WHERE id = ?").get(accountId) as SqlRow | undefined;
+      if (!target) return { updated: false };
+      const previous = this.database.prepare("SELECT id FROM agent_accounts WHERE qq_id = ?").get(qqId) as SqlRow | undefined;
+      const previousAccountId = previous ? String(previous.id) : undefined;
+      if (previousAccountId && previousAccountId !== accountId) {
+        this.database.prepare("UPDATE agent_accounts SET qq_id = NULL, updated_at = ? WHERE id = ? AND qq_id = ?")
+          .run(updatedAt, previousAccountId, qqId);
+      }
+      const result = this.database.prepare("UPDATE agent_accounts SET qq_id = ?, updated_at = ? WHERE id = ?")
+        .run(qqId, updatedAt, accountId);
+      return {
+        updated: Number(result.changes) > 0,
+        ...(previousAccountId && previousAccountId !== accountId ? { previousAccountId } : {})
+      };
+    });
+  }
+
   deleteAgentAccount(id: string) {
     return Number(this.database.prepare("DELETE FROM agent_accounts WHERE id = ?").run(id).changes) > 0;
   }
@@ -244,93 +259,20 @@ export class ApplicationDataStore {
     `).all(source).map((row) => parseObject((row as SqlRow).data_json));
   }
 
+  readMemorySnapshot() { return this.transaction(() => readMemorySourceSnapshot(this.database, (source) => this.readMemory(source))); }
+
   replaceMemory(source: MemoryDataSource, records: readonly JsonObject[]) {
     this.transaction(() => this.replaceMemoryUnsafe(source, records));
+    if (source === "long_term") initializeLongTermRecallTracking(this);
   }
 
-  commitMemoryBatch(input: {
-    batchId: string;
-    baselineWorking: readonly JsonObject[];
-    working: readonly JsonObject[];
-    longTerm: readonly JsonObject[];
-    userProfile: readonly JsonObject[];
-    result: unknown;
-  }) {
-    return this.transaction(() => {
-      const existing = this.readMemoryBatch(input.batchId);
-      if (existing !== undefined) return { status: "existing" as const, result: existing };
-      if (JSON.stringify(this.readMemory("working")) !== JSON.stringify(input.baselineWorking)) {
-        return { status: "snapshot_conflict" as const };
-      }
-      this.replaceMemoryUnsafe("working", input.working);
-      this.replaceMemoryUnsafe("long_term", input.longTerm);
-      this.replaceMemoryUnsafe("user_profile", input.userProfile);
-      this.database.prepare(`
-        INSERT INTO memory_batches (batch_id, result_json, committed_at) VALUES (?, ?, ?)
-      `).run(input.batchId, JSON.stringify(input.result), new Date().toISOString());
-      return { status: "committed" as const, result: input.result };
-    });
-  }
+  initializeRecallTracking(recordIds: readonly string[], at?: Date) { return this.dreams.initializeRecallTracking(recordIds, at); }
 
-  readMemoryBatch(batchId: string) {
-    const row = this.database.prepare(`
-      SELECT result_json FROM memory_batches WHERE batch_id = ?
-    `).get(batchId) as SqlRow | undefined;
-    return row ? JSON.parse(String(row.result_json)) : undefined;
-  }
+  reserveActualRecall(input: Parameters<SqliteDreamStore["reserveActualRecall"]>[0]) { return this.dreams.reserveActualRecall(input); }
 
-  hasMemoryBatch(batchId: string) {
-    return Boolean(this.database.prepare(`
-      SELECT 1 FROM memory_batches WHERE batch_id = ?
-    `).get(batchId));
-  }
+  recordActualRecall(input: Parameters<SqliteDreamStore["recordActualRecall"]>[0]) { return this.dreams.recordActualRecall(input); }
 
-  readMemoryScheduler() {
-    const conversations: Record<string, JsonObject> = {};
-    for (const row of this.database.prepare(`
-      SELECT conversation_id, data_json FROM memory_scheduler ORDER BY conversation_id
-    `).all() as SqlRow[]) {
-      conversations[String(row.conversation_id)] = parseObject(row.data_json);
-    }
-    return conversations;
-  }
-
-  replaceMemoryScheduler(conversations: Readonly<Record<string, object>>) {
-    this.transaction(() => {
-      const ids = new Set(Object.keys(conversations));
-      const upsert = this.database.prepare(`
-        INSERT INTO memory_scheduler (conversation_id, updated_at, data_json) VALUES (?, ?, ?)
-        ON CONFLICT(conversation_id) DO UPDATE SET
-          updated_at = excluded.updated_at,
-          data_json = excluded.data_json
-      `);
-      for (const [id, value] of Object.entries(conversations)) {
-        upsert.run(id, String((value as JsonObject).updatedAt ?? ""), JSON.stringify(value));
-      }
-      for (const row of this.database.prepare("SELECT conversation_id FROM memory_scheduler").all() as SqlRow[]) {
-        const id = String(row.conversation_id);
-        if (!ids.has(id)) this.database.prepare("DELETE FROM memory_scheduler WHERE conversation_id = ?").run(id);
-      }
-    });
-  }
-
-  ensureLegacyMemorySchedulerImported(filePath: string) {
-    const marker = "legacy-memory-scheduler";
-    if (this.metadata(marker) === "done") return { imported: false, count: this.memorySchedulerCount() };
-    const conversations = readSchedulerJson(filePath);
-    this.transaction(() => {
-      if (this.memorySchedulerCount() === 0) {
-        const insert = this.database.prepare(`
-          INSERT INTO memory_scheduler (conversation_id, updated_at, data_json) VALUES (?, ?, ?)
-        `);
-        for (const [id, value] of Object.entries(conversations)) {
-          insert.run(id, String(value.updatedAt ?? ""), JSON.stringify(value));
-        }
-      }
-      this.setMetadata(marker, "done");
-    });
-    return { imported: Object.keys(conversations).length > 0, count: this.memorySchedulerCount() };
-  }
+  listRecallStats(recordIds?: readonly string[]) { return this.dreams.listRecallStats(recordIds); }
 
   ensureLegacyMemoryImported(source: MemoryDataSource, filePath: string) {
     const marker = `legacy-memory:${source}`;
@@ -343,10 +285,10 @@ export class ApplicationDataStore {
     return { imported: records.length > 0, count: this.memoryCount(source) };
   }
 
-  readConversations() {
+  readConversations<T extends ConversationRecord = ConversationRecord>() {
     return this.database.prepare(`
       SELECT data_json FROM conversations ORDER BY last_at DESC, id
-    `).all().map((row) => JSON.parse(String((row as SqlRow).data_json)) as ConversationRecord);
+    `).all().map((row) => JSON.parse(String((row as SqlRow).data_json)) as T);
   }
 
   replaceConversations(records: readonly ConversationRecord[]) {
@@ -355,14 +297,6 @@ export class ApplicationDataStore {
 
   upsertConversation(record: ConversationRecord) {
     this.transaction(() => this.upsertConversationUnsafe(record));
-  }
-
-  readGroupThreadState(conversationId: string): GroupThreadStateRecord | undefined {
-    return this.groupThreads.read(conversationId);
-  }
-
-  commitGroupThreadState(input: CommitGroupThreadStateInput): CommitGroupThreadStateResult {
-    return this.groupThreads.commit(input);
   }
 
   replaceConversationsIdempotent(idempotencyKey: string, records: readonly ConversationRecord[]) {
@@ -396,90 +330,74 @@ export class ApplicationDataStore {
   }
 
   readImageHistory() {
-    return this.database.prepare(`
-      SELECT data_json FROM image_history ORDER BY created_at DESC, id LIMIT 80
-    `).all().map((row) => JSON.parse(String((row as SqlRow).data_json)) as ImageHistoryRecord);
+    return this.imageHistory.read();
   }
 
   replaceImageHistory(records: readonly ImageHistoryRecord[]) {
-    this.transaction(() => {
-      this.database.prepare("DELETE FROM image_history").run();
-      const insert = this.database.prepare(`
-        INSERT INTO image_history (id, url, created_at, data_json) VALUES (?, ?, ?, ?)
-      `);
-      for (const record of records) insert.run(record.id, record.url, record.createdAt, JSON.stringify(record));
-    });
+    this.imageHistory.replace(records);
+  }
+
+  appendImageHistory(record: ImageHistoryRecord) {
+    this.imageHistory.append(record);
   }
 
   ensureLegacyImageHistoryImported(filePath: string) {
-    const marker = "legacy-image-history";
-    if (this.metadata(marker) === "done") return { imported: false, count: this.imageHistoryCount() };
-    const records = readImageHistoryJson(filePath);
-    this.transaction(() => {
-      if (this.imageHistoryCount() === 0) {
-        const insert = this.database.prepare(`
-          INSERT INTO image_history (id, url, created_at, data_json) VALUES (?, ?, ?, ?)
-        `);
-        for (const record of records) insert.run(record.id, record.url, record.createdAt, JSON.stringify(record));
-      }
-      this.setMetadata(marker, "done");
-    });
-    return { imported: records.length > 0, count: this.imageHistoryCount() };
+    return this.imageHistory.ensureLegacyImported(filePath);
+  }
+
+  ensureGeneratedImageHistoryIndexed(config?: Pick<AppConfig, "persona">) {
+    return this.imageHistory.ensureGeneratedIndexed(config);
   }
 
   readEmojis(): EmojiRecord[] {
-    return (this.database.prepare(`
-      SELECT emoji_key, file_name, source, size_bytes, width, height, created_at, updated_at
-      FROM emojis ORDER BY updated_at DESC, emoji_key
-    `).all() as SqlRow[]).flatMap((row) => {
-      const record = mapEmojiRecord(row);
-      return record ? [record] : [];
-    });
+    return this.emojis.readAll();
   }
 
   readEmoji(key: string): EmojiRecord | undefined {
-    const normalizedKey = normalizeEmojiKey(key);
-    if (normalizedKey !== key || !isValidEmojiKey(normalizedKey)) return undefined;
-    const row = this.database.prepare(`
-      SELECT emoji_key, file_name, source, size_bytes, width, height, created_at, updated_at
-      FROM emojis WHERE emoji_key = ?
-    `).get(normalizedKey) as SqlRow | undefined;
-    return row ? mapEmojiRecord(row) : undefined;
+    return this.emojis.read(key);
+  }
+
+  readEmojiVersions(key: string): EmojiVersionRecord[] {
+    return this.emojis.readVersions(key);
+  }
+
+  readEmojiVersion(key: string, fileName: string): EmojiVersionRecord | undefined {
+    return this.emojis.readVersion(key, fileName);
   }
 
   upsertEmoji(record: EmojiRecord) {
-    if (normalizeEmojiKey(record.key) !== record.key || !isValidEmojiKey(record.key)) {
-      throw new Error("Emoji key is invalid.");
-    }
-    this.database.prepare(`
-      INSERT INTO emojis (
-        emoji_key, file_name, source, size_bytes, width, height, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(emoji_key) DO UPDATE SET
-        file_name = excluded.file_name,
-        source = excluded.source,
-        size_bytes = excluded.size_bytes,
-        width = excluded.width,
-        height = excluded.height,
-        updated_at = excluded.updated_at
-    `).run(
-      record.key,
-      record.fileName,
-      record.source,
-      record.sizeBytes,
-      record.width,
-      record.height,
-      record.createdAt,
-      record.updatedAt
-    );
+    this.emojis.upsert(record);
+  }
+
+  renameEmoji(currentKey: string, nextKey: string, updatedAt: string): "renamed" | "missing" | "conflict" {
+    return this.emojis.rename(currentKey, nextKey, updatedAt);
+  }
+
+  deleteEmojiVersion(key: string, fileName: string): "deleted" | "missing" | "current" {
+    return this.emojis.deleteVersion(key, fileName);
   }
 
   deleteEmoji(key: string) {
-    return Number(this.database.prepare("DELETE FROM emojis WHERE emoji_key = ?").run(key).changes) > 0;
+    return this.emojis.delete(key);
+  }
+
+  clearLegacyEmojis() {
+    this.emojis.clear();
   }
 
   appendRequestLog(record: JsonObject) {
     this.modelCalls.appendRequestLog(record);
+  }
+
+  appendMemoryOperationLog(record: JsonObject) {
+    this.modelCalls.appendRequestLog(record);
+  }
+
+  readMemoryOperationLogPage(options: { page: number; pageSize: number }) {
+    return this.modelCalls.readRequestLogCategoryPage({
+      category: "memory.operation",
+      ...options
+    });
   }
 
   appendRequestLogIdempotent(record: JsonObject) {
@@ -494,12 +412,27 @@ export class ApplicationDataStore {
     return this.modelCalls.readModelAggregateRows(conversationId);
   }
 
-  readRequestLogs(options: { query?: string; limit: number }) {
+  readRequestLogs(options: {
+    query?: string;
+    limit: number;
+    node?: RequestLogBusinessNode;
+    memoryTool?: RequestLogMemoryTool;
+  }) {
     return this.modelCalls.readRequestLogs(options);
   }
 
-  readRequestLogPage(options: { query?: string; page: number; pageSize: number }) {
+  readRequestLogPage(options: {
+    query?: string;
+    page: number;
+    pageSize: number;
+    node?: RequestLogBusinessNode;
+    memoryTool?: RequestLogMemoryTool;
+  }) {
     return this.modelCalls.readRequestLogPage(options);
+  }
+
+  readRequestLogTrace(id: string) {
+    return this.modelCalls.readRequestLogTrace(id);
   }
 
   readTokenUsageRecords(since: string) {
@@ -526,8 +459,7 @@ export class ApplicationDataStore {
       workingMemory: this.memoryCount("working"),
       longTermMemory: this.memoryCount("long_term"),
       userProfiles: this.memoryCount("user_profile"),
-      memorySchedulerConversations: this.memorySchedulerCount(),
-      imageHistory: this.imageHistoryCount()
+      imageHistory: this.imageHistory.count()
     };
   }
 
@@ -593,17 +525,19 @@ export class ApplicationDataStore {
     return count(this.database.prepare("SELECT COUNT(*) AS count FROM conversations").get());
   }
 
-  private memorySchedulerCount() {
-    return count(this.database.prepare("SELECT COUNT(*) AS count FROM memory_scheduler").get());
-  }
-
-  private imageHistoryCount() {
-    return count(this.database.prepare("SELECT COUNT(*) AS count FROM image_history").get());
-  }
-
   private requestLogCount() {
     return count(this.database.prepare("SELECT COUNT(*) AS count FROM request_logs").get());
   }
+}
+
+function initializeLongTermRecallTracking(store: Pick<ApplicationDataStore, "dreams" | "readMemory">) {
+  const ids = store.readMemory("long_term")
+    .flatMap((record) => {
+      if (typeof record.id !== "string") return [];
+      const id = record.id.trim();
+      return id && [...id].length <= 128 ? [id] : [];
+    });
+  if (ids.length) store.dreams.initializeRecallTracking(ids);
 }
 
 function count(row: unknown) {
@@ -635,21 +569,6 @@ function mapAgentAccountRegistryRow(row: SqlRow): AgentAccountRegistryRow {
     ...(row.qq_id == null || String(row.qq_id).trim() === "" ? {} : { qqId: String(row.qq_id) }),
     enabled: Number(row.enabled) === 1,
     webuiPort: Number(row.webui_port),
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at)
-  };
-}
-
-function mapEmojiRecord(row: SqlRow): EmojiRecord | undefined {
-  const key = String(row.emoji_key);
-  if (normalizeEmojiKey(key) !== key || !isValidEmojiKey(key)) return undefined;
-  return {
-    key,
-    fileName: String(row.file_name),
-    source: String(row.source) as EmojiRecord["source"],
-    sizeBytes: Number(row.size_bytes),
-    width: Number(row.width),
-    height: Number(row.height),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at)
   };
@@ -694,26 +613,5 @@ function readConversationJson(filePath: string) {
   if (!Array.isArray(records)) throw new Error(`Invalid conversation store at ${filePath}`);
   return records.filter((record): record is ConversationRecord => Boolean(
     record && typeof record === "object" && typeof (record as ConversationRecord).id === "string"
-  ));
-}
-
-function readSchedulerJson(filePath: string) {
-  if (!fs.existsSync(filePath)) return {};
-  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as { version?: unknown; conversations?: unknown };
-  if (parsed.version !== 1 || !parsed.conversations || typeof parsed.conversations !== "object" || Array.isArray(parsed.conversations)) {
-    throw new Error(`Invalid memory scheduler store at ${filePath}`);
-  }
-  return parsed.conversations as Record<string, JsonObject>;
-}
-
-function readImageHistoryJson(filePath: string) {
-  if (!fs.existsSync(filePath)) return [];
-  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-  if (!Array.isArray(parsed)) throw new Error(`Invalid image history store at ${filePath}`);
-  return parsed.filter((record): record is ImageHistoryRecord => Boolean(
-    record && typeof record === "object" &&
-    typeof (record as ImageHistoryRecord).id === "string" &&
-    typeof (record as ImageHistoryRecord).url === "string" &&
-    typeof (record as ImageHistoryRecord).createdAt === "string"
   ));
 }

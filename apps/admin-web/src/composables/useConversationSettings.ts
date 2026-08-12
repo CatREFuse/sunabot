@@ -26,6 +26,9 @@ export function useConversationSettings(conversationId: MaybeRefOrGetter<string>
   const conversation = shallowRef<ConversationRecord | null>(null);
   const replyEnabled = shallowRef(true);
   const orchestratorEnabled = shallowRef(true);
+  const orchestratorResponseTimeOverrideEnabled = shallowRef(false);
+  const orchestratorResponseTimeSeconds = shallowRef(60);
+  const directorEventsEnabled = shallowRef(false);
   const disabledTools = shallowRef<ToolName[]>([]);
   const baselineDisabledTools = shallowRef<ToolName[]>([]);
   const loading = shallowRef(false);
@@ -49,7 +52,17 @@ export function useConversationSettings(conversationId: MaybeRefOrGetter<string>
     const current = conversation.value;
     if (!current || !supportsBehavior.value) return false;
     return replyEnabled.value !== (current.replyEnabled !== false)
-      || (supportsOrchestrator.value && orchestratorEnabled.value !== (current.orchestratorEnabled !== false));
+      || directorEventsEnabled.value !== (current.directorEventsEnabled === true)
+      || (supportsOrchestrator.value && (
+        orchestratorEnabled.value !== (current.orchestratorEnabled !== false)
+        || orchestratorResponseTimeOverrideEnabled.value !== (
+          current.orchestratorResponseTimeOverrideEnabled === true
+        )
+        || (
+          orchestratorResponseTimeOverrideEnabled.value &&
+          orchestratorResponseTimeSeconds.value * 1_000 !== conversationResponseTimeMs(current)
+        )
+      ));
   });
   const toolsReady = computed(() => {
     const id = toValue(conversationId).trim();
@@ -81,6 +94,10 @@ export function useConversationSettings(conversationId: MaybeRefOrGetter<string>
       conversation.value = nextConversation;
       replyEnabled.value = nextConversation.replyEnabled !== false;
       orchestratorEnabled.value = nextConversation.orchestratorEnabled !== false;
+      orchestratorResponseTimeOverrideEnabled.value =
+        nextConversation.orchestratorResponseTimeOverrideEnabled === true;
+      orchestratorResponseTimeSeconds.value = Math.round(conversationResponseTimeMs(nextConversation) / 1_000);
+      directorEventsEnabled.value = nextConversation.directorEventsEnabled === true;
       const toolsLoaded = await toolPolicy.load(force, {
         agentId: context.agentId,
         signal: context.signal
@@ -112,6 +129,22 @@ export function useConversationSettings(conversationId: MaybeRefOrGetter<string>
 
   function setOrchestratorEnabled(value: boolean) {
     orchestratorEnabled.value = value;
+    schedule("behavior");
+  }
+
+  function setOrchestratorResponseTimeOverrideEnabled(value: boolean) {
+    orchestratorResponseTimeOverrideEnabled.value = value;
+    schedule("behavior");
+  }
+
+  function setOrchestratorResponseTimeSeconds(value: number) {
+    if (!Number.isInteger(value) || value < 1 || value > 3_600) return;
+    orchestratorResponseTimeSeconds.value = value;
+    schedule("behavior");
+  }
+
+  function setDirectorEventsEnabled(value: boolean) {
+    directorEventsEnabled.value = value;
     schedule("behavior");
   }
 
@@ -177,7 +210,10 @@ export function useConversationSettings(conversationId: MaybeRefOrGetter<string>
     if (!current || current.id !== context.conversationId || !supportsBehavior.value || !isCurrent(context)) return;
     const submitted = {
       replyEnabled: replyEnabled.value,
-      orchestratorEnabled: orchestratorEnabled.value
+      orchestratorEnabled: orchestratorEnabled.value,
+      orchestratorResponseTimeOverrideEnabled: orchestratorResponseTimeOverrideEnabled.value,
+      orchestratorResponseTimeMs: orchestratorResponseTimeSeconds.value * 1_000,
+      directorEventsEnabled: directorEventsEnabled.value
     };
     behaviorState.value = { kind: "saving", message: "正在同步" };
     try {
@@ -190,16 +226,36 @@ export function useConversationSettings(conversationId: MaybeRefOrGetter<string>
           userId: current.userId,
           groupId: current.groupId,
           replyEnabled: submitted.replyEnabled,
-          ...(supportsOrchestrator.value ? { orchestratorEnabled: submitted.orchestratorEnabled } : {})
+          directorEventsEnabled: submitted.directorEventsEnabled,
+          ...(supportsOrchestrator.value ? {
+            orchestratorEnabled: submitted.orchestratorEnabled,
+            orchestratorResponseTimeOverrideEnabled: submitted.orchestratorResponseTimeOverrideEnabled,
+            orchestratorResponseTimeMs: submitted.orchestratorResponseTimeMs
+          } : {})
         })
       });
       if (!isCurrent(context) || conversation.value?.id !== context.conversationId) return;
       const currentReply = replyEnabled.value;
       const currentOrchestrator = orchestratorEnabled.value;
+      const currentResponseTimeOverrideEnabled = orchestratorResponseTimeOverrideEnabled.value;
+      const currentResponseTimeSeconds = orchestratorResponseTimeSeconds.value;
+      const currentDirectorEvents = directorEventsEnabled.value;
       conversation.value = payload.conversation;
       if (currentReply === submitted.replyEnabled) replyEnabled.value = payload.conversation.replyEnabled !== false;
       if (currentOrchestrator === submitted.orchestratorEnabled) {
         orchestratorEnabled.value = payload.conversation.orchestratorEnabled !== false;
+      }
+      if (currentResponseTimeOverrideEnabled === submitted.orchestratorResponseTimeOverrideEnabled) {
+        orchestratorResponseTimeOverrideEnabled.value =
+          payload.conversation.orchestratorResponseTimeOverrideEnabled === true;
+      }
+      if (currentResponseTimeSeconds * 1_000 === submitted.orchestratorResponseTimeMs) {
+        orchestratorResponseTimeSeconds.value = Math.round(
+          conversationResponseTimeMs(payload.conversation) / 1_000
+        );
+      }
+      if (currentDirectorEvents === submitted.directorEventsEnabled) {
+        directorEventsEnabled.value = payload.conversation.directorEventsEnabled === true;
       }
       finishTarget("behavior");
     } catch (caught) {
@@ -320,6 +376,9 @@ export function useConversationSettings(conversationId: MaybeRefOrGetter<string>
     conversation.value = null;
     replyEnabled.value = true;
     orchestratorEnabled.value = true;
+    orchestratorResponseTimeOverrideEnabled.value = false;
+    orchestratorResponseTimeSeconds.value = 60;
+    directorEventsEnabled.value = false;
     disabledTools.value = [];
     baselineDisabledTools.value = [];
     toolsReadyContext.value = null;
@@ -335,6 +394,9 @@ export function useConversationSettings(conversationId: MaybeRefOrGetter<string>
     toolsReady,
     replyEnabled: readonly(replyEnabled),
     orchestratorEnabled: readonly(orchestratorEnabled),
+    orchestratorResponseTimeOverrideEnabled: readonly(orchestratorResponseTimeOverrideEnabled),
+    orchestratorResponseTimeSeconds: readonly(orchestratorResponseTimeSeconds),
+    directorEventsEnabled: readonly(directorEventsEnabled),
     disabledTools: readonly(disabledTools),
     loading: readonly(loading),
     behaviorSyncing,
@@ -352,9 +414,24 @@ export function useConversationSettings(conversationId: MaybeRefOrGetter<string>
     cancel,
     setReplyEnabled,
     setOrchestratorEnabled,
+    setOrchestratorResponseTimeOverrideEnabled,
+    setOrchestratorResponseTimeSeconds,
+    setDirectorEventsEnabled,
     setToolEnabled,
     dispose
   };
+}
+
+function conversationResponseTimeMs(conversation: ConversationRecord) {
+  const override = conversation.orchestratorResponseTimeMs;
+  if (Number.isInteger(override) && Number(override) >= 1_000 && Number(override) <= 3_600_000) {
+    return Number(override);
+  }
+  const effective = conversation.orchestratorStatus?.activeWindowMs;
+  if (Number.isInteger(effective) && Number(effective) >= 1_000 && Number(effective) <= 3_600_000) {
+    return Number(effective);
+  }
+  return 60_000;
 }
 
 async function loadConversation(context: RequestContext) {

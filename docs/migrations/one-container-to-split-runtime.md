@@ -160,7 +160,7 @@ sha256sum "$MIGRATION_BACKUP/workspace-critical.tar" \
 
 原始归档必须在旧布局仍存在时完成；它是 workspace 布局迁移的回滚依据，不能用后续 SQLite 恢复点代替。
 
-把 `$MIGRATION_BACKUP` 复制到当前服务器以外的受控存储。该目录含凭据与 QQ 登录态，必须加密传输并限制访问。
+把完整 `$MIGRATION_BACKUP` 文件夹直接复制到当前服务器以外、访问受限的受控存储，不创建加密包或等待口令。传输前后必须复核归档 SHA-256，并从目标回读一次验证；既有加密副本继续保留。
 
 ## 4. 按固定顺序迁移数据与结构
 
@@ -237,7 +237,7 @@ npm run backup:verify -- --backup "$POST_MIGRATION_BACKUP"
 
 新 manifest v2 中的 Agent 集合、数据库数量和源路径必须与 Plana 注册主库一致。
 
-把新增的迁移前恢复点、迁移报告和迁移后恢复点同步到第 3 步的受控异机存储，并在异机副本上再次执行 `sha256sum -c workspace-critical.tar.sha256` 与两次 `backup:verify`。异机副本复验完成前，不能把本机 `$MIGRATION_BACKUP` 视为唯一恢复依据。
+把新增的迁移前恢复点、迁移报告和迁移后恢复点随第 3 步的完整文件夹直接复制到受控异机存储，并在异机副本上再次执行 `sha256sum -c workspace-critical.tar.sha256` 与两次 `backup:verify`，不增加加密步骤。异机副本复验完成前，不能把本机 `$MIGRATION_BACKUP` 视为唯一恢复依据。
 
 ## 5. 启动分离运行时
 

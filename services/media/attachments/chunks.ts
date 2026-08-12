@@ -201,22 +201,6 @@ export class SqliteChunkWriter {
   }
 }
 
-export async function writeChunksSqlite(
-  outputPath: string,
-  chunks: Iterable<AttachmentTextChunk> | AsyncIterable<AttachmentTextChunk>
-) {
-  const writer = await SqliteChunkWriter.open(outputPath);
-  try {
-    for await (const chunk of chunks) {
-      await writer.write(chunk);
-    }
-    await writer.commit();
-  } catch (error) {
-    await writer.abort();
-    throw error;
-  }
-}
-
 export function readChunksSqlite(filePath: string) {
   const database = new DatabaseSync(filePath, { readOnly: true, timeout: 5_000 });
   try {

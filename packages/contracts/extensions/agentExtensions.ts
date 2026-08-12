@@ -16,7 +16,7 @@ const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001F\u007F-\u009F]/u;
 
 export type AgentSkillSourceUpload = { kind: "upload" };
 export type AgentSkillSourceCopy = { kind: "copy"; agentId: string; skillId: string };
-export type AgentSkillSource = AgentSkillSourceUpload | AgentSkillSourceCopy;
+export type AgentSkillSource = AgentSkillSourceUpload | AgentSkillSourceCopy | { kind: "bundled"; bundleId: string };
 
 export interface AgentSkillMcpDependency {
   id: string;
@@ -679,6 +679,10 @@ function parseSkillSource(value: unknown, field: string): AgentSkillSource {
       agentId: assertAgentId(object.agentId, `${field}.agentId`),
       skillId: assertExtensionId(object.skillId, `${field}.skillId`)
     };
+  }
+  if (kind === "bundled") {
+    const object = strictObject(value, ["kind", "bundleId"], field);
+    return { kind, bundleId: assertExtensionId(object.bundleId, `${field}.bundleId`) };
   }
   invalid("AGENT_EXTENSION_INDEX_INVALID", "Skill 来源无效。", field);
 }

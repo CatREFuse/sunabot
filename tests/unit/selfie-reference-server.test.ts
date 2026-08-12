@@ -31,27 +31,31 @@ afterEach(async () => {
 describe("selfie reference server registration", () => {
   it("protects the registered API and exposes the WebUI envelope", async () => {
     const config = createAdminTestConfig(root);
+    const workspace = path.join(root, "workspace");
+    const agentRoot = path.join(workspace, "business", "agents");
+    config.persona.agentWorkspace = path.join(agentRoot, "plana");
+    config.persona.systemPromptWorkspace = path.join(workspace, "business", "prompts");
     await fs.mkdir(config.persona.agentWorkspace, { recursive: true });
     const app = await createApp({
       config,
       initializeRuntime: false,
       onebotListener: false,
       agentRegistry: {
-        workspaceRoot: path.dirname(config.persona.agentWorkspace),
+        workspaceRoot: agentRoot,
         allowUnmarkedMigration: true
       }
     });
 
     const unauthorized = await app.inject({
       method: "GET",
-      url: "/api/selfie-references",
+      url: "/api/selfie-references?agentId=plana",
       headers: { host: "127.0.0.1", "x-forwarded-for": "127.0.0.1" }
     });
     expect(unauthorized.statusCode).toBe(401);
 
     const authorized = await app.inject({
       method: "GET",
-      url: "/api/selfie-references",
+      url: "/api/selfie-references?agentId=plana",
       headers: {
         host: "127.0.0.1",
         "x-forwarded-for": "127.0.0.1",
@@ -65,13 +69,17 @@ describe("selfie reference server registration", () => {
 
   it("keeps default storage injected and manages disabled or stopped registered Agents without runtime", async () => {
     const config = createAdminTestConfig(root);
+    const workspace = path.join(root, "workspace");
+    const agentRoot = path.join(workspace, "business", "agents");
+    config.persona.agentWorkspace = path.join(agentRoot, "plana");
+    config.persona.systemPromptWorkspace = path.join(workspace, "business", "prompts");
     await fs.mkdir(config.persona.agentWorkspace, { recursive: true });
     const built = await buildApp({
       config,
       initializeRuntime: false,
       onebotListener: false,
       agentRegistry: {
-        workspaceRoot: path.dirname(config.persona.agentWorkspace),
+        workspaceRoot: agentRoot,
         allowUnmarkedMigration: true
       }
     });
@@ -95,7 +103,7 @@ describe("selfie reference server registration", () => {
       const callsBeforeDefaultGet = registryConfig.mock.calls.length;
       const defaultList = await built.app.inject({
         method: "GET",
-        url: "/api/selfie-references",
+        url: "/api/selfie-references?agentId=plana",
         headers: ADMIN_HEADERS
       });
       expect(defaultList.statusCode).toBe(200);

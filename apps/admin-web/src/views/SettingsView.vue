@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import { useConfigWorkspace, sectionKeys } from "../composables/useConfigWorkspace";
 import { useModelCatalog } from "../composables/useModelCatalog";
@@ -8,50 +8,38 @@ import type { ConfigSectionKey, SettingsSectionKey } from "../types";
 import { focusConfigField } from "../utils/configFieldFocus";
 import PageHeader from "../components/ui/PageHeader.vue";
 import SettingsNavigation from "../components/settings/SettingsNavigation.vue";
-import SettingsAutoSaveStatus from "../components/settings/SettingsAutoSaveStatus.vue";
-import PersonaSettingsForm from "../components/settings/PersonaSettingsForm.vue";
-import ProviderSettings from "../components/settings/ProviderSettings.vue";
-import BroadcastStormSettingsForm from "../components/settings/BroadcastStormSettingsForm.vue";
-import NormalReplySettingsForm from "../components/settings/NormalReplySettingsForm.vue";
-import BotSettingsForm from "../components/settings/BotSettingsForm.vue";
-import ToneSettingsForm from "../components/settings/ToneSettingsForm.vue";
-import MemorySettingsForm from "../components/settings/MemorySettingsForm.vue";
-import OrchestratorSettingsForm from "../components/settings/OrchestratorSettingsForm.vue";
-import ToolsSettingsForm from "../components/settings/ToolsSettingsForm.vue";
-import BashSettingsForm from "../components/settings/BashSettingsForm.vue";
-import OneBotSettingsForm from "../components/settings/OneBotSettingsForm.vue";
-import MonitoringSettingsForm from "../components/settings/MonitoringSettingsForm.vue";
 import DialogOverlay from "../components/ui/DialogOverlay.vue";
-import AdminPasswordForm from "../components/settings/AdminPasswordForm.vue";
-import { activeAgentId, activeAgentIdState } from "../composables/agentScope";
+import { activeAgentId, activeAgentIdState, setActiveAgentId } from "../composables/agentScope";
+import { settingsForScope } from "../components/settings/settingsCatalog";
 
 const props = withDefaults(defineProps<{ scope?: "agent" | "system" }>(), { scope: "agent" });
+const PersonaSettingsForm = defineAsyncComponent(() => import("../components/settings/PersonaSettingsForm.vue"));
+const ProviderSettings = defineAsyncComponent(() => import("../components/settings/ProviderSettings.vue"));
+const BroadcastStormSettingsForm = defineAsyncComponent(() => import("../components/settings/BroadcastStormSettingsForm.vue"));
+const NormalReplySettingsForm = defineAsyncComponent(() => import("../components/settings/NormalReplySettingsForm.vue"));
+const BotSettingsForm = defineAsyncComponent(() => import("../components/settings/BotSettingsForm.vue"));
+const ToneSettingsForm = defineAsyncComponent(() => import("../components/settings/ToneSettingsForm.vue"));
+const MemorySettingsForm = defineAsyncComponent(() => import("../components/settings/MemorySettingsForm.vue"));
+const OrchestratorSettingsForm = defineAsyncComponent(() => import("../components/settings/OrchestratorSettingsForm.vue"));
+const ToolsSettingsForm = defineAsyncComponent(() => import("../components/settings/ToolsSettingsForm.vue"));
+const BashSettingsForm = defineAsyncComponent(() => import("../components/settings/BashSettingsForm.vue"));
+const OneBotSettingsForm = defineAsyncComponent(() => import("../components/settings/OneBotSettingsForm.vue"));
+const MonitoringSettingsForm = defineAsyncComponent(() => import("../components/settings/MonitoringSettingsForm.vue"));
+const AdminPasswordForm = defineAsyncComponent(() => import("../components/settings/AdminPasswordForm.vue"));
 
 const route = useRoute();
 const router = useRouter();
 const workspace = useConfigWorkspace(props.scope);
 const catalog = useModelCatalog();
 const loadError = shallowRef("");
+const switchError = shallowRef("");
+const pendingSwitchAgentId = shallowRef("");
 const logoutConfirmOpen = shallowRef(false);
 const loggingOut = shallowRef(false);
 const logoutError = shallowRef("");
 const settingsPanel = useTemplateRef<HTMLElement>("settingsPanel");
-const monitoringForm = useTemplateRef<InstanceType<typeof MonitoringSettingsForm>>("monitoringForm");
-const allSections: Array<{ id: SettingsSectionKey; label: string; group: string; icon: string; scope: "agent" | "system" }> = [
-  { id: "persona", label: "Agent 身份", group: "Agent", icon: "bx-user-voice", scope: "agent" },
-  { id: "bot", label: "回复行为", group: "Agent", icon: "bx-bot", scope: "agent" },
-  { id: "tone", label: "语气处理", group: "Agent", icon: "bx-conversation", scope: "agent" },
-  { id: "memory", label: "记忆处理", group: "记忆与编排", icon: "bx-brain", scope: "agent" },
-  { id: "orchestrator", label: "群聊编排", group: "记忆与编排", icon: "bx-git-branch", scope: "agent" },
-  { id: "tools", label: "Agent 工具", group: "工具", icon: "bx-wrench", scope: "agent" },
-  { id: "bash", label: "命令执行", group: "工具", icon: "bx-terminal", scope: "agent" },
-  { id: "providers", label: "模型服务", group: "公共系统", icon: "bx-chip", scope: "system" },
-  { id: "normalReply", label: "回复重试", group: "公共系统", icon: "bx-refresh", scope: "system" },
-  { id: "broadcastStorm", label: "广播风暴", group: "公共系统", icon: "bx-shield-quarter", scope: "system" },
-  { id: "security", label: "账户安全", group: "公共系统", icon: "bx-lock-alt", scope: "system" },
-  { id: "onebot", label: "连接与通知", group: "公共系统", icon: "bx-link", scope: "system" }
-];
-const sections = computed(() => allSections.filter((section) => section.scope === props.scope));
+const monitoringForm = useTemplateRef<{ flush(): Promise<boolean> }>("monitoringForm");
+const sections = computed(() => settingsForScope(props.scope));
 const visibleSections = computed(() => new Set(sections.value.map((section) => section.id)));
 const configSections = new Set<ConfigSectionKey>(sectionKeys);
 const current = computed<SettingsSectionKey>(() => {
@@ -61,25 +49,32 @@ const current = computed<SettingsSectionKey>(() => {
 });
 const currentState = computed(() => {
   const section = isConfigSection(current.value) ? current.value : "persona";
-  const candidates = section === "bot"
+  const candidates = section === "persona"
+    ? [workspace.state.bot, workspace.state.persona]
+    : section === "bot"
     ? [workspace.state.bot, workspace.state.onebot]
     : section === "tools"
       ? [workspace.state.tools, workspace.state.bash, workspace.state.bot]
       : [workspace.state[section]];
   return candidates.find((entry) => entry.kind === "error" || entry.kind === "conflict")
-    ?? candidates.find((entry) => entry.kind === "saving" || entry.kind === "waiting")
     ?? candidates.find((entry) => entry.kind === "restart")
-    ?? candidates.find((entry) => entry.kind === "saved")
     ?? candidates[0]!;
 });
+const visibleState = computed(() => ["error", "conflict", "restart"].includes(currentState.value.kind));
 
 onMounted(async () => {
-  await Promise.all([loadConfig(), catalog.load()]);
+  const [loaded] = await Promise.all([loadConfig(), catalog.load()]);
+  if (loaded && props.scope === "agent") stableAgentId = workspace.agentId();
 });
 onBeforeUnmount(() => workspace.cancel());
 
-watch(activeAgentIdState, () => {
-  if (props.scope === "agent") void loadConfig();
+let agentSwitchSequence = 0;
+let restoringAgent = false;
+let stableAgentId = workspace.agentId();
+watch(activeAgentIdState, (next) => {
+  if (props.scope !== "agent" || restoringAgent || next === workspace.agentId()) return;
+  const sequence = ++agentSwitchSequence;
+  void switchAgent(next, sequence);
 }, { flush: "sync" });
 
 watch(currentState, async (entry) => {
@@ -96,12 +91,65 @@ onBeforeRouteLeave(async () => {
   return configSynced && monitoringSynced;
 });
 
-async function loadConfig(preserveDirty = false) {
+async function loadConfig(preserveDirty = false, agentId?: string) {
   try {
-    await workspace.load({ preserveDirty });
+    await workspace.load({ preserveDirty, agentId });
     loadError.value = "";
+    return true;
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : "配置读取失败";
+    return false;
+  }
+}
+
+async function switchAgent(nextAgentId: string, sequence: number) {
+  const previousAgentId = stableAgentId;
+  const saved = await workspace.flush();
+  if (sequence !== agentSwitchSequence) return;
+  if (!saved) {
+    pendingSwitchAgentId.value = nextAgentId;
+    restoreActiveAgent(previousAgentId);
+    switchError.value = "设置保存失败，请处理后重试，或放弃更改后切换。";
+    return;
+  }
+  const loaded = await loadConfig(false, nextAgentId);
+  if (sequence !== agentSwitchSequence) return;
+  if (loaded) {
+    stableAgentId = nextAgentId;
+    pendingSwitchAgentId.value = "";
+    switchError.value = "";
+    return;
+  }
+  restoreActiveAgent(previousAgentId);
+  await loadConfig(false, previousAgentId);
+  switchError.value = "Agent 配置读取失败，已返回原 Agent。";
+}
+
+async function discardAndSwitch() {
+  const nextAgentId = pendingSwitchAgentId.value;
+  if (!nextAgentId) return;
+  const previousAgentId = stableAgentId;
+  const sequence = ++agentSwitchSequence;
+  pendingSwitchAgentId.value = "";
+  switchError.value = "";
+  restoreActiveAgent(nextAgentId);
+  const loaded = await loadConfig(false, nextAgentId);
+  if (sequence !== agentSwitchSequence) return;
+  if (loaded) {
+    stableAgentId = nextAgentId;
+    return;
+  }
+  restoreActiveAgent(previousAgentId);
+  await loadConfig(false, previousAgentId);
+  switchError.value = "Agent 配置读取失败，已返回原 Agent。";
+}
+
+function restoreActiveAgent(agentId: string) {
+  restoringAgent = true;
+  try {
+    setActiveAgentId(agentId);
+  } finally {
+    restoringAgent = false;
   }
 }
 
@@ -111,6 +159,38 @@ function selectSection(section: SettingsSectionKey) {
 
 function isConfigSection(section: SettingsSectionKey): section is ConfigSectionKey {
   return configSections.has(section as ConfigSectionKey);
+}
+
+function currentConfigSections() {
+  if (!isConfigSection(current.value)) return [];
+  if (current.value === "persona") return ["bot"] as const;
+  if (current.value === "bot") return ["bot", "onebot"] as const;
+  if (current.value === "tools") return ["tools", "bash", "bot"] as const;
+  return [current.value] as const;
+}
+
+async function commitCurrentSection() {
+  await nextTick();
+  await Promise.all(currentConfigSections().map((section) => workspace.commit(section)));
+}
+
+function handleControlChange(event: Event) {
+  const target = event.target;
+  if (target instanceof HTMLSelectElement || (target instanceof HTMLInputElement && target.type === "checkbox")) {
+    void commitCurrentSection();
+  }
+}
+
+function handleSettingsClick(event: MouseEvent) {
+  if ((event.target as HTMLElement | null)?.closest("[data-settings-confirm],[data-settings-commit]")) {
+    void commitCurrentSection();
+  }
+}
+
+function handleSettingsKeydown(event: KeyboardEvent) {
+  if (event.key === "Enter" && event.target instanceof HTMLElement && event.target.matches("[data-settings-confirm-input]")) {
+    void commitCurrentSection();
+  }
 }
 
 async function logout() {
@@ -133,23 +213,35 @@ async function logout() {
       <PageHeader :title="props.scope === 'agent' ? 'Agent 设置' : '系统设置'">
         <template #actions>
           <button class="btn" type="button" :disabled="workspace.loading.value" @click="loadConfig(true)">刷新</button>
-          <button class="btn btn-ghost" type="button" @click="logoutConfirmOpen = true"><i class="bx bx-log-out" aria-hidden="true"></i>退出登录</button>
+          <button v-if="props.scope === 'system'" class="btn btn-ghost" type="button" @click="logoutConfirmOpen = true"><i class="bx bx-log-out" aria-hidden="true"></i>退出登录</button>
         </template>
       </PageHeader>
 
+      <div v-if="switchError" class="mt-4 flex flex-wrap items-center gap-3" role="status" aria-live="polite">
+        <span class="inline-state" data-kind="error">{{ switchError }}</span>
+        <button v-if="pendingSwitchAgentId" class="btn btn-ghost" type="button" @click="discardAndSwitch">放弃更改并切换</button>
+      </div>
+
       <div v-if="workspace.loading.value && !workspace.envelope.value" class="empty-state"><div><strong>加载中</strong></div></div>
       <div v-else-if="loadError" class="empty-state"><div><strong class="!text-accent">{{ loadError }}</strong><button class="btn mt-4" type="button" @click="loadConfig()">重试</button></div></div>
-      <div v-else class="mt-8 grid min-w-0 gap-8 lg:grid-cols-[176px_minmax(0,1fr)] xl:grid-cols-[208px_minmax(0,880px)] xl:gap-12">
+      <div v-else class="mt-2 grid min-w-0 gap-8 lg:grid-cols-[200px_minmax(0,1fr)] xl:grid-cols-[224px_minmax(0,920px)] xl:gap-12">
         <SettingsNavigation :current="current" :sections="sections" @select="selectSection" />
-        <section ref="settingsPanel" class="min-w-0">
+        <section
+          ref="settingsPanel"
+          class="min-w-0"
+          @change="handleControlChange"
+          @click="handleSettingsClick"
+          @keydown="handleSettingsKeydown"
+        >
           <div v-if="current === 'persona'" class="grid gap-12">
-            <PersonaSettingsForm :agent-id="activeAgentId()" />
+            <PersonaSettingsForm v-model="workspace.drafts.bot" :agent-id="activeAgentId()" />
           </div>
           <ProviderSettings
             v-else-if="current === 'providers'"
             v-model="workspace.drafts.providers"
             :models="catalog.models.value"
             :field-states="workspace.envelope.value?.fieldStates"
+            @commit="workspace.commit('providers')"
           />
           <BroadcastStormSettingsForm
             v-else-if="current === 'broadcastStorm'"
@@ -163,12 +255,17 @@ async function logout() {
             v-else-if="current === 'bot'"
             v-model="workspace.drafts.bot"
             v-model:reply="workspace.drafts.onebot"
+            :models="catalog.models.value"
+            :providers="workspace.drafts.providers.items"
+            :default-provider-id="workspace.drafts.providers.defaultProviderId"
           />
           <ToneSettingsForm
             v-else-if="current === 'tone'"
             v-model="workspace.drafts.tone"
             :models="catalog.models.value"
             :providers="workspace.drafts.providers.items"
+            :default-provider-id="workspace.drafts.providers.defaultProviderId"
+            :main-max-retries="workspace.drafts.normalReply.maxRetries"
           />
           <MemorySettingsForm v-else-if="current === 'memory'" v-model="workspace.drafts.memory" :models="catalog.models.value" />
           <OrchestratorSettingsForm
@@ -184,22 +281,27 @@ async function logout() {
             :field-states="workspace.envelope.value?.fieldStates"
             v-model:bash="workspace.drafts.bash"
             v-model:poke-on-no-reply="workspace.drafts.bot.pokeOnNoReply"
+            @commit="commitCurrentSection"
           />
           <BashSettingsForm v-else-if="current === 'bash'" v-model="workspace.drafts.bash" />
           <AdminPasswordForm v-else-if="current === 'security'" />
           <div v-else class="grid gap-12">
-            <MonitoringSettingsForm ref="monitoringForm" />
+            <div>
+              <h2 class="section-title">连接与通知</h2>
+              <p class="mt-2 text-sm leading-6 text-mute">管理 Bark 通知和 OneBot 反向连接。</p>
+            </div>
+            <MonitoringSettingsForm ref="monitoringForm" nested />
             <OneBotSettingsForm
               v-model="workspace.drafts.onebot"
               :field-states="workspace.envelope.value?.fieldStates"
+              nested
             />
           </div>
 
-          <SettingsAutoSaveStatus
-            v-if="current !== 'security' && current !== 'persona'"
-            :message="currentState.message"
-            :kind="currentState.kind"
-          />
+          <div v-if="visibleState" class="mt-6 flex flex-wrap items-center gap-3" role="status" aria-live="polite">
+            <span class="inline-state" :data-kind="currentState.kind === 'restart' ? 'warning' : 'error'">{{ currentState.message }}</span>
+            <button v-if="currentState.kind === 'error' || currentState.kind === 'conflict'" class="btn btn-ghost" type="button" @click="commitCurrentSection">重试</button>
+          </div>
         </section>
       </div>
     </div>

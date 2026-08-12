@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EmojiPayload, EmojiRecord } from "../types/emojis";
+import type { EmojiPayload, EmojiRecord, EmojiVersionRecord } from "../types/emojis";
 import { useEmojis } from "./useEmojis";
 
 const apiRequest = vi.hoisted(() => vi.fn());
@@ -105,6 +105,114 @@ describe("useEmojis", () => {
     expect(data.status.value).toEqual({ kind: "success", message: "“开心”已删除" });
   });
 
+  it("saves the selected sending size with the loaded revision", async () => {
+    apiRequest.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/emojis?agentId=arona" && !init?.method) {
+        return Promise.resolve({
+          presetKeys: ["开心"], emojis: [], sendSize: 512, sendSeparately: false, revision: "arona-r1"
+        });
+      }
+      if (path === "/api/emojis/settings?agentId=arona" && init?.method === "PATCH") {
+        return Promise.resolve({
+          presetKeys: ["开心"], emojis: [], sendSize: 128, sendSeparately: false, revision: "arona-r2"
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const data = useEmojis();
+
+    await data.load("arona");
+    expect(data.sendSize.value).toBe(512);
+    expect(await data.setSendSize("arona", 128)).toBe(true);
+
+    const request = apiRequest.mock.calls.find(([path]) => path === "/api/emojis/settings?agentId=arona");
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+      sendSize: 128,
+      sendSeparately: false,
+      revision: "arona-r1"
+    });
+    expect(data.sendSize.value).toBe(128);
+    expect(data.status.value).toEqual({ kind: "success", message: "发送尺寸已设为 128px" });
+  });
+
+  it("saves whether emojis use a separate message", async () => {
+    apiRequest.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/emojis?agentId=arona" && !init?.method) {
+        return Promise.resolve({
+          presetKeys: ["开心"], emojis: [], sendSize: 512, sendSeparately: false, revision: "arona-r1"
+        });
+      }
+      if (path === "/api/emojis/settings?agentId=arona" && init?.method === "PATCH") {
+        return Promise.resolve({
+          presetKeys: ["开心"], emojis: [], sendSize: 512, sendSeparately: true, revision: "arona-r2"
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const data = useEmojis();
+
+    await data.load("arona");
+    expect(await data.setSendSeparately("arona", true)).toBe(true);
+
+    const request = apiRequest.mock.calls.find(([path]) => path === "/api/emojis/settings?agentId=arona");
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+      sendSize: 512,
+      sendSeparately: true,
+      revision: "arona-r1"
+    });
+    expect(data.sendSeparately.value).toBe(true);
+    expect(data.status.value).toEqual({ kind: "success", message: "表情将单独发送" });
+  });
+
+  it("renames a key and manages old versions within the active Agent", async () => {
+    const oldVersion: EmojiVersionRecord = {
+      ...happy,
+      fileName: "emoji-old.png",
+      current: false
+    };
+    const currentVersion: EmojiVersionRecord = { ...happy, current: true };
+    const renamed: EmojiRecord = { ...happy, key: "大笑" };
+    let listCount = 0;
+    let versionCount = 0;
+    apiRequest.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/emojis?agentId=arona" && !init?.method) {
+        listCount += 1;
+        return Promise.resolve({ presetKeys: ["开心"], emojis: listCount === 1 ? [happy] : [renamed] });
+      }
+      if (path === `/api/emojis/${encodeURIComponent("开心")}/versions?agentId=arona`) {
+        return Promise.resolve({ key: "开心", versions: [currentVersion, oldVersion] });
+      }
+      if (path === `/api/emojis/${encodeURIComponent("开心")}?agentId=arona` && init?.method === "PATCH") {
+        return Promise.resolve({ presetKeys: ["开心"], emojis: [renamed] });
+      }
+      if (path === `/api/emojis/${encodeURIComponent("大笑")}/versions?agentId=arona`) {
+        versionCount += 1;
+        return Promise.resolve({
+          key: "大笑",
+          versions: versionCount === 1
+            ? [{ ...currentVersion, key: "大笑" }, { ...oldVersion, key: "大笑" }]
+            : [{ ...currentVersion, key: "大笑" }]
+        });
+      }
+      if (
+        path === `/api/emojis/${encodeURIComponent("大笑")}/versions/${encodeURIComponent(oldVersion.fileName)}?agentId=arona`
+        && init?.method === "DELETE"
+      ) return Promise.resolve(undefined);
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const data = useEmojis();
+
+    await data.load("arona");
+    expect(await data.loadVersions("arona", "开心")).toBe(true);
+    expect(data.versions.value).toHaveLength(2);
+    expect(await data.rename("arona", "开心", "大笑")).toBe(true);
+    expect(JSON.parse(String(apiRequest.mock.calls.find(([path]) => path.includes("%E5%BC%80%E5%BF%83?"))?.[1]?.body)))
+      .toEqual({ key: "大笑" });
+    expect(data.versionKey.value).toBe("大笑");
+    expect(await data.removeVersion("arona", "大笑", oldVersion.fileName)).toBe(true);
+    expect(data.versions.value).toEqual([expect.objectContaining({ key: "大笑", current: true })]);
+  });
+
   it("commits only the latest canonical GET when generate refreshes resolve in reverse order", async () => {
     const firstMutation = deferred<EmojiPayload>();
     const secondMutation = deferred<EmojiPayload>();
@@ -205,8 +313,26 @@ describe("useEmojis", () => {
     });
 
     expect(saved).toBe(false);
-    expect(data.status.value).toEqual({ kind: "error", message: "仅支持 PNG、JPEG、WebP" });
+    expect(data.status.value).toEqual({ kind: "error", message: "仅支持 PNG、JPEG、WebP、GIF" });
     expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it("accepts a GIF upload", async () => {
+    apiRequest.mockResolvedValue({ presetKeys: ["挥手"], emojis: [] });
+    const data = useEmojis();
+    const saved = await data.upload("koharu", {
+      key: "挥手",
+      file: new File(["gif"], "wave.gif", { type: "image/gif" })
+    });
+
+    expect(saved).toBe(true);
+    const uploadCall = apiRequest.mock.calls.find(([path, init]) => (
+      path === "/api/emojis?agentId=koharu" && init?.method === "POST"
+    ));
+    expect(JSON.parse(String(uploadCall?.[1]?.body))).toMatchObject({
+      key: "挥手",
+      fileName: "wave.gif"
+    });
   });
 
   it("rejects invalid Unicode before upload, generation, or URL encoding", async () => {

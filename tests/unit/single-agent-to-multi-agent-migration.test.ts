@@ -27,9 +27,7 @@ const systemPromptFiles = [
   "conversation_reply.json",
   "conversation_private_reply.json",
   "conversation_group_reply.json",
-  "work_memory_compress_in.json",
   "work_memory_compress_out.json",
-  "user_profile_prompt.json",
   "user_groupchat_orchestrator.json",
   "group_chat_summary.json"
 ];
@@ -321,7 +319,7 @@ describe("single Agent to multi-Agent migration", () => {
     const configPath = path.join(fixture.workspace, "business/config/sunabot.json");
     const config = JSON.parse(await fs.readFile(configPath, "utf8"));
     config.bot = {
-      memory: { workMemoryCompressInPrompt: "nested/compress.json" }
+      memory: { workMemoryCompressOutPrompt: "nested/compress.json" }
     };
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
     await write(

@@ -51,6 +51,12 @@ const sourceSchema = {
       additionalProperties: false,
       required: ["kind", "agentId", "skillId"],
       properties: { kind: { const: "copy" }, agentId, skillId: extensionId }
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "bundleId"],
+      properties: { kind: { const: "bundled" }, bundleId: extensionId }
     }
   ]
 } as const;

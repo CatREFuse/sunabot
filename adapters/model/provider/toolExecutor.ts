@@ -1,37 +1,34 @@
-import type { ImageResult } from "../../../src/types.js";
-import { appendRequestLog } from "../../../src/requestLog.js";
+import type { ImageResult } from "../../../packages/contracts/media/media.js";
+import { appendRequestLog } from "../../observability/requestLog.js";
 import type { OpenAIToolDefinition } from "../../../services/agent/promptSystem.js";
 import type { MemoryRecallInput } from "../../../services/memory/memoryService.js";
-import {
-  WORKSPACE_BASH_TOOL_NAME,
-  isWorkspaceBashProviderOptions,
-  runWorkspaceBash,
-  type WorkspaceBashInput
-} from "../../../services/tools/bashTool.js";
-import {
-  MEMORY_RECALL_TOOL_NAME,
-  WEBSEARCH_TOOL_NAME
-} from "../../../services/tools/definitions.js";
-import {
-  GENERATE_IMG_TOOL_NAME,
-  runGenerateImg
-} from "../../../services/tools/generateImgTool.js";
+import type { KnowledgeSearchInput } from "../../../services/knowledge/public.js";
+import { NATIVE_BASH_TOOL_NAME } from "../../../services/tools/bashTool.js";
+import { MEMORY_RECALL_TOOL_NAME, WEBSEARCH_TOOL_NAME } from "../../../services/tools/definitions.js";
+import { GENERATE_IMG_TOOL_NAME, runGenerateImg } from "../../../services/tools/generateImgTool.js";
 import { SELFIE_TOOL_NAME } from "../../../services/tools/selfieTool.js";
-import {
-  ASSISTANT_TEXT_TOOL_NAME,
-  readAssistantText
-} from "../../../services/tools/assistantTextTool.js";
+import { ASSISTANT_TEXT_TOOL_NAME, readAssistantText } from "../../../services/tools/assistantTextTool.js";
 import { NO_REPLY_TOOL_NAME } from "../../../services/tools/noReplyTool.js";
+import { SYSTEM_CONFIG_TOOL_NAME, runSystemConfig } from "../../../services/tools/systemConfigTool.js";
 import {
-  SYSTEM_CONFIG_TOOL_NAME,
-  runSystemConfig
-} from "../../../services/tools/systemConfigTool.js";
+  CRON_TOOL_NAME,
+  runCronTool
+} from "../../../services/tools/cronTool.js";
 import {
+  CALL_DIRECTOR_TOOL_NAME,
+  runCallDirector
+} from "../../../services/tools/callDirectorTool.js";
+import {
+  ADD_WORKMEMORY_TOOL_NAME,
+  ADD_USER_PROFILE_TOOL_NAME,
+  EXPORT_CHAT_MEDIA_TOOL_NAME,
+  IMPORT_CHAT_EMOJI_TOOL_NAME,
+  IMPORT_CHAT_SELFIE_TOOL_NAME,
   READ_FILE_TOOL_NAME,
+  WEBFETCH_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
   WORKBENCH_FILE_MAX_BYTES,
   isWorkbenchFileRelativePath,
-  isWorkbenchFileToolName,
   validateReadFileInput,
   validateWorkbenchFileText,
   validateWriteFileInput,
@@ -45,10 +42,11 @@ import {
 import {
   isProviderToolAvailable,
   isProviderDeferredTool,
+  providerCodexControlMode,
   providerToolExecutionMode,
   resolveProviderToolDefinitions
 } from "../../../services/tools/toolRegistry.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../../services/tools/toolConstants.js";
+import { executeProviderBash } from "./bashToolExecutor.js";
 import {
   ACTIVATE_SKILL_TOOL_NAME,
   readActivateSkillInput
@@ -66,6 +64,7 @@ import {
   withoutDispatchMessage
 } from "../../../services/tools/deferredDispatch.js";
 import { runWebsearch, type WebsearchInput } from "../webSearchTool.js";
+import { KNOWLEDGE_SEARCH_TOOL_NAME } from "../../../services/tools/knowledgeSearchTool.js";
 import type {
   ProviderCompleteOptions,
   ProviderDeferredTurn,
@@ -73,22 +72,22 @@ import type {
   ResponseFunctionCallItem,
   TurnToolState
 } from "./contracts.js";
+import { providerVoiceCompanionTurn } from "./voiceCompanionTurn.js";
 import { logContextMetadata } from "./logger.js";
 import { mcpToolLogSummary } from "./mcpToolLog.js";
 import { readToolName } from "./promptMapping.js";
-import { errorMessage, parseJson } from "./valueUtils.js";
+import { validProviderToolDefinitions } from "./toolDefinitionIsolation.js";
+import type { ProviderToolSchemaProtocol } from "../../../services/tools/providerToolSchema.js";
+import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 import {
   createTurnToolState,
-  hasAcceptedTurnActivity,
-  markAcceptedTool,
-  toolOrderingError
+  markAcceptedTool
 } from "./turnToolState.js";
-import {
-  LOCAL_DATA_OUTBOUND_TURN_CONFLICT_ERROR,
-  localOutboundTurnConflict,
-  preflightProviderToolResponse,
-  toolCallErrors
-} from "./toolResponsePreflight.js";
+import { runWebFetch } from "./webFetchExecutor.js";
+import { READ_AIR_TOOL_NAME, executeReadAirTool } from "./readAirExecutor.js";
+import { executeAddWorkMemoryTool } from "./addWorkMemoryExecutor.js";
+import { executeAddUserProfileTool } from "./addUserProfileExecutor.js";
+import { runExportChatMedia, runImportChatEmoji, runImportChatSelfie } from "./chatMediaExecutor.js";
 
 export { mcpToolLogSummary } from "./mcpToolLog.js";
 
@@ -102,13 +101,23 @@ const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [ASSISTANT_TEXT_TOOL_NAME, runAssistantText],
   [READ_FILE_TOOL_NAME, runReadFile],
   [WRITE_FILE_TOOL_NAME, runWriteFile],
-  [WORKSPACE_BASH_TOOL_NAME, runBash],
+  [EXPORT_CHAT_MEDIA_TOOL_NAME, runExportChatMedia],
+  [IMPORT_CHAT_EMOJI_TOOL_NAME, runImportChatEmoji],
+  [IMPORT_CHAT_SELFIE_TOOL_NAME, runImportChatSelfie],
+  [NATIVE_BASH_TOOL_NAME, runNativeBash],
   [WEBSEARCH_TOOL_NAME, runWebSearch],
+  [WEBFETCH_TOOL_NAME, runWebFetch],
   [GENERATE_IMG_TOOL_NAME, runImageGeneration],
   [SELFIE_TOOL_NAME, runSelfie],
   [SEND_FILE_TOOL_NAME, runSendFile],
   [MEMORY_RECALL_TOOL_NAME, runMemoryRecall],
+  [ADD_WORKMEMORY_TOOL_NAME, executeAddWorkMemoryTool],
+  [ADD_USER_PROFILE_TOOL_NAME, executeAddUserProfileTool],
+  [READ_AIR_TOOL_NAME, executeReadAirTool],
+  [KNOWLEDGE_SEARCH_TOOL_NAME, runKnowledgeSearch],
   [SYSTEM_CONFIG_TOOL_NAME, runSystemConfigTool],
+  [CRON_TOOL_NAME, executeCronTool],
+  [CALL_DIRECTOR_TOOL_NAME, executeCallDirectorTool],
   [ACTIVATE_SKILL_TOOL_NAME, runActivateSkill],
   [READ_SKILL_RESOURCE_TOOL_NAME, runReadSkillResource],
   [RUN_SKILL_SCRIPT_TOOL_NAME, runSkillScript]
@@ -129,11 +138,15 @@ async function runAssistantText(
 }
 
 export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
-  resolveDefinitions(options: ProviderCompleteOptions, definitions?: OpenAIToolDefinition[]) {
+  resolveDefinitions(
+    options: ProviderCompleteOptions,
+    definitions?: OpenAIToolDefinition[],
+    protocol: ProviderToolSchemaProtocol = "openai-responses"
+  ) {
     const configured = resolveProviderToolDefinitions(options, definitions) as Record<string, unknown>[];
     const dynamicMcp = options.mcp?.definitions().filter((tool) => isMcpToolAlias(readToolName(tool))) ?? [];
     const seen = new Set(configured.map(readToolName));
-    return [...configured, ...dynamicMcp.filter((tool) => {
+    const resolved = [...configured, ...dynamicMcp.filter((tool) => {
       const name = readToolName(tool);
       if (!name || seen.has(name)) return false;
       seen.add(name);
@@ -141,7 +154,16 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     })].map((tool) => isProviderDeferredTool(readToolName(tool), options)
       ? withRequiredDispatchMessage(tool)
       : withoutDispatchMessage(tool));
+    return validProviderToolDefinitions(resolved, protocol);
   }
+
+  companionTurn(
+    calls: ResponseFunctionCallItem[],
+    siblingText: string,
+    options: ProviderCompleteOptions,
+    definitions: readonly Record<string, unknown>[],
+    state: TurnToolState = createTurnToolState()
+  ) { return providerVoiceCompanionTurn(calls, siblingText, options, definitions, state); }
 
   deferredTurn(
     calls: ResponseFunctionCallItem[],
@@ -149,9 +171,10 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     definitions: readonly Record<string, unknown>[],
     state: TurnToolState = createTurnToolState()
   ): ProviderDeferredTurn | null {
-    if (systemConfigTurnLocked(options, state)) return null;
-    if (calls.length !== 1) return null;
-    const call = calls[0]!;
+    const deferredCalls = calls.filter((call) => isProviderDeferredTool(call.name, options));
+    if (deferredCalls.length !== 1) return null;
+    const call = deferredCalls[0]!;
+    if (isToolExecutionBlocked(call.name, options)) return null;
     if (!isProviderToolAvailable(call.name, options)) return null;
     if (!isToolEnabledForTurn(call.name, definitions)) return null;
     if (!isProviderDeferredTool(call.name, options)) return null;
@@ -159,7 +182,6 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     if (!args || typeof args !== "object" || Array.isArray(args)) return null;
     const dispatch = readDeferredDispatchMessage(args as Record<string, unknown>, call.name);
     if (!dispatch.ok) return null;
-    if (hasAcceptedTurnActivity(state)) return null;
     options.onToolCall?.(call.name);
     markAcceptedTool(state, call.name);
     state.terminal = "deferred";
@@ -169,28 +191,36 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
       toolCall: {
         name: call.name,
         callId: call.call_id,
-        arguments: dispatch.workerArguments
+        arguments: call.name === "codex"
+          ? {
+              ...dispatch.workerArguments,
+              __sunabot_admin_authorized: true,
+              ...(providerCodexControlMode(options)
+                ? { __sunabot_control_authorized: true }
+                : {})
+            }
+          : dispatch.workerArguments
       }
     };
   }
 
-  noReplyTurn(
+  async noReplyTurn(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,
     definitions: readonly Record<string, unknown>[],
     state: TurnToolState = createTurnToolState()
   ) {
-    if (systemConfigTurnLocked(options, state)) return null;
-    if (calls.length !== 1) return null;
-    const call = calls[0]!;
-    if (call.name !== NO_REPLY_TOOL_NAME) return null;
-    if (!isProviderToolAvailable(call.name, options)) return null;
-    if (!isToolEnabledForTurn(call.name, definitions)) return null;
-    const args = parseJson(call.arguments);
-    if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length) return null;
-    if (hasAcceptedTurnActivity(state)) return null;
-    options.onToolCall?.(call.name);
-    markAcceptedTool(state, call.name);
+    const noReplyCalls = calls.filter((call) => call.name === NO_REPLY_TOOL_NAME);
+    if (!noReplyCalls.length) return null;
+    for (const call of noReplyCalls) {
+      if (!isProviderToolAvailable(call.name, options)) return null;
+      if (!isToolEnabledForTurn(call.name, definitions)) return null;
+      const args = parseJson(call.arguments);
+      if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length) return null;
+      options.onToolCall?.(call.name);
+      markAcceptedTool(state, call.name);
+      await appendToolLog(NO_REPLY_TOOL_NAME, call, {}, { ok: true }, options);
+    }
     state.terminal = "no_reply";
     return { kind: "no_reply" as const };
   }
@@ -201,23 +231,12 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     definitions: readonly Record<string, unknown>[],
     state: TurnToolState = createTurnToolState()
   ) {
-    const preflight = preflightProviderToolResponse(calls, "", options, state);
-    if (preflight.rejected) return preflight.rejected;
-    if (calls.length > 1 && calls.some((call) => call.name === NO_REPLY_TOOL_NAME)) {
-      return toolCallErrors(calls, "no_reply must be called alone before any other tool.");
-    }
     return Promise.all(calls.map(async (call) => ({
       type: "function_call_output",
       call_id: call.call_id,
       output: JSON.stringify(await executeFunctionCall(call, options, definitions, state))
     })));
   }
-}
-
-function systemConfigTurnLocked(options: ProviderCompleteOptions, state: TurnToolState) {
-  return options.systemConfig?.mutationStaged() === true ||
-    options.systemConfig?.turnRejected() === true ||
-    state.acceptedToolNames.includes(SYSTEM_CONFIG_TOOL_NAME);
 }
 
 async function executeFunctionCall(
@@ -227,8 +246,8 @@ async function executeFunctionCall(
   state: TurnToolState
 ) {
   try {
-    if (localOutboundTurnConflict(call.name, state, options)) {
-      return { ok: false, error: LOCAL_DATA_OUTBOUND_TURN_CONFLICT_ERROR };
+    if (isToolExecutionBlocked(call.name, options)) {
+      return { ok: false, error: `Tool ${call.name} is unavailable in this run.` };
     }
     if (isMcpToolAlias(call.name)) {
       if (!options.mcp || !isToolEnabledForTurn(call.name, definitions)) {
@@ -239,7 +258,6 @@ async function executeFunctionCall(
         return { ok: false, error: `Invalid tool arguments for ${call.name}.` };
       }
       options.onToolCall?.(call.name);
-      markAcceptedTool(state, call.name);
       const result = await options.mcp.call({
         name: call.name,
         arguments: args as Record<string, unknown>,
@@ -249,6 +267,7 @@ async function executeFunctionCall(
       await appendToolLog(call.name, call, {
         argumentKeys: Object.keys(args as Record<string, unknown>).sort()
       }, mcpToolLogSummary(result), options).catch(() => undefined);
+      if (toolCallSucceeded(result)) markAcceptedTool(state, call.name);
       return result;
     }
     const executionMode = providerToolExecutionMode(call.name, options);
@@ -268,35 +287,33 @@ async function executeFunctionCall(
       return {
         ok: false,
         error: dispatch.ok
-          ? hasAcceptedTurnActivity(state)
-            ? toolOrderingError(call.name)
-            : `Deferred tool ${call.name} must be called alone in a separate model response.`
+          ? `Deferred tool ${call.name} could not be dispatched from this response.`
           : dispatch.error
       };
     }
     if (executionMode !== "inline") return { ok: false, error: `Tool ${call.name} is ${executionMode}.` };
-    if (
-      (isWorkbenchFileToolName(call.name) && hasAcceptedTurnActivity(state))
-      || state.acceptedToolNames.some(isWorkbenchFileToolName)
-    ) {
-      return { ok: false, error: "read_file and write_file must be called before assistant text or any other tool." };
-    }
     if (call.name === NO_REPLY_TOOL_NAME) {
-      return {
-        ok: false,
-        error: hasAcceptedTurnActivity(state)
-          ? toolOrderingError(call.name)
-          : "no_reply must be called alone with an empty object."
-      };
+      options.onToolCall?.(call.name);
+      markAcceptedTool(state, call.name);
+      return { ok: true };
     }
     const executor = inlineExecutors.get(call.name);
     if (!executor) return { ok: false, error: `Unsupported tool: ${call.name}` };
     options.onToolCall?.(call.name);
-    markAcceptedTool(state, call.name);
-    return await executor(args as Record<string, unknown>, call, options);
+    const result = await executor(args as Record<string, unknown>, call, options);
+    if (toolCallSucceeded(result)) markAcceptedTool(state, call.name);
+    return result;
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
+}
+
+function isToolExecutionBlocked(name: string, options: ProviderCompleteOptions) {
+  return options.blockedToolExecutions?.some((toolName) => toolName === name) === true;
+}
+
+function toolCallSucceeded(result: unknown) {
+  return !isRecord(result) || result.ok !== false;
 }
 
 async function runActivateSkill(
@@ -550,43 +567,23 @@ function isToolEnabledForTurn(name: string, definitions: readonly Record<string,
   return definitions.some((definition) => readToolName(definition) === name);
 }
 
-async function runBash(
+async function runNativeBash(
   args: Record<string, unknown>,
   call: ResponseFunctionCallItem,
   options: ProviderCompleteOptions
 ) {
-  if (!isWorkspaceBashProviderOptions(options.bash)) return { ok: false, error: "Bash is not enabled." };
-  try {
-    if (!options.bash.isCurrent()) return { ok: false, error: "Bash is not enabled." };
-  } catch {
-    return { ok: false, error: "Bash is not enabled." };
-  }
-  const input = readWorkspaceBashInput(args);
-  if (!input) return { ok: false, error: "Invalid Bash arguments." };
-  const result = await runWorkspaceBash(input, options.bash.workspacePath, {
-    backend: options.bash.backend,
-    accessMode: options.bash.accessMode,
-    strictMode: options.bash.strictMode,
-    isCurrent: options.bash.isCurrent,
-    audit: options.bash.audit,
-    approvalContext: options.bash.approvalContext,
-    ...(options.bash.confirmedApprovalId ? { confirmedApprovalId: options.bash.confirmedApprovalId } : {}),
-    ...(options.signal ? { abortSignal: options.signal } : {})
-  });
-  await appendToolLog(WORKSPACE_BASH_TOOL_NAME, call, args, result, options);
-  return result;
+  return runBash(NATIVE_BASH_TOOL_NAME, args, call, options);
 }
 
-function readWorkspaceBashInput(args: Record<string, unknown>): WorkspaceBashInput | undefined {
-  const keys = Object.keys(args);
-  if (
-    keys.length !== 2
-    || !keys.includes("command")
-    || !keys.includes("timeoutMs")
-    || typeof args.command !== "string"
-    || (args.timeoutMs !== null && args.timeoutMs !== TOOL_CALL_TIMEOUT_MS)
-  ) return undefined;
-  return { command: args.command, timeoutMs: args.timeoutMs };
+async function runBash(
+  toolName: typeof NATIVE_BASH_TOOL_NAME,
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  const result = await executeProviderBash(toolName, args, options);
+  await appendToolLog(toolName, call, args, result, options);
+  return result;
 }
 
 async function runWebSearch(
@@ -612,7 +609,9 @@ async function runImageGeneration(
     result = await runGenerateImg(args, options.bot, options.generateImage, {
       referenceImageUrls: options.referenceImageUrls,
       imageReferences: options.imageReferences,
-      logContext: options.logContext
+      resolveWorkbenchImagePaths: options.resolveWorkbenchImagePaths,
+      logContext: options.logContext,
+      signal: options.signal
     });
   } catch (error) {
     result = { ok: false, error: errorMessage(error) };
@@ -622,7 +621,7 @@ async function runImageGeneration(
     defaultReferenceImageUrls: options.referenceImageUrls ?? [],
     availableHistoricalReferenceImageCount: options.imageReferences?.historyImageUrls?.length ?? 0
   }, pickToolLogResult(result), options);
-  if (isGeneratedImageResult(result)) options.onImageGenerated?.(result.image);
+  if (isGeneratedImageResult(result)) options.onImageGenerated?.(result.image, generatedImageMetadata(result));
   return result;
 }
 
@@ -642,7 +641,7 @@ async function runSelfie(
     ...args,
     defaultReferenceImageUrls: options.selfie.referenceImageUrls ?? []
   }, pickToolLogResult(result), options);
-  if (isGeneratedImageResult(result)) options.onImageGenerated?.(result.image);
+  if (isGeneratedImageResult(result)) options.onImageGenerated?.(result.image, generatedImageMetadata(result));
   return result;
 }
 
@@ -657,6 +656,13 @@ async function runMemoryRecall(
   return result;
 }
 
+async function runKnowledgeSearch(args: Record<string, unknown>, call: ResponseFunctionCallItem, options: ProviderCompleteOptions) {
+  if (!options.knowledge?.enabled) return { ok: false, error: "Knowledge search is not enabled." };
+  const result = await options.knowledge.search(args as KnowledgeSearchInput);
+  await appendToolLog(KNOWLEDGE_SEARCH_TOOL_NAME, call, args, result, options);
+  return result;
+}
+
 async function runSystemConfigTool(
   args: Record<string, unknown>,
   call: ResponseFunctionCallItem,
@@ -667,6 +673,28 @@ async function runSystemConfigTool(
   }
   const result = await runSystemConfig(args, options.systemConfig);
   await appendToolLog(SYSTEM_CONFIG_TOOL_NAME, call, args, result, options);
+  return result;
+}
+
+async function executeCronTool(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  if (!options.cron) return { ok: false, error: "Scheduled task management is unavailable." };
+  const result = await runCronTool(args, options.cron);
+  await appendToolLog(CRON_TOOL_NAME, call, args, result, options);
+  return result;
+}
+
+async function executeCallDirectorTool(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  if (!options.director) return { ok: false, error: "Daily director is unavailable." };
+  const result = await runCallDirector(args, options.director, options.signal);
+  await appendToolLog(CALL_DIRECTOR_TOOL_NAME, call, args, result, options);
   return result;
 }
 
@@ -717,6 +745,19 @@ function isGeneratedImageResult(value: unknown): value is { ok: true; image: Ima
   const result = value as { ok?: unknown; image?: unknown };
   const image = result?.image as ImageResult | undefined;
   return result?.ok === true && Boolean(image?.url || image?.filePath);
+}
+
+function generatedImageMetadata(value: unknown) {
+  const result = value as Record<string, unknown>;
+  return {
+    prompt: stringField(result.prompt),
+    size: stringField(result.size),
+    resolution: stringField(result.resolution)
+  };
+}
+
+function stringField(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function pickToolLogResult(value: unknown) {

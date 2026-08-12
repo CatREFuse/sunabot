@@ -10,18 +10,18 @@ import {
   type AgentSkillSource
 } from "../../packages/contracts/extensions/agentExtensions.js";
 import type { AgentMcpCredentialStatusResolver } from "../../services/extensions/public.js";
-import { buildAgentExtensionCopyPreview } from "./agentExtensionPreview.js";
 import {
   AgentExtensionCopyJournalStore,
   type AgentExtensionCopyJournal,
   type AgentExtensionCopyJournalHandle
 } from "./agentExtensionCopyJournal.js";
 import { AgentExtensionPathGuard } from "./agentExtensionPaths.js";
+import { buildAgentExtensionCopyPreview } from "./agentExtensionPreview.js";
 import { storeError } from "./agentExtensionSecureFs.js";
-import { buildSkillCopyArchive, buildSkillCopyArtifact } from "./agentSkillCopyArchive.js";
-import { safeSkillTarget } from "./agentSkillTransaction.js";
 import { withMcpRevision } from "./agentMcpServerStore.js";
+import { buildSkillCopyArchive, buildSkillCopyArtifact } from "./agentSkillCopyArchive.js";
 import { extensionRevision } from "./agentSkillPersistence.js";
+import { safeSkillTarget } from "./agentSkillTransaction.js";
 import { inspectSkillDirectory, type SkillArchiveLimits } from "./skillArchive.js";
 
 interface AgentExtensionCopyRepository {
@@ -203,8 +203,6 @@ export class AgentExtensionCopyLifecycle {
         targetSkills,
         targetMcp,
         sourceArchive: sourceArtifact.archive,
-        previousSkill,
-        previousArchive,
         handle
       });
     } finally {
@@ -223,11 +221,9 @@ export class AgentExtensionCopyLifecycle {
     targetSkills: AgentSkillIndex;
     targetMcp: AgentMcpServerIndex;
     sourceArchive: Buffer;
-    previousSkill?: AgentSkillRecord;
-    previousArchive?: Buffer;
     handle: AgentExtensionCopyJournalHandle;
   }): Promise<AgentExtensionCopyApplyResult> {
-    const { input, preview, targetSkills, targetMcp, sourceArchive, previousSkill, previousArchive, handle } = options;
+    const { input, preview, targetSkills, targetMcp, sourceArchive, handle } = options;
     const appliedMcp: AgentMcpServerDescriptor[] = [];
     let installed: AgentSkillRecord | null = null;
     let skipped = false;

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, shallowRef } from "vue";
+import { computed, defineAsyncComponent, shallowRef } from "vue";
 import type { TokenUsageBehavior, TokenUsageFilters, TokenUsagePayload } from "../../types";
-import TokenUsageCalendar from "./TokenUsageCalendar.vue";
-import TokenUsageHourlyChart from "./TokenUsageHourlyChart.vue";
 import TokenUsageSummaryCards from "./TokenUsageSummaryCards.vue";
+
+const TokenUsageCalendar = defineAsyncComponent(() => import("./TokenUsageCalendar.vue"));
+const TokenUsageHourlyChart = defineAsyncComponent(() => import("./TokenUsageHourlyChart.vue"));
 
 const UNLABELED_MODEL = "__unlabeled__";
 const props = defineProps<{

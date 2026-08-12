@@ -1,28 +1,39 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { AGENT_RESOURCE_LAYOUT } from "../../packages/platform/agentResourceLayout.js";
 import { nanoid } from "nanoid";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import { inspectMultiAgentMigrationGate, validateMultiAgentWorkspacePath } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { WORKSPACE_LAYOUT, workspaceRelativeReference } from "../../packages/platform/workspaceLayout.js";
-import {
-  defaultPromptContent,
-  PROMPT_FILE_DEFINITIONS,
-  resolveSafePromptFilePath
-} from "../agent/public.js";
-import { getWorkspacePath, resolveProjectPath } from "../../src/config.js";
 import {
   DEFAULT_REPLY_DEBOUNCE_MS,
   MAX_REPLY_DEBOUNCE_MS,
   MIN_REPLY_DEBOUNCE_MS,
   type AppConfig,
   type BotConfig
-} from "../../src/types.js";
+} from "../../packages/contracts/admin/public.js";
 import type {
   AgentAccountRegistryRow,
   AgentRegistryRepository,
   AgentRegistryRow
 } from "./agentRegistryRepository.js";
 import { mergeManifestBotConfig } from "./agentConfigProjection.js";
+import {
+  materializeAgentConfigImport,
+  prepareAgentConfigImport,
+  readImportedManifest,
+  type AgentConfigImportInput
+} from "./agentConfigImport.js";
+import {
+  agentConfigImportRules,
+  applyAgentConfigImportManifest,
+  importedAgentAvatarPath
+} from "./agentConfigImportProjection.js";
+import {
+  ensureAgentSystemPromptOverrides,
+  ensureSharedSystemPrompts,
+  writeIfMissing
+} from "./agentPromptFiles.js";
 import {
   ensureAccountRuntimeDirectories,
   inferPrimaryAccountQqId,
@@ -71,7 +82,7 @@ export interface AgentAvatarInput {
 }
 
 export interface AgentRegistryOptions {
-  workspaceRoot?: string;
+  workspaceRoot: string;
   store: AgentRegistryRepository;
   allowUnmarkedMigration?: boolean;
   workspaceGateAlreadyChecked?: boolean;
@@ -86,7 +97,7 @@ export class AgentRegistry {
   private readonly now: () => Date;
 
   constructor(private sharedConfig: AppConfig, options: AgentRegistryOptions) {
-    this.workspaceRoot = options.workspaceRoot ?? getWorkspacePath(WORKSPACE_LAYOUT.agentRoot);
+    this.workspaceRoot = options.workspaceRoot;
     this.store = options.store;
     this.allowUnmarkedMigration = options.allowUnmarkedMigration === true;
     this.workspaceGateAlreadyChecked = options.workspaceGateAlreadyChecked === true;
@@ -108,7 +119,7 @@ export class AgentRegistry {
     }
     await fs.mkdir(this.workspaceRoot, { recursive: true, mode: 0o700 });
     await this.ensureDefaultAgent();
-    await this.ensureSharedSystemPrompts();
+    await ensureSharedSystemPrompts(this.sharedConfig, this.workspaceDir());
   }
 
   updateSharedConfig(config: AppConfig) {
@@ -144,18 +155,53 @@ export class AgentRegistry {
     return parseManifest(value, agent.id);
   }
 
-  async create(input: { id: string; name: string; avatar?: AgentAvatarInput }): Promise<AgentSummary> {
+  async previewImport(input: AgentConfigImportInput) {
+    const plan = await prepareAgentConfigImport(input, agentConfigImportRules(this.sharedConfig));
+    return { source: plan.source, included: plan.included, missing: plan.missing };
+  }
+
+  async create(input: {
+    id: string;
+    name: string;
+    avatar?: AgentAvatarInput;
+    import?: AgentConfigImportInput;
+  }): Promise<AgentSummary> {
     const id = normalizeAgentId(input.id);
     const name = normalizeAgentName(input.name);
     if (this.store.readAgent(id)) conflict("AGENT_ID_CONFLICT", "Agent ID 已存在。");
 
     const finalDirectory = this.agentDirectory(id);
     await assertPathMissing(finalDirectory, "AGENT_WORKSPACE_CONFLICT", "Agent 工作区已存在。");
+    const imported = input.import
+      ? await prepareAgentConfigImport(input.import, agentConfigImportRules(this.sharedConfig))
+      : undefined;
     const temporaryDirectory = await fs.mkdtemp(path.join(this.workspaceRoot, `.create-${id}-`));
     const createdAt = this.now().toISOString();
-    const manifest = createManifest(this.sharedConfig, { id, name, createdAt });
+    let manifest = createManifest(this.sharedConfig, { id, name, createdAt });
+    if (imported) {
+      const importedManifestValue = readImportedManifest(imported);
+      if (importedManifestValue !== undefined) {
+        manifest = applyAgentConfigImportManifest(manifest, importedManifestValue, imported);
+      }
+      if (!input.avatar) {
+        const avatarPath = importedAgentAvatarPath(imported);
+        if (avatarPath) manifest.avatarPath = avatarPath;
+      }
+    }
     try {
       await this.writeInitialWorkspace(temporaryDirectory, manifest, input.avatar);
+      if (imported) {
+        await materializeAgentConfigImport(temporaryDirectory, imported, { skipAvatar: Boolean(input.avatar) });
+        if (manifest.prompts.overrideSystem) {
+          await ensureAgentSystemPromptOverrides(
+            this.sharedConfig,
+            manifest,
+            this.agentDirectory(manifest.id),
+            configFromManifest,
+            temporaryDirectory
+          );
+        }
+      }
       await fs.rename(temporaryDirectory, finalDirectory);
       const row = manifestRow(manifest);
       try {
@@ -259,15 +305,14 @@ export class AgentRegistry {
     };
     try {
       this.store.createAgentAccount(account);
-      await ensureAccountRuntimeDirectories(account.id);
+      await ensureAccountRuntimeDirectories(this.workspaceDir(), account.id);
       return account;
     } catch (error) {
       this.store.deleteAgentAccount(account.id);
       throw mapSqliteConflict(error, "QQ 账号名称已存在。");
     }
   }
-
-  async updateAccountIdentity(accountId: string, qqId: string, label?: string) {
+  async updateAccountIdentity(accountId: string, qqId: string, label?: string, transfer = false) {
     const current = this.store.readAgentAccount(accountId);
     if (!current) notFound("AGENT_ACCOUNT_NOT_FOUND", "QQ 账号不存在。");
     const normalizedQq = qqId.trim();
@@ -278,14 +323,8 @@ export class AgentRegistry {
       qqId: normalizedQq,
       updatedAt: this.now().toISOString()
     };
-    try {
-      this.store.updateAgentAccount(updated);
-      return updated;
-    } catch (error) {
-      throw mapSqliteConflict(error, "QQ 号已绑定其他 Agent。");
-    }
+    return persistAccountIdentity(this.store, updated, transfer);
   }
-
   async clearAccountIdentity(accountId: string) {
     const current = this.store.readAgentAccount(accountId);
     if (!current) notFound("AGENT_ACCOUNT_NOT_FOUND", "QQ 账号不存在。");
@@ -312,7 +351,7 @@ export class AgentRegistry {
     if (account.id === "primary") conflict("PRIMARY_ACCOUNT_REQUIRED", "主账号不能移除。");
     this.store.deleteAgentAccount(account.id);
     await fs.writeFile(
-      path.join(getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, account.id), ".remove-on-stop"),
+      path.join(this.workspaceDir(), WORKSPACE_LAYOUT.napcatAccounts, account.id, ".remove-on-stop"),
       `${this.now().toISOString()}\n`,
       { encoding: "utf8", mode: 0o600 }
     );
@@ -330,7 +369,7 @@ export class AgentRegistry {
         updatedAt: this.now().toISOString()
       });
       await fs.writeFile(
-        path.join(getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, account.id), ".remove-on-stop"),
+        path.join(this.workspaceDir(), WORKSPACE_LAYOUT.napcatAccounts, account.id, ".remove-on-stop"),
         `${this.now().toISOString()}\n`,
         { encoding: "utf8", mode: 0o600 }
       );
@@ -381,7 +420,14 @@ export class AgentRegistry {
   async setSystemPromptOverride(agentId: string, enabled: boolean) {
     const previous = await this.manifest(agentId);
     if (previous.prompts.overrideSystem === enabled) return { overrideSystem: enabled };
-    if (enabled) await this.ensureAgentSystemPromptOverrides(previous);
+    if (enabled) {
+      await ensureAgentSystemPromptOverrides(
+        this.sharedConfig,
+        previous,
+        this.agentDirectory(previous.id),
+        configFromManifest
+      );
+    }
     const next: AgentManifest = {
       ...previous,
       updatedAt: this.now().toISOString(),
@@ -493,22 +539,26 @@ export class AgentRegistry {
           updatedAt: createdAt
         });
       }
-      if (this.allowUnmarkedMigration) await migrateLegacyPrimaryAccountRuntime();
-      await ensureAccountRuntimeDirectories("primary");
+      if (this.allowUnmarkedMigration) await migrateLegacyPrimaryAccountRuntime(this.workspaceDir());
+      await ensureAccountRuntimeDirectories(this.workspaceDir(), "primary");
       const primary = this.store.readAgentAccount("primary");
       if (primary && !primary.qqId) {
-        const qqId = await inferPrimaryAccountQqId();
-        if (qqId) {
+        const qqId = await inferPrimaryAccountQqId(this.workspaceDir());
+        if (qqId && !this.store.readAgentAccounts().some((account) => account.id !== primary.id && account.qqId === qqId)) {
           this.store.updateAgentAccount({ ...primary, qqId, updatedAt: this.now().toISOString() });
         }
       }
     }
   }
 
+  private workspaceDir() {
+    return path.resolve(this.workspaceRoot, "../..");
+  }
+
   private async writeInitialWorkspace(directory: string, manifest: AgentManifest, avatar?: AgentAvatarInput) {
     await fs.mkdir(path.join(directory, "assets"), { recursive: true, mode: 0o700 });
     await fs.mkdir(path.join(directory, "data"), { recursive: true, mode: 0o700 });
-    await fs.mkdir(path.join(directory, "selfie"), { recursive: true, mode: 0o700 });
+    await fs.mkdir(path.join(directory, AGENT_RESOURCE_LAYOUT.selfie), { recursive: true, mode: 0o700 });
     await fs.mkdir(path.join(directory, "files"), { recursive: true, mode: 0o700 });
     if (avatar) manifest.avatarPath = await writeAvatar(directory, avatar);
     await atomicWriteJson(path.join(directory, MANIFEST_FILE), manifest);
@@ -521,43 +571,6 @@ export class AgentRegistry {
     )));
   }
 
-  private async ensureSharedSystemPrompts() {
-    const sharedConfig = sharedSystemPromptConfig(this.sharedConfig);
-    const defaultWorkspace = resolveProjectPath(this.sharedConfig.persona.agentWorkspace);
-    await Promise.all(PROMPT_FILE_DEFINITIONS.filter((definition) => definition.scope === "system").map(async (definition) => {
-      const fileName = definition.fileName(sharedConfig);
-      const destination = await resolveSafePromptFilePath(sharedConfig, "system", fileName);
-      const legacy = defaultWorkspace ? path.resolve(defaultWorkspace, fileName) : "";
-      const content = await readOptionalText(legacy) || defaultPromptContent(definition.id, this.sharedConfig.persona.name);
-      await writeIfMissing(destination, content);
-    }));
-  }
-
-  private async ensureAgentSystemPromptOverrides(manifest: AgentManifest) {
-    const inheritedConfig = configFromManifest(this.sharedConfig, {
-      ...manifest,
-      prompts: { overrideSystem: false }
-    });
-    const overrideConfig = configFromManifest(this.sharedConfig, {
-      ...manifest,
-      prompts: { overrideSystem: true }
-    });
-    await Promise.all(PROMPT_FILE_DEFINITIONS.filter((definition) => definition.scope === "system").map(async (definition) => {
-      const fileName = definition.fileName(overrideConfig);
-      const destination = await resolveSafePromptFilePath(overrideConfig, "system", fileName);
-      const legacy = path.resolve(this.agentDirectory(manifest.id), fileName);
-      const inherited = await resolveSafePromptFilePath(
-        inheritedConfig,
-        "system",
-        definition.fileName(inheritedConfig)
-      );
-      const content = await readOptionalText(legacy)
-        || await readOptionalText(inherited)
-        || defaultPromptContent(definition.id, manifest.name);
-      await writeIfMissing(destination, content);
-    }));
-  }
-
   private agentDirectory(agentId: string) {
     return path.join(this.workspaceRoot, agentId);
   }
@@ -565,6 +578,7 @@ export class AgentRegistry {
   private manifestPath(agentId: string) {
     return path.join(this.agentDirectory(agentId), MANIFEST_FILE);
   }
+
 }
 
 export function configFromManifest(shared: AppConfig, manifest: AgentManifest): AppConfig {
@@ -642,6 +656,8 @@ function parseManifest(value: unknown, expectedId: string): AgentManifest {
     bot: {
       ...normalized.bot,
       replyDebounceMs: normalizeManifestReplyDebounceMs(normalized.bot.replyDebounceMs),
+      emojiSendSize: normalizeManifestEmojiSendSize(normalized.bot.emojiSendSize),
+      emojiSendSeparately: normalized.bot.emojiSendSeparately === true,
       pokeOnNoReply: normalized.bot.pokeOnNoReply === true,
       quoteGroupReplyExcludedUserIds: normalizeManifestQqList(normalized.bot.quoteGroupReplyExcludedUserIds)
     },
@@ -657,6 +673,12 @@ function normalizeManifestReplyDebounceMs(value: unknown) {
     : DEFAULT_REPLY_DEBOUNCE_MS;
 }
 
+function normalizeManifestEmojiSendSize(value: unknown) {
+  return value === 64 || value === 128 || value === 256 || value === 512 || value === 1024
+    ? value
+    : 512;
+}
+
 function normalizeManifestQqList(value: unknown) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value
@@ -664,36 +686,6 @@ function normalizeManifestQqList(value: unknown) {
     .map((item) => item.trim())
     .filter((item) => /^\d{1,32}$/.test(item))
     .slice(0, 100))];
-}
-
-function sharedSystemPromptConfig(config: AppConfig): AppConfig {
-  return {
-    ...structuredClone(config),
-    persona: {
-      ...structuredClone(config.persona),
-      systemPromptWorkspace: workspaceRelativeReference(WORKSPACE_LAYOUT.systemPrompts),
-      systemPromptOverride: false
-    }
-  };
-}
-
-async function readOptionalText(filePath: string) {
-  if (!filePath) return "";
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
-  }
-}
-
-async function writeIfMissing(filePath: string, content: string) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  try {
-    await fs.writeFile(filePath, `${content.trim()}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
 }
 
 function normalizeAgentId(value: string) {
@@ -781,6 +773,16 @@ function mapSqliteConflict(error: unknown, message = "Agent 已存在。") {
     return new ServiceError(409, "AGENT_CONFLICT", message);
   }
   return error;
+}
+
+function persistAccountIdentity(store: AgentRegistryRepository, updated: AgentAccountRegistryRow, transfer: boolean) {
+  if (transfer && !store.transferAgentAccountIdentity(updated.id, updated.qqId!, updated.updatedAt).updated) {
+    notFound("AGENT_ACCOUNT_NOT_FOUND", "QQ 账号不存在。");
+  }
+  if (transfer) return updated;
+  try { store.updateAgentAccount(updated); return updated; } catch (error) {
+    throw mapSqliteConflict(error, "QQ 号已绑定其他 Agent。");
+  }
 }
 
 function badRequest(code: string, message: string, field?: string): never {

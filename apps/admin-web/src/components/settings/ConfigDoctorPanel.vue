@@ -82,6 +82,15 @@ function confirmApply() {
         </div>
       </div>
       <div class="flex flex-wrap items-center gap-2">
+        <button
+          v-if="report?.proposal"
+          class="btn btn-primary"
+          type="button"
+          :disabled="busy || !report.proposal.changes.length"
+          @click="repairOpen = true"
+        >
+          <i class="bx bx-first-aid" aria-hidden="true"></i>{{ applying ? "修复中" : "一键修复" }}
+        </button>
         <button class="btn" type="button" :disabled="busy" @click="emit('scan')">
           <i class="bx bx-scan" aria-hidden="true"></i>{{ scanning ? "检查中" : report ? "重新检查" : "检查配置" }}
         </button>
@@ -153,9 +162,6 @@ function confirmApply() {
             {{ proposalSourceLabel(report.proposal.source) }} · {{ report.proposal.risk === "medium" ? "中风险" : "低风险" }}
           </p>
         </div>
-        <button class="btn btn-primary" type="button" :disabled="busy || !report.proposal.changes.length" @click="repairOpen = true">
-          <i class="bx bx-first-aid" aria-hidden="true"></i>{{ applying ? "修复中" : "应用修复" }}
-        </button>
       </div>
 
       <div class="mt-5 divide-y divide-line border-y border-line">

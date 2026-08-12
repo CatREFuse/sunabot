@@ -5,6 +5,7 @@ import type { MonitorSettingsStore } from "../../../src/admin/monitorSettings.js
 import type { SunaRuntime } from "../../../src/runtime.js";
 import type { ServiceMonitor } from "../../../src/serviceMonitor.js";
 import { buildRuntimeProbe } from "../../../tooling/runtime/probe.mjs";
+import { requestAgentId } from "../requestAgentId.js";
 
 export interface MonitoringRouteOptions {
   startedAt: string;
@@ -65,9 +66,4 @@ export function registerMonitoringRoutes(app: FastifyInstance, options: Monitori
           core: { mode: "api", running: true, apiReady: true, onebotReady: true }
         });
   });
-}
-
-function requestAgentId(query: unknown) {
-  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
-  return String(value ?? "plana").trim() || "plana";
 }

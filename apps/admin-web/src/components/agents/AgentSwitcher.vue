@@ -6,7 +6,7 @@ import { useAgents } from "../../composables/useAgents";
 import { agentAvatarUrl } from "../../utils/agentIdentity";
 import IdentityAvatar from "../ui/IdentityAvatar.vue";
 
-const props = withDefaults(defineProps<{ compact?: boolean; expanded?: boolean }>(), {
+withDefaults(defineProps<{ compact?: boolean; expanded?: boolean }>(), {
   compact: false,
   expanded: false
 });

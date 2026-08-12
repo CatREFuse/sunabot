@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
-import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import {
   AGENT_TOOL_NAMES,
   AppConfig,
   BotConfig,
+  BotDirectorSettings,
+  BotImageReaderSettings,
   BotMemorySettings,
   BotOrchestratorSettings,
   BotToneSettings,
@@ -19,7 +19,7 @@ import {
   MIN_REPLY_DEBOUNCE_MS,
   MAX_REPLY_DEBOUNCE_MS
 } from "./types.js";
-import { isReasoningEffort, resolveModelReasoningEffort } from "./admin/models.js";
+import { isReasoningEffort, resolveModelReasoningEffort } from "../packages/contracts/admin/models.js";
 import {
   DEFAULT_TAVILY_API_KEY_ENV,
   normalizeTavilySettings
@@ -29,27 +29,21 @@ import {
   WORKSPACE_LAYOUT,
   workspaceRelativeReference
 } from "../packages/platform/workspaceLayout.js";
+import {
+  getRootDir,
+  getWorkspaceDir,
+  getWorkspacePath,
+  resolveProjectPath
+} from "../packages/platform/projectPaths.js";
 
-const rootDir = discoverProjectRoot(path.dirname(fileURLToPath(import.meta.url)));
-const workspaceDir = resolveWorkspaceDir(process.env.SUNABOT_WORKSPACE);
 const AUTO_CODEX_EXECUTABLE = "auto";
 export const CONFIG_SCHEMA_VERSION = 1 as const;
 
 if (process.env.NODE_ENV !== "test") {
-  dotenv.config({ path: path.join(workspaceDir, WORKSPACE_LAYOUT.secretsEnv), override: false });
+  dotenv.config({ path: getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv), override: false });
 }
 
-export function getRootDir() {
-  return rootDir;
-}
-
-export function getWorkspaceDir() {
-  return workspaceDir;
-}
-
-export function getWorkspacePath(...segments: string[]) {
-  return path.join(workspaceDir, ...segments);
-}
+export { getRootDir, getWorkspaceDir, getWorkspacePath, resolveProjectPath };
 
 export function getConfigPath() {
   return process.env.SUNABOT_CONFIG ?? getWorkspacePath(WORKSPACE_LAYOUT.config);
@@ -122,13 +116,25 @@ export function defaultConfig(): AppConfig {
     bot: {
       adminQq: "",
       adminName: "猫老师",
+      replyModel: providers[0]?.model ?? "gpt-5.5",
+      replyReasoningEffort: "medium",
+      imageReader: {
+        enabled: true,
+        providerId: providers[0]?.id ?? "",
+        model: providers[0]?.model ?? "gpt-5.5",
+        reasoningEffort: "low"
+      },
       replyDebounceMs: DEFAULT_REPLY_DEBOUNCE_MS,
       pokeOnNoReply: false,
       quoteGroupReplies: true,
       quoteGroupReplyExcludedUserIds: [],
-      contextMessageLimit: 48,
+      contextMessageLimit: 32,
+      emojiSendSize: 512,
+      emojiSendSeparately: false,
       tone: {
         enabled: false,
+        segmentedReply: false,
+        followMainModel: false,
         providerId: "",
         model: "gpt-5.4-mini",
         reasoningEffort: "low",
@@ -136,19 +142,20 @@ export function defaultConfig(): AppConfig {
         maxOutputTokens: 2400,
         maxRetries: 2
       },
+      director: {
+        enabled: false
+      },
       memory: {
         memoryModel: "gpt-5.4-mini",
         reasoningEffort: "low",
-        messageThreshold: 48,
-        workingMemoryMaxEntries: 100,
-        workMemoryCompressInPrompt: "work_memory_compress_in.json",
-        workMemoryCompressOutPrompt: "work_memory_compress_out.json",
-        userProfilePrompt: "user_profile_prompt.json"
+        dreamRecentWindowHours: 24,
+        dreamRecentMemoryLimit: 24,
+        dreamOlderMemoryLimit: 12,
+        workMemoryCompressOutPrompt: "work_memory_compress_out.json"
       },
       orchestrator: {
         enabled: false,
         userGroupchatOrchestratorModel: "gpt-5.4-mini",
-        groupThreadModel: "gpt-5.4-mini",
         reasoningEffort: "medium",
         promptFile: "user_groupchat_orchestrator.json",
         messageThreshold: 10,
@@ -180,7 +187,6 @@ export function defaultConfig(): AppConfig {
       },
       bash: {
         enabled: false,
-        adminPrivateBackend: "native",
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         allowGroup: false,
@@ -271,22 +277,6 @@ async function syncDirectory(directory: string) {
   }
 }
 
-export function resolveProjectPath(inputPath: string | undefined) {
-  if (!inputPath) return undefined;
-  if (path.isAbsolute(inputPath)) return inputPath;
-  const normalized = inputPath.replace(/\\/g, "/");
-  if (normalized === ".env" || normalized === "workspace/.env") {
-    return getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv);
-  }
-  if (normalized === "workspace") return workspaceDir;
-  if (normalized === "workspace/agents" || normalized.startsWith("workspace/agents/")) {
-    const suffix = normalized.slice("workspace/agents".length).replace(/^\/+/, "");
-    return getWorkspacePath(WORKSPACE_LAYOUT.agentRoot, suffix);
-  }
-  if (normalized.startsWith("workspace/")) return getWorkspacePath(normalized.slice("workspace/".length));
-  return path.join(rootDir, inputPath);
-}
-
 export function getAgentSessionQueuePath(config: Pick<AppConfig, "persona">) {
   if (config.persona.defaultAgentId === "plana") return getWorkspacePath(WORKSPACE_LAYOUT.sessionQueue);
   const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
@@ -333,31 +323,6 @@ async function assertWorkspaceLayoutReady() {
   }
 }
 
-function resolveWorkspaceDir(configured: string | undefined) {
-  const value = configured?.trim();
-  if (!value) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("SUNABOT_WORKSPACE is required in production.");
-    }
-    return path.join(rootDir, "workspace");
-  }
-  return path.isAbsolute(value) ? path.normalize(value) : path.resolve(rootDir, value);
-}
-
-function discoverProjectRoot(startDir: string) {
-  let current = path.resolve(startDir);
-  for (;;) {
-    if (existsSync(path.join(current, "package.json")) && existsSync(path.join(current, "AGENTS.md"))) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      throw new Error(`Unable to locate sunabot project root from ${startDir}.`);
-    }
-    current = parent;
-  }
-}
-
 export function getDefaultProvider(config: AppConfig) {
   return (
     config.providers.items.find((provider) => provider.id === config.providers.defaultProviderId) ??
@@ -387,8 +352,35 @@ function mergeConfig(
   incoming: Partial<AppConfig>,
   applyRuntimeOverrides: boolean
 ): AppConfig {
-  const bot = mergeBotConfig(base.bot, incoming.bot as Partial<BotConfig> | undefined, incoming.onebot?.quoteGroupReplies);
   const providerItems = incoming.providers?.items?.length ? incoming.providers.items : base.providers.items;
+  const providers = {
+    ...base.providers,
+    ...incoming.providers,
+    items: providerItems.map(normalizeProviderReasoningEffort)
+  };
+  const selectedProvider = providers.items.find((provider) => provider.id === providers.defaultProviderId)
+    ?? providers.items.find((provider) => provider.enabled)
+    ?? providers.items[0];
+  const legacyVisionProvider = providers.items.find((provider) => provider.id === selectedProvider?.visionProviderId);
+  const bot = mergeBotConfig(
+    base.bot,
+    incoming.bot as Partial<BotConfig> | undefined,
+    incoming.onebot?.quoteGroupReplies,
+    {
+      replyModel: selectedProvider?.model ?? base.bot.replyModel,
+      imageReader: {
+        enabled: true,
+        providerId: legacyVisionProvider?.id ?? selectedProvider?.id ?? base.bot.imageReader.providerId,
+        model: selectedProvider?.visionModel?.trim()
+          || legacyVisionProvider?.model
+          || selectedProvider?.model
+          || base.bot.imageReader.model,
+        reasoningEffort: legacyVisionProvider?.reasoningEffort
+          ?? selectedProvider?.reasoningEffort
+          ?? base.bot.imageReader.reasoningEffort
+      }
+    }
+  );
   const fileServer = { ...base.server, ...incoming.server };
   return {
     schemaVersion: CONFIG_SCHEMA_VERSION,
@@ -404,11 +396,7 @@ function mergeConfig(
       systemPromptOverride: incoming.persona?.systemPromptOverride ?? base.persona.systemPromptOverride,
       ...(incoming.persona?.avatarPath ? { avatarPath: incoming.persona.avatarPath } : {})
     },
-    providers: {
-      ...base.providers,
-      ...incoming.providers,
-      items: providerItems.map(normalizeProviderReasoningEffort)
-    },
+    providers,
     broadcastStorm: mergeBroadcastStormConfig(base.broadcastStorm, incoming.broadcastStorm),
     normalReply: {
       maxRetries: normalizeInteger(incoming.normalReply?.maxRetries, base.normalReply.maxRetries, 0, 10)
@@ -463,11 +451,31 @@ function normalizeProviderReasoningEffort(provider: ProviderConfig): ProviderCon
   };
 }
 
-function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefined, legacyQuoteGroupReplies?: boolean): BotConfig {
+function mergeBotConfig(
+  base: BotConfig,
+  incoming: Partial<BotConfig> | undefined,
+  legacyQuoteGroupReplies?: boolean,
+  legacyModels: { replyModel: string; imageReader: BotImageReaderSettings } = {
+    replyModel: base.replyModel,
+    imageReader: base.imageReader
+  }
+): BotConfig {
   const bash = incoming?.bash as Partial<BotConfig["bash"]> | undefined;
+  const replyModel = normalizeModelName(incoming?.replyModel, legacyModels.replyModel);
   return {
     adminQq: typeof incoming?.adminQq === "string" ? incoming.adminQq.trim() : base.adminQq,
     adminName: normalizeString(incoming?.adminName, base.adminName),
+    replyModel,
+    replyReasoningEffort: resolveModelReasoningEffort(
+      replyModel,
+      isReasoningEffort(incoming?.replyReasoningEffort) ? incoming.replyReasoningEffort : undefined,
+      base.replyReasoningEffort
+    ).effort,
+    imageReader: mergeBotImageReaderSettings(
+      base.imageReader,
+      incoming?.imageReader as Partial<BotImageReaderSettings> | undefined,
+      legacyModels.imageReader
+    ),
     replyDebounceMs: normalizeInteger(
       incoming?.replyDebounceMs,
       base.replyDebounceMs,
@@ -481,13 +489,17 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
       base.quoteGroupReplyExcludedUserIds
     ),
     contextMessageLimit: normalizeInteger(incoming?.contextMessageLimit, base.contextMessageLimit, 1, 120),
+    emojiSendSize: [64, 128, 256, 512, 1024].includes(incoming?.emojiSendSize ?? -1)
+      ? incoming!.emojiSendSize!
+      : base.emojiSendSize,
+    emojiSendSeparately: incoming?.emojiSendSeparately === true,
     tone: mergeBotToneSettings(base.tone, incoming?.tone as Partial<BotToneSettings> | undefined),
+    director: mergeBotDirectorSettings(base.director, incoming?.director as Partial<BotDirectorSettings> | undefined),
     memory: mergeBotMemorySettings(base.memory, incoming?.memory as Partial<BotMemorySettings> | undefined),
     orchestrator: mergeBotOrchestratorSettings(base.orchestrator, incoming?.orchestrator as Partial<BotOrchestratorSettings> | undefined),
     tools: mergeBotToolSettings(base.tools, incoming?.tools as Partial<BotToolSettings> | undefined),
     bash: {
       enabled: bash?.enabled ?? base.bash.enabled,
-      adminPrivateBackend: bash?.adminPrivateBackend === "docker" ? "docker" : "native",
       auditModel: normalizeModelName(bash?.auditModel, base.bash.auditModel),
       strictMode: bash?.strictMode ?? base.bash.strictMode,
       allowGroup: bash?.allowGroup ?? base.bash.allowGroup,
@@ -498,6 +510,34 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
   };
 }
 
+function mergeBotImageReaderSettings(
+  base: BotImageReaderSettings,
+  incoming: Partial<BotImageReaderSettings> | undefined,
+  legacy: BotImageReaderSettings
+): BotImageReaderSettings {
+  const model = normalizeModelName(incoming?.model, legacy.model || base.model);
+  const providerId = typeof incoming?.providerId === "string"
+    ? incoming.providerId.trim()
+    : legacy.providerId || base.providerId;
+  return {
+    enabled: incoming?.enabled ?? legacy.enabled ?? base.enabled,
+    providerId,
+    model,
+    reasoningEffort: resolveModelReasoningEffort(
+      model,
+      isReasoningEffort(incoming?.reasoningEffort) ? incoming.reasoningEffort : undefined,
+      legacy.reasoningEffort ?? base.reasoningEffort
+    ).effort
+  };
+}
+
+function mergeBotDirectorSettings(
+  base: BotDirectorSettings,
+  incoming: Partial<BotDirectorSettings> | undefined
+): BotDirectorSettings {
+  return { enabled: incoming?.enabled ?? base.enabled };
+}
+
 function mergeBotToneSettings(
   base: BotToneSettings,
   incoming: Partial<BotToneSettings> | undefined
@@ -505,6 +545,8 @@ function mergeBotToneSettings(
   const model = normalizeModelName(incoming?.model, base.model);
   return {
     enabled: incoming?.enabled ?? base.enabled,
+    segmentedReply: incoming?.segmentedReply ?? base.segmentedReply,
+    followMainModel: incoming?.followMainModel ?? base.followMainModel,
     providerId: typeof incoming?.providerId === "string" ? incoming.providerId.trim() : base.providerId,
     model,
     reasoningEffort: normalizeModelEffort(model, incoming?.reasoningEffort ?? base.reasoningEffort),
@@ -516,14 +558,21 @@ function mergeBotToneSettings(
 
 function mergeBotMemorySettings(base: BotMemorySettings, incoming: Partial<BotMemorySettings> | undefined): BotMemorySettings {
   const memoryModel = normalizeModelName(incoming?.memoryModel, base.memoryModel);
+  const recentLimit = normalizeDreamInteger(incoming?.dreamRecentMemoryLimit, base.dreamRecentMemoryLimit, 0, 48);
+  const olderLimit = normalizeDreamInteger(incoming?.dreamOlderMemoryLimit, base.dreamOlderMemoryLimit, 0, 48);
+  const validSelectionSize = recentLimit + olderLimit >= 1 && recentLimit + olderLimit <= 48;
   return {
     memoryModel,
     reasoningEffort: normalizeModelEffort(memoryModel, incoming?.reasoningEffort),
-    messageThreshold: normalizeInteger(incoming?.messageThreshold, base.messageThreshold, 1, 200),
-    workingMemoryMaxEntries: normalizeInteger(incoming?.workingMemoryMaxEntries, base.workingMemoryMaxEntries, 1, 1000),
-    workMemoryCompressInPrompt: normalizePromptFile(incoming?.workMemoryCompressInPrompt, base.workMemoryCompressInPrompt),
-    workMemoryCompressOutPrompt: normalizePromptFile(incoming?.workMemoryCompressOutPrompt, base.workMemoryCompressOutPrompt),
-    userProfilePrompt: normalizePromptFile(incoming?.userProfilePrompt, base.userProfilePrompt)
+    dreamRecentWindowHours: normalizeDreamInteger(
+      incoming?.dreamRecentWindowHours,
+      base.dreamRecentWindowHours,
+      1,
+      720
+    ),
+    dreamRecentMemoryLimit: validSelectionSize ? recentLimit : base.dreamRecentMemoryLimit,
+    dreamOlderMemoryLimit: validSelectionSize ? olderLimit : base.dreamOlderMemoryLimit,
+    workMemoryCompressOutPrompt: normalizePromptFile(incoming?.workMemoryCompressOutPrompt, base.workMemoryCompressOutPrompt)
   };
 }
 
@@ -535,14 +584,9 @@ function mergeBotOrchestratorSettings(
     incoming?.userGroupchatOrchestratorModel,
     base.userGroupchatOrchestratorModel
   );
-  const groupThreadModel = normalizeModelName(
-    incoming?.groupThreadModel,
-    base.groupThreadModel
-  );
   return {
     enabled: incoming?.enabled ?? base.enabled,
     userGroupchatOrchestratorModel: model,
-    groupThreadModel,
     reasoningEffort: normalizeModelEffort(model, incoming?.reasoningEffort),
     promptFile: normalizePromptFile(incoming?.promptFile, base.promptFile),
     messageThreshold: normalizeInteger(incoming?.messageThreshold, base.messageThreshold, 0, 200),
@@ -602,12 +646,21 @@ function mergeBotToolOverrides(
     const candidate = incoming?.[name];
     const normalized = normalizeBotToolOverride(candidate, fallback);
     if (!normalized) continue;
-    if (name === "workspace_bash" || name === "codex") {
+    if (name === "native_bash" || name === "codex") {
       const { enabled: _legacyEnabled, ...descriptionOnly } = normalized;
       if (descriptionOnly.description) merged[name] = descriptionOnly;
       continue;
     }
     merged[name] = normalized;
+  }
+  const legacyOverrides = incoming as Record<string, BotToolOverride | undefined> | undefined;
+  const legacyBase = base as Record<string, BotToolOverride | undefined> | undefined;
+  const legacyBash = normalizeBotToolOverride(
+    legacyOverrides?.native_bash ?? legacyOverrides?.docker_bash ?? legacyOverrides?.workspace_bash,
+    legacyBase?.native_bash ?? legacyBase?.docker_bash ?? legacyBase?.workspace_bash
+  );
+  if (legacyBash?.description && !merged.native_bash?.description) {
+    merged.native_bash = { description: legacyBash.description };
   }
   return merged;
 }
@@ -660,6 +713,14 @@ function normalizeInteger(value: unknown, fallback: number, min: number, max: nu
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue)) return fallback;
   return Math.min(Math.max(Math.trunc(numberValue), min), max);
+}
+
+function normalizeDreamInteger(value: unknown, fallback: number, min: number, max: number) {
+  if (value === undefined) return fallback;
+  const numberValue = Number(value);
+  return Number.isSafeInteger(numberValue) && numberValue >= min && numberValue <= max
+    ? numberValue
+    : fallback;
 }
 
 function normalizeFiniteNumber(value: unknown, fallback: number, min: number, max: number) {

@@ -1,160 +1,75 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { nanoid } from "nanoid";
-import {
-  AppConfig,
-  ChatMessage,
-  ConversationMessageStats,
-  ConversationMessageQuote,
-  ConversationRecord,
-  ImageResult,
-  ParsedIncomingMessage,
-  ReasoningEffort
-} from "../types.js";
-import { resolveModelReasoningEffort } from "../admin/models.js";
-import { AttachmentService } from "../../services/media/attachments/service.js";
-import type {
-  AttachmentExtractionContext,
-  ParsedAttachment
-} from "../../services/media/attachments/types.js";
-import { CommandRouter, type CommandMatch } from "../../services/messaging/commandRouter.js";
-import { isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
-import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
-import {
-  assistantReplyEnvelope,
-  decodeAssistantReply,
-  decodeIncomingReply,
-  decodeToolCompletion,
-  incomingReplyEnvelope,
-  type AssistantReplyOutboxEnvelope,
-  type AssistantReplyOutboxPayload,
-  type AsyncToolCompletionPayload,
-  type RuntimeIncomingReplyEventPayload
-} from "../../packages/contracts/session/runtimeMessages.js";
-import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
-import { configureMemoryPersistence } from "../../services/memory/persistence.js";
-import {
-  ReplyGateEpochs,
-  isOrchestratorReplyRateLimited,
-  resolveUserGroupReplyRoute,
-  type ReplyGateSnapshot
-} from "../../services/orchestration/groupReplyPolicy.js";
-import { HookBus } from "../../services/messaging/hookBus.js";
-import {
-  applyMemoryBatchTransaction,
-  formatMemoryMatchesForPrompt,
-  isMemoryBatchCommitted,
-  mergeUserProfileMemory,
-  normalizeEventMemorySchema,
-  readMemorySourceEntries,
-  readUserProfileForUser,
-  readWorkingMemorySnapshot,
-  recallMemory,
-  recoverMemoryTransactions,
-  replaceWorkingMemoryFacts,
-  resolveUserAddressName,
-  type MemoryEntry,
-  type MemoryFactInput
-} from "../../services/memory/memoryService.js";
-import {
-  MemorySchedulerStore,
-  type MemoryClaim,
-  type MemoryQueuedMessage
-} from "../../services/memory/memoryScheduler.js";
 import {
   OpenAIProvider,
-  type ProviderBashOptions,
-  type ProviderCompleteOptions,
-  type ProviderDeferredTurn
+  type ProviderCompleteOptions
 } from "../../adapters/model/openaiProvider.js";
 import { probeProviderMultimodal } from "../../adapters/model/providerDiscovery.js";
-import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 import {
-  inboundImageUrls,
-  replaceInboundImageUrls,
-  type MessageDetailsV1,
-  type MessagingPort,
-  type OutboundMessageV1
+  outboundMessageBubble,
+  sendOutboundBubble,
+  type MessagingPort
 } from "../../packages/contracts/messaging/messages.js";
-import {
-  generatedImageMediaAsset,
-  imageMediaAsset,
-  type AttachmentSourcePort
-} from "../../packages/contracts/media/media.js";
-import { loadPersona, AgentPersona } from "../../services/agent/persona.js";
-import { appendRequestLog } from "../requestLog.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
-import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
-import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
-import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
-import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
-import {
-  OutboxDisconnectedError,
-  SessionCoordinator,
-  type SessionHandleResult
-} from "../../services/sessions/sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
+import { buildCommonPromptVariables, loadPersona } from "../../services/agent/persona.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
-import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
+import { buildPromptUtilityVariables, parseFinalPromptTemplate, renderFinalPromptTemplate, type PromptVariableValue, type RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import {
-  ensurePromptTextFile,
-  migrateConversationEmojiVariables,
-  migrateGroupReplyOrchestratorResultVariable,
-  migrateGroupReplyThreadContextVariable,
-  migrateMemoryPerspectivePrompt,
-  migrateSelfieReferenceSelectionPrompt,
-  migrateToneEmojiMarkerRule,
-  migrateUserGroupOrchestratorResultSchema,
   readPromptTextFile
 } from "../../services/agent/promptWorkspace.js";
 import {
-  buildPromptUtilityVariables,
-  parseFinalPromptTemplate,
-  renderFinalPromptTemplate,
-  type PromptVariableValue,
-  type RenderedPromptRequest
-} from "../../services/agent/promptSystem.js";
-import { buildCommonPromptVariables, buildConversationPromptVariables } from "../../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, GROUP_CONVERSATION_REPLY_PROMPT_FILE, TONE_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, GROUP_THREAD_CONTEXT_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, ConversationToolPolicyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { clampInteger, indexedConversationMessages } from "./conversationMemoryHelpers.js";
-import { conversationOrchestratorEnabled, conversationReplyEnabled, enrichMemoryEntriesWithConversations, isWebConversationId, normalizeConversationId, normalizeConversationLookupId, outboundForRecord } from "./messagingAttachmentHelpers.js";
-import { conversationMemberNames } from "./selfieHelpers.js";
+  ensureWorkingMemoryDocument,
+  normalizeEventMemorySchema,
+  type MemoryEntry
+} from "../../services/memory/memoryService.js";
 import { normalizeConversationDisabledTools } from "../../services/tools/conversationToolPolicy.js";
-
+import { resolveModelReasoningEffort } from "../../packages/contracts/admin/models.js";
+import { getDefaultProvider } from "../config.js";
+import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 import type { SunaRuntime } from "../runtime.js";
+import {
+  AppConfig,
+  ConversationMessageStats,
+  ConversationRecord,
+  ReasoningEffort
+} from "../types.js";
+import { clampInteger, indexedConversationMessages, resolveRuntimePersonaName } from "./conversationMemoryHelpers.js";
+import { auxiliaryProviderCompleteOptions } from "./auxiliaryModelBudget.js";
+import { conversationDirectorEventsEnabled, conversationOrchestratorEnabled, conversationOrchestratorResponseTimeMs, conversationReplyEnabled, enrichMemoryEntriesWithConversations, isWebConversationId, normalizeConversationLookupId, normalizeConversationOrchestratorResponseTimeMs, outboundForRecord } from "./messagingAttachmentHelpers.js";
+import { ensureRuntimePromptWorkspace } from "./promptMigrations.js";
+import { ADMIN_PERSONA_FILES, ConversationReplyUpdateInput, ConversationToolPolicyUpdateInput, RuntimeConfigSnapshot, RuntimePromptSnapshot, personaFileNameForAdminId, runtimePromptDefaultContent } from "./runtimeContracts.js";
+import { conversationMemberNames } from "./selfieHelpers.js";
 type RuntimeHost = SunaRuntime;
-
 export async function runtime_initialize(this: RuntimeHost) {
     await this.attachmentService.initialize();
+    applicationDataStore(this.config).ensureGeneratedImageHistoryIndexed(this.config);
     await this.ensureAgentPromptFiles();
-    await mergeUserProfileMemory(this.config);
-    await recoverMemoryTransactions(this.config);
+    await ensureWorkingMemoryDocument(this.config);
     await normalizeEventMemorySchema(this.config);
-    await this.memoryScheduler.initialize();
-    await this.seedMemoryScheduler();
     this.persona = await loadPersona(this.config);
     await this.refreshAttachmentCacheReferences();
-    this.scheduleMemoryDrain();
+    this.scheduledTasks.start();
+    this.director.start();
+    this.dreams.start();
   }
 export function runtime_close(this: RuntimeHost) {
-    if (this.memoryWakeTimer) clearTimeout(this.memoryWakeTimer);
-    this.memoryWakeTimer = undefined;
+    this.abortRuntime();
+    this.attachmentRefreshDirty = false;
+    this.cancelAllAmbientReplies();
+    for (const controller of this.activeDirectControllers.values()) {
+      controller.abort(this.runtimeSignal.reason);
+    }
+    this.activeDirectControllers.clear();
+    this.incomingPreparations.clear();
+    this.scheduledTasks.stop();
+    this.director.stop();
+    this.dreams.stop();
+    this.activeGateway = undefined;
     this.sessionCoordinator.stop();
     if (this.ownsSessionStore) this.sessionStore.close();
   }
 export async function runtime_reload(this: RuntimeHost, config: AppConfig) {
     await this.ensureAgentPromptFiles(config);
-    await mergeUserProfileMemory(config);
-    this.memoryScheduler.setConfig(config);
-    await recoverMemoryTransactions(config);
+    await ensureWorkingMemoryDocument(config);
     await normalizeEventMemorySchema(config);
-    await this.memoryScheduler.initialize();
     this.commitReload(await this.prepareReload(config));
-    await this.seedMemoryScheduler();
-    this.scheduleMemoryDrain();
   }
 export async function runtime_prepareReload(this: RuntimeHost, config: AppConfig): Promise<RuntimeConfigSnapshot> {
     return {
@@ -165,11 +80,8 @@ export async function runtime_prepareReload(this: RuntimeHost, config: AppConfig
 export function runtime_commitReload(this: RuntimeHost, snapshot: RuntimeConfigSnapshot) {
     const previous = this.config;
     this.config = snapshot.config;
-    this.memoryScheduler.setConfig(snapshot.config);
     this.persona = snapshot.persona;
-    if (previous.bot.memory.messageThreshold !== this.config.bot.memory.messageThreshold) {
-      this.scheduleMemoryDrain();
-    }
+    this.director.configChanged(previous.bot.director?.enabled === true);
     if (previous.bot.adminQq.trim() !== this.config.bot.adminQq.trim()) {
       this.cancelScopeReplies("private");
       this.cancelScopeReplies("user_group");
@@ -190,6 +102,7 @@ export function runtime_commitReload(this: RuntimeHost, snapshot: RuntimeConfigS
     if (this.activeGateway) {
       this.sessionCoordinator.resume();
     }
+    this.scheduledTasks.wake();
   }
 export async function runtime_reloadPrompts(this: RuntimeHost, config: AppConfig) {
     this.config = config;
@@ -208,7 +121,7 @@ export function runtime_commitPromptReload(this: RuntimeHost, snapshot: unknown)
 export function runtime_getPersonaStatus(this: RuntimeHost) {
     return {
       id: this.persona?.id ?? "plana",
-      name: this.persona?.name ?? "普拉娜",
+      name: resolveRuntimePersonaName(this.persona?.name, this.config.persona.name),
       memoryItems: this.persona?.memoryItems.length ?? 0
     };
   }
@@ -221,20 +134,6 @@ export function runtime_getProviderStatus(this: RuntimeHost) {
       imageModel: provider?.imageModel ?? "",
       apiKeyConfigured: Boolean(openaiProvider?.hasApiKey())
     };
-  }
-export async function runtime_consolidateWorkingMemory(this: RuntimeHost) {
-    const result = await this.mergeWorkingMemory({
-      conversation: {
-        id: "maintenance:working-memory",
-        scope: "maintenance",
-        title: "工作记忆整理"
-      },
-      participants: [],
-      messages: [],
-      metadata: { source: "sunabot.memory.merge" }
-    });
-    if (result.ok) this.persona = await loadPersona(this.config);
-    return result;
   }
 export function runtime_getProvider(this: RuntimeHost, providerId?: string) {
     const provider =
@@ -254,11 +153,17 @@ export function runtime_getProvider(this: RuntimeHost, providerId?: string) {
     }
     return new OpenAIProvider({ ...provider, reasoningEffort: resolved.effort });
   }
-export function runtime_getProviderForModel(this: RuntimeHost, model: string, requestedEffort?: ReasoningEffort) {
-    const provider = getDefaultProvider(this.config);
-    if (!provider) {
-      throw new Error("No provider configured.");
-    }
+export function runtime_getProviderForModel(
+  this: RuntimeHost,
+  model: string,
+  requestedEffort?: ReasoningEffort,
+  providerId?: string
+) {
+    const baseProvider = this.getProvider(providerId);
+    const provider = (baseProvider as unknown as {
+      configuration?: () => ReturnType<OpenAIProvider["configuration"]>;
+    }).configuration?.();
+    if (!provider) return baseProvider;
     const modelName = model.trim() || provider.model;
     const resolved = resolveModelReasoningEffort(modelName, requestedEffort, provider.reasoningEffort ?? "medium");
     if (resolved.adjusted) {
@@ -277,107 +182,10 @@ export function runtime_getProviderForModel(this: RuntimeHost, model: string, re
     });
   }
 export async function runtime_ensureAgentPromptFiles(this: RuntimeHost, config = this.config) {
-    const legacyConversationPrompt = await readPromptTextFile(
-      config,
-      "system",
-      CONVERSATION_REPLY_PROMPT_FILE,
-      ""
-    );
-    await Promise.all([
-      ensurePromptTextFile(
-        config,
-        "system",
-        PRIVATE_CONVERSATION_REPLY_PROMPT_FILE,
-        legacyConversationPrompt || ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.private-reply"] || ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        GROUP_CONVERSATION_REPLY_PROMPT_FILE,
-        legacyConversationPrompt || ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-reply"] || ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        TONE_PROMPT_FILE,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.tone-rewrite"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        config.bot.memory.workMemoryCompressInPrompt,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-in"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        config.bot.memory.workMemoryCompressOutPrompt,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-out"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        config.bot.memory.userProfilePrompt,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.user-profile"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        config.bot.orchestrator.promptFile,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["orchestrator.user-group"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        GROUP_THREAD_CONTEXT_PROMPT_FILE,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["orchestrator.group-thread"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        GROUP_CHAT_SUMMARY_PROMPT_FILE,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-summary"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "persona",
-        SELFIE_PROMPT_FILE,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["image.selfie-rewrite"] ?? ""
-      )
-    ]);
-    await migrateGroupReplyThreadContextVariable(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
-    await migrateGroupReplyOrchestratorResultVariable(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
-    await migrateUserGroupOrchestratorResultSchema(
-      config,
-      config.bot.orchestrator.promptFile,
-      ADMIN_RUNTIME_PROMPT_DEFAULTS["orchestrator.user-group"] ?? ""
-    );
-    await migrateSelfieReferenceSelectionPrompt(
-      config,
-      SELFIE_PROMPT_FILE,
-      ADMIN_RUNTIME_PROMPT_DEFAULTS["image.selfie-rewrite"] ?? ""
-    );
-    await migrateConversationEmojiVariables(config, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE);
-    await migrateConversationEmojiVariables(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
-    await migrateToneEmojiMarkerRule(config, TONE_PROMPT_FILE);
-    await migrateMemoryPerspectivePrompt(
-      config,
-      config.bot.memory.workMemoryCompressInPrompt,
-      ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-in"] ?? ""
-    );
-    await migrateMemoryPerspectivePrompt(
-      config,
-      config.bot.memory.workMemoryCompressOutPrompt,
-      ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-out"] ?? ""
-    );
-    await migrateMemoryPerspectivePrompt(
-      config,
-      config.bot.memory.userProfilePrompt,
-      ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.user-profile"] ?? ""
-    );
+    await ensureRuntimePromptWorkspace(config);
   }
 export function runtime_defaultPromptContent(this: RuntimeHost, id: string) {
-    return ADMIN_RUNTIME_PROMPT_DEFAULTS[id] ?? "";
+    return runtimePromptDefaultContent(this.config, id);
   }
 export async function runtime_renderPromptRequest(this: RuntimeHost,
     id: string,
@@ -391,7 +199,7 @@ export async function runtime_renderPromptRequest(this: RuntimeHost,
       this.config,
       definition.scope,
       definition.fileName(this.config),
-      ADMIN_RUNTIME_PROMPT_DEFAULTS[id]
+      runtimePromptDefaultContent(this.config, id)
     );
     const fragments = Object.fromEntries(
       Object.entries(ADMIN_PERSONA_FILES).map(([fragmentId, fileName]) => [
@@ -456,39 +264,59 @@ async function prepareVisionFallback(
   const hasImages = request.messages.some((message) => message.imageUrls?.length || message.localImagePaths?.length);
   if (!hasImages) return request;
   const detectedMultimodal = providerConfig.multimodal === "auto" && providerConfig.detectedMultimodal == null
-    ? await cachedMultimodalProbe(providerConfig)
+    ? await cachedMultimodalProbe(providerConfig, options.signal)
     : providerConfig.detectedMultimodal;
   const needsFallback = providerConfig.multimodal === "disabled"
     || (providerConfig.multimodal === "auto" && detectedMultimodal === false);
   if (!needsFallback) return request;
-  const helperConfig = runtime.config.providers.items.find((item) => item.id === providerConfig.visionProviderId);
-  if (!helperConfig) throw new Error("当前模型不支持图片，请配置读图辅助 Provider。");
   const imageUrls = request.messages.flatMap((message) => message.imageUrls ?? []);
   const localImagePaths = request.messages.flatMap((message) => message.localImagePaths ?? []);
-  const helper = new OpenAIProvider({
-    ...helperConfig,
-    id: `${helperConfig.id}:vision-helper`,
-    model: providerConfig.visionModel?.trim() || helperConfig.model
-  });
-  const description = await helper.complete(
-    "准确描述输入图片中的主体、文字、关系和与用户请求有关的细节，不要猜测不可见内容。",
-    [{ role: "user", content: "请读取这些图片并给出可供另一个模型使用的描述。", imageUrls, localImagePaths }],
-    { signal: options.signal, logContext: options.logContext }
-  );
+  const persistedAltTexts = request.messages.flatMap((message) => message.imageAltTexts ?? []).filter(Boolean);
+  let fallbackAltTexts = persistedAltTexts;
+  if ((localImagePaths.length || persistedAltTexts.length < imageUrls.length) && runtime.config.bot.imageReader.enabled) {
+    const settings = runtime.config.bot.imageReader;
+    const helper = runtime.getProviderForModel(
+      settings.model,
+      settings.reasoningEffort,
+      settings.providerId
+    );
+    const description = await helper.complete(
+      "准确描述输入图片中的主体、动作、场景、重要物品和清晰文字。只输出简洁中文，不猜测不可见内容。",
+      [{
+        role: "user",
+        content: "请描述这些尚无替代文本的图片。",
+        imageUrls: imageUrls.slice(persistedAltTexts.length),
+        localImagePaths
+      }],
+      auxiliaryProviderCompleteOptions({
+        signal: options.signal,
+        logContext: options.logContext
+      })
+    );
+    fallbackAltTexts = [...persistedAltTexts, description.trim()].filter(Boolean);
+  }
+  if (!fallbackAltTexts.length) {
+    throw new Error("当前回复模型不支持图片，且没有可用的图片替代文本。");
+  }
   const next = structuredClone(request);
   next.messages = next.messages.map((message) => ({ ...message, imageUrls: [], localImagePaths: [] }));
   const lastUser = [...next.messages].reverse().find((message) => message.role === "user");
-  if (lastUser) lastUser.content = `${lastUser.content}\n\n<image_description>${description}</image_description>`;
+  if (lastUser) {
+    lastUser.content = `${lastUser.content}\n\n<image_alt_texts>${fallbackAltTexts.join("\n")}</image_alt_texts>`;
+  }
   return next;
 }
 
 const multimodalProbeCache = new Map<string, boolean>();
 
-async function cachedMultimodalProbe(provider: ReturnType<OpenAIProvider["configuration"]>) {
+async function cachedMultimodalProbe(
+  provider: ReturnType<OpenAIProvider["configuration"]>,
+  signal?: AbortSignal
+) {
   const key = [provider.id, provider.kind, provider.model, provider.baseUrl ?? "", provider.apiKeyEnv].join("\0");
   const cached = multimodalProbeCache.get(key);
   if (cached != null) return cached;
-  const result = await probeProviderMultimodal(provider);
+  const result = await probeProviderMultimodal(provider, undefined, signal);
   multimodalProbeCache.set(key, result.multimodal);
   return result.multimodal;
 }
@@ -507,16 +335,21 @@ export function runtime_publicConversationRecord(this: RuntimeHost, record: Conv
       conversationReplyEnabled(record) &&
       conversationOrchestratorEnabled(record);
     const deciding = this.ambientReplies.get(record.id)?.deciding === true;
+    const responseTimeMs = conversationOrchestratorResponseTimeMs(
+      record,
+      this.config.bot.orchestrator.recentMessageWindowMs
+    );
     return {
       ...record,
       replyEnabled: conversationReplyEnabled(record),
       orchestratorEnabled: conversationOrchestratorEnabled(record),
+      directorEventsEnabled: conversationDirectorEventsEnabled(record),
       orchestratorStatus: record.scope === "user_group"
         ? {
             active: orchestratorEnabled && (deciding || pendingUserMessages.length > 0),
             messageCount: pendingUserMessages.length,
             messageTarget: this.config.bot.orchestrator.messageThreshold + 1,
-            activeWindowMs: this.config.bot.orchestrator.recentMessageWindowMs,
+            activeWindowMs: responseTimeMs,
             lastMessageAt: lastUserMessage?.message.at ?? record.lastAt,
             lastCheckedAt: record.orchestratorCheckedAt
           }
@@ -624,6 +457,35 @@ export function runtime_enrichMemoryEntries(this: RuntimeHost, entries: MemoryEn
   }
 export function runtime_setConversationReplyEnabled(this: RuntimeHost, input: ConversationReplyUpdateInput) {
     const record = this.upsertConversationRecordForReplySetting(input);
+    const previousDirectorEventsEnabled = conversationDirectorEventsEnabled(record);
+    const previousResponseTimeMs = conversationOrchestratorResponseTimeMs(
+      record,
+      this.config.bot.orchestrator.recentMessageWindowMs
+    );
+    const nextResponseTimeOverrideEnabled = typeof input.orchestratorResponseTimeOverrideEnabled === "boolean"
+      ? input.orchestratorResponseTimeOverrideEnabled
+      : record.orchestratorResponseTimeOverrideEnabled === true;
+    const hasSubmittedResponseTime = input.orchestratorResponseTimeMs !== undefined;
+    const submittedResponseTimeMs = !hasSubmittedResponseTime
+      ? undefined
+      : normalizeConversationOrchestratorResponseTimeMs(input.orchestratorResponseTimeMs);
+    const storedResponseTimeMs = normalizeConversationOrchestratorResponseTimeMs(
+      record.orchestratorResponseTimeMs
+    );
+    const nextResponseTimeMs = submittedResponseTimeMs
+      ?? storedResponseTimeMs
+      ?? (nextResponseTimeOverrideEnabled
+        ? normalizeConversationOrchestratorResponseTimeMs(this.config.bot.orchestrator.recentMessageWindowMs)
+        : undefined);
+    if (
+      record.scope === "user_group" &&
+      (
+        (hasSubmittedResponseTime && submittedResponseTimeMs === undefined) ||
+        (nextResponseTimeOverrideEnabled && nextResponseTimeMs === undefined)
+      )
+    ) {
+      throw new Error("编排器响应时间必须是 1 到 3600 秒之间的整数。");
+    }
     if (typeof input.replyEnabled === "boolean") {
       record.replyEnabled = input.replyEnabled;
     }
@@ -631,13 +493,43 @@ export function runtime_setConversationReplyEnabled(this: RuntimeHost, input: Co
       record.orchestratorEnabled = input.orchestratorEnabled;
       if (!record.orchestratorEnabled) this.cancelAmbientReply(record.id);
     }
+    if (record.scope === "user_group") {
+      record.orchestratorResponseTimeOverrideEnabled = nextResponseTimeOverrideEnabled;
+      if (submittedResponseTimeMs !== undefined) {
+        record.orchestratorResponseTimeMs = submittedResponseTimeMs;
+      } else if (
+        nextResponseTimeOverrideEnabled &&
+        storedResponseTimeMs === undefined &&
+        nextResponseTimeMs !== undefined
+      ) {
+        record.orchestratorResponseTimeMs = nextResponseTimeMs;
+      }
+    }
+    if (typeof input.directorEventsEnabled === "boolean") {
+      record.directorEventsEnabled = input.directorEventsEnabled;
+    }
     if (!conversationReplyEnabled(record)) {
-      record.memoryCompressedThroughMessageCount = record.messageCount;
       this.replyGates.invalidateConversation(record.id);
       this.activeDirectControllers.get(record.id)?.abort(new Error("conversation replies disabled"));
       this.cancelAmbientReply(record.id);
     }
     this.persistConversationRecords();
+    const nextEffectiveResponseTimeMs = conversationOrchestratorResponseTimeMs(
+      record,
+      this.config.bot.orchestrator.recentMessageWindowMs
+    );
+    const idleJob = this.ambientIdleTimers.get(record.id)?.job;
+    if (
+      idleJob &&
+      previousResponseTimeMs !== nextEffectiveResponseTimeMs &&
+      conversationReplyEnabled(record) &&
+      conversationOrchestratorEnabled(record)
+    ) {
+      this.scheduleAmbientIdleReply(idleJob);
+    }
+    if (previousDirectorEventsEnabled !== conversationDirectorEventsEnabled(record)) {
+      this.director.targetsChanged();
+    }
     return this.publicConversationRecord(record);
   }
 export function runtime_getConversationToolPolicy(this: RuntimeHost, conversationId: string) {
@@ -684,9 +576,9 @@ export async function runtime_announceServiceOnline(this: RuntimeHost, gateway: 
           logContext: { conversationId: record.id }
         });
         if (record.groupId) {
-          await gateway.send(outboundForRecord(record, tonedMessage));
+          await sendOutboundBubble(gateway, outboundMessageBubble(outboundForRecord(record, tonedMessage)));
         } else {
-          await gateway.send(outboundForRecord(record, tonedMessage));
+          await sendOutboundBubble(gateway, outboundMessageBubble(outboundForRecord(record, tonedMessage)));
         }
         this.recordServiceMessage(record, tonedMessage);
         sent += 1;
@@ -714,7 +606,6 @@ export class RuntimeLifecycle {
   commitPromptReload(...args: Parameters<typeof runtime_commitPromptReload>) { return runtime_commitPromptReload.call(this.host, ...args); }
   getPersonaStatus(...args: Parameters<typeof runtime_getPersonaStatus>) { return runtime_getPersonaStatus.call(this.host, ...args); }
   getProviderStatus(...args: Parameters<typeof runtime_getProviderStatus>) { return runtime_getProviderStatus.call(this.host, ...args); }
-  consolidateWorkingMemory(...args: Parameters<typeof runtime_consolidateWorkingMemory>) { return runtime_consolidateWorkingMemory.call(this.host, ...args); }
   getProvider(...args: Parameters<typeof runtime_getProvider>) { return runtime_getProvider.call(this.host, ...args); }
   getProviderForModel(...args: Parameters<typeof runtime_getProviderForModel>) { return runtime_getProviderForModel.call(this.host, ...args); }
   ensureAgentPromptFiles(...args: Parameters<typeof runtime_ensureAgentPromptFiles>) { return runtime_ensureAgentPromptFiles.call(this.host, ...args); }

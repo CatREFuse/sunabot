@@ -28,11 +28,12 @@ afterEach(async () => {
 
 describe("emoji normalization repository admission", () => {
   it("rejects before upload decoding or generated-file reads and releases after failure", async () => {
-    const [sharpModule, repositoryModule, gateModule, storeModule] = await Promise.all([
+    const [sharpModule, repositoryModule, gateModule, storeModule, jsonlStoreModule] = await Promise.all([
       import("sharp"),
       import("../../src/admin/emojiLibrary.js"),
       import("../../services/emojis/emojiOperationGate.js"),
-      import("../../adapters/sqlite/applicationDataStore.js")
+      import("../../adapters/sqlite/applicationDataStore.js"),
+      import("../../src/emojis/emojiStore.js")
     ]);
     closeStores = storeModule.closeApplicationDataStores;
     const config = createAdminTestConfig(root);
@@ -72,7 +73,7 @@ describe("emoji normalization repository admission", () => {
     expect(generatedFileRead).not.toHaveBeenCalled();
     await expect(fs.access(storeModule.applicationDatabasePath(config)))
       .rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.access(path.join(root, "business", "media", "images")))
+    await expect(fs.access(path.join(config.persona.agentWorkspace, "workbench", "emoji")))
       .rejects.toMatchObject({ code: "ENOENT" });
 
     if (held.ok) held.release();
@@ -96,7 +97,7 @@ describe("emoji normalization repository admission", () => {
       dataBase64: png.toString("base64")
     });
     expect(saved.emojis).toHaveLength(1);
-    expect(storeModule.applicationDataStore(config).readEmoji("开心")).toMatchObject({
+    expect(jsonlStoreModule.emojiStore(config).read("开心")).toMatchObject({
       key: "开心",
       width: 1024,
       height: 1024
@@ -298,7 +299,7 @@ describe("emoji normalization repository admission", () => {
     const config = createAdminTestConfig(root);
     const gate = new gateModule.EmojiNormalizationGate(1);
     const png = await testPng(sharpModule.default, { r: 120, g: 40, b: 180 });
-    const directory = path.join(root, "business", "media", "images");
+    const directory = path.join(config.persona.agentWorkspace, "workbench", "emoji");
     const parent = path.dirname(directory);
     const movedParent = `${parent}.bound`;
     const outside = path.join(root, "outside-mkdir");
@@ -324,7 +325,7 @@ describe("emoji normalization repository admission", () => {
     expect(raced).toBe(true);
     expect(await fs.readFile(sentinel, "utf8")).toBe("unchanged\n");
     expect(await fs.readdir(outside)).toEqual(["sentinel.txt"]);
-    expect(await fs.readdir(path.join(movedParent, "images"))).toEqual([]);
+    expect(await fs.readdir(path.join(movedParent, "emoji"))).toEqual([]);
     expect(storeModule.applicationDataStore(config).readEmojis()).toEqual([]);
 
     await fs.unlink(parent);
@@ -349,7 +350,7 @@ describe("emoji normalization repository admission", () => {
     const config = createAdminTestConfig(root);
     const gate = new gateModule.EmojiNormalizationGate(1);
     const png = await testPng(sharpModule.default, { r: 20, g: 80, b: 160 });
-    const directory = path.join(root, "business", "media", "images");
+    const directory = path.join(config.persona.agentWorkspace, "workbench", "emoji");
     const movedDirectory = `${directory}.frozen`;
     const external = path.join(root, "external-media");
     await fs.mkdir(external, { recursive: true });
@@ -393,7 +394,7 @@ describe("emoji normalization repository admission", () => {
     closeStores = storeModule.closeApplicationDataStores;
     const config = createAdminTestConfig(root);
     const png = await testPng(sharpModule.default, { r: 180, g: 70, b: 20 });
-    const directory = path.join(root, "business", "media", "images");
+    const directory = path.join(config.persona.agentWorkspace, "workbench", "emoji");
 
     const movedDirectory = `${directory}.before-publish`;
     const outsideDirectory = path.join(root, "outside-publish");

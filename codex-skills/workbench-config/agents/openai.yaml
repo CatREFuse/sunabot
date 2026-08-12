@@ -1,0 +1,6 @@
+interface:
+  display_name: "Workbench 配置"
+  short_description: "管理 Bot 的表情、Skills 与单一 Workbench 资源"
+  default_prompt: "Use $workbench-config to manage the current Agent's single Workbench with native_bash."
+policy:
+  allow_implicit_invocation: true

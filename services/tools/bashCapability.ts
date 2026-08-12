@@ -1,17 +1,14 @@
 import path from "node:path";
-import { resolveAgentWorkbench } from "../agents/public.js";
-import type { BashExecutionBackend } from "./bashAudit.js";
+import { resolveAgentBashEnvironment } from "../agents/public.js";
 import {
   ensureWorkspaceBashIsolation,
   type WorkspaceBashSandboxOptions
 } from "./bashSandbox.js";
 
-const DEFAULT_CAPABILITY_TTL_MS = 30_000;
+const DEFAULT_FAILURE_RETRY_MS = 3_000;
 
 export interface WorkspaceBashCapabilityProbeOptions {
   platform?: NodeJS.Platform;
-  backend?: BashExecutionBackend;
-  runtimeMode?: string;
   sandbox?: WorkspaceBashSandboxOptions;
   ttlMs?: number;
   now?: () => number;
@@ -31,12 +28,10 @@ export interface WorkspaceBashCapabilityProbeResult {
 export type WorkspaceBashUnavailableReason =
   | "BASH_AUDIT_UNAVAILABLE"
   | "BASH_NATIVE_ISOLATION_UNAVAILABLE"
-  | "BASH_DOCKER_ISOLATION_UNAVAILABLE"
   | "BASH_WORKBENCH_UNAVAILABLE";
 
 export interface RuntimeToolCapabilityContext {
   workspacePath: string;
-  workspaceBashBackend: BashExecutionBackend;
   workspaceBashAuditAvailable: boolean;
 }
 
@@ -44,9 +39,7 @@ export type RuntimeToolCapabilityResolver = (
   context?: RuntimeToolCapabilityContext
 ) => Promise<RuntimeToolCapabilities>;
 
-export type RuntimeToolCapabilitySnapshotResolver = (
-  backendOverride?: BashExecutionBackend | null
-) => Promise<RuntimeToolCapabilities>;
+export type RuntimeToolCapabilitySnapshotResolver = () => Promise<RuntimeToolCapabilities>;
 
 export interface RuntimeToolCapabilityResolverOptions {
   getCodexStatus: () => Promise<{ installed: boolean; authenticated: boolean }>;
@@ -70,8 +63,8 @@ export function createRuntimeToolCapabilityResolver(
       workspaceBashCapability
     ]);
     const bashCapability = workspaceBash.status === "fulfilled"
-      ? normalizeWorkspaceBashCapability(workspaceBash.value, context?.workspaceBashBackend)
-      : unavailableWorkspaceBashCapability(context?.workspaceBashBackend);
+      ? normalizeWorkspaceBashCapability(workspaceBash.value)
+      : unavailableWorkspaceBashCapability();
     return {
       codex: codex.status === "fulfilled" && codex.value.installed && codex.value.authenticated,
       workspaceBash: bashCapability.available,
@@ -86,60 +79,62 @@ export function createWorkspaceBashCapabilityProbe(
   options: WorkspaceBashCapabilityProbeOptions = {}
 ) {
   const platform = options.platform ?? process.platform;
-  const backend = options.backend ?? "native";
-  const runtimeMode = options.runtimeMode ?? process.env.SUNABOT_RUNTIME_MODE ?? "native";
-  const ttlMs = positiveInteger(options.ttlMs, DEFAULT_CAPABILITY_TTL_MS);
+  const ttlMs = positiveInteger(options.ttlMs, DEFAULT_FAILURE_RETRY_MS);
   const now = options.now ?? Date.now;
   const cache = new Map<string, { expiresAt: number; result: Promise<WorkspaceBashCapabilityProbeResult> }>();
 
   return async (workspacePath: string) => {
     const workspace = path.resolve(workspacePath);
-    const cacheKey = `${backend}\0${runtimeMode}\0${workspace}`;
+    const cacheKey = `${platform}\0${workspace}`;
     const cached = cache.get(cacheKey);
     const currentTime = now();
     if (cached && cached.expiresAt > currentTime) return cached.result;
 
-    const result = resolveAgentWorkbench(workspace).then(
-      (workbench) => ensureWorkspaceBashIsolation(backend, workbench, {
-        PATH: process.env.PATH || "/usr/bin:/bin"
-      }, {
-        ...options.sandbox,
-        platform,
-        runtimeMode
-      }).then(
-        () => ({ available: true }),
-        () => unavailableWorkspaceBashCapability(backend)
-      ),
+    const result = resolveAgentBashEnvironment(workspace).then(
+      async (bashEnvironment) => {
+        return ensureWorkspaceBashIsolation("native", bashEnvironment.workbenchRoot, {
+          PATH: process.env.PATH || "/usr/bin:/bin"
+        }, {
+          ...options.sandbox,
+          platform,
+          readOnlyMounts: bashEnvironment.readOnlyMounts
+        }).then(
+          () => ({ available: true }),
+          () => unavailableWorkspaceBashCapability()
+        );
+      },
       () => ({ available: false, reason: "BASH_WORKBENCH_UNAVAILABLE" as const })
     );
-    cache.set(cacheKey, { expiresAt: currentTime + ttlMs, result });
+    const entry = { expiresAt: currentTime + ttlMs, result };
+    cache.set(cacheKey, entry);
+    void result.then((capability) => {
+      if (cache.get(cacheKey) !== entry) return;
+      entry.expiresAt = capability.available
+        ? Number.POSITIVE_INFINITY
+        : now() + ttlMs;
+    });
     return result;
   };
 }
 
 function normalizeWorkspaceBashCapability(
-  result: boolean | WorkspaceBashCapabilityProbeResult,
-  backend: BashExecutionBackend | undefined
+  result: boolean | WorkspaceBashCapabilityProbeResult
 ): WorkspaceBashCapabilityProbeResult {
   if (typeof result === "boolean") {
-    return result ? { available: true } : unavailableWorkspaceBashCapability(backend);
+    return result ? { available: true } : unavailableWorkspaceBashCapability();
   }
   return result.available
     ? { available: true }
     : {
         available: false,
-        reason: result.reason ?? unavailableWorkspaceBashCapability(backend).reason
+        reason: result.reason ?? unavailableWorkspaceBashCapability().reason
       };
 }
 
-function unavailableWorkspaceBashCapability(
-  backend: BashExecutionBackend | undefined
-): WorkspaceBashCapabilityProbeResult {
+function unavailableWorkspaceBashCapability(): WorkspaceBashCapabilityProbeResult {
   return {
     available: false,
-    reason: backend === "native"
-      ? "BASH_NATIVE_ISOLATION_UNAVAILABLE"
-      : "BASH_DOCKER_ISOLATION_UNAVAILABLE"
+    reason: "BASH_NATIVE_ISOLATION_UNAVAILABLE"
   };
 }
 

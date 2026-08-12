@@ -34,8 +34,8 @@ const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 const recallMemory = vi.hoisted(() => vi.fn(async () => ({ ok: true, matches: [] })));
 const readUserProfileForUser = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("../../src/requestLog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../src/requestLog.js")>()),
+vi.mock("../../adapters/observability/requestLog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../adapters/observability/requestLog.js")>()),
   appendRequestLog,
   appendRequestLogStrict: appendRequestLog
 }));
@@ -82,8 +82,7 @@ describe("SunaRuntime system_config boundary", () => {
       incoming,
       harness.gateway,
       {
-        ...(promptOverride === undefined ? {} : { promptOverride }),
-        ...(incoming.scope === "private" ? {} : { skipGroupThreadPreparation: true })
+        ...(promptOverride === undefined ? {} : { promptOverride })
       }
     );
 
@@ -784,7 +783,6 @@ async function createRuntimeHarness(
     persona: NonNullable<SunaRuntime["persona"]>;
     getProvider(): OpenAIProvider;
     renderPromptRequest(): Promise<RenderedPromptRequest>;
-    scheduleMemoryCompression(): void;
     scheduleAttachmentCacheRefresh(): void;
     persistConversationRecords(): void;
   };
@@ -812,7 +810,6 @@ async function createRuntimeHarness(
     }],
     response_format: { type: "text" }
   });
-  internals.scheduleMemoryCompression = () => undefined;
   internals.scheduleAttachmentCacheRefresh = () => undefined;
   internals.persistConversationRecords = () => undefined;
   const { gateway, connection } = fakeGateway();
@@ -821,7 +818,6 @@ async function createRuntimeHarness(
 
 function stagedSystemConfigTurn(commitEffect: () => Promise<void> = async () => undefined) {
   let staged = false;
-  let rejected = false;
   let descriptor: ReturnType<SystemConfigTurn["stagedMutation"]>;
   const commit = vi.fn(async () => {
     await commitEffect();
@@ -844,12 +840,6 @@ function stagedSystemConfigTurn(commitEffect: () => Promise<void> = async () => 
     }),
     mutationStaged: () => staged,
     stagedMutation: () => descriptor,
-    rejectTurn: () => {
-      staged = false;
-      descriptor = undefined;
-      rejected = true;
-    },
-    turnRejected: () => rejected,
     commit,
     discard
   };
@@ -861,8 +851,6 @@ function idleSystemConfigTurn(): SystemConfigTurn {
     execute: vi.fn(async () => ({ ok: true })),
     mutationStaged: () => false,
     stagedMutation: () => undefined,
-    rejectTurn: () => undefined,
-    turnRejected: () => false,
     commit: vi.fn(async () => undefined),
     discard: vi.fn()
   };
@@ -958,7 +946,6 @@ function systemInput(
     enabled: null,
     orchestratorEnabled: null,
     searchImplementation: null,
-    bashAdminBackend: null,
     conversationId: null,
     ...overrides
   };

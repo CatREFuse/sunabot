@@ -1,4 +1,5 @@
 import path from "node:path";
+import { runModelTaskWithinDeadline } from "../../packages/contracts/model/modelTaskDeadline.js";
 import type {
   CodexRunner,
   CodexTaskStatus,
@@ -6,10 +7,16 @@ import type {
   CodexToolResult
 } from "../../packages/contracts/tools/codex.js";
 import { SessionActorTaskTimeoutError } from "./sessionActor.js";
+import {
+  codexResultSensitivePaths,
+  sanitizeCodexArtifactError
+} from "./codexResultSanitizer.js";
 import type { SessionStore, ToolJobRecord } from "./sessionStore.js";
 import type {
   ClaimedToolTask,
   CodexProcessCleanup,
+  CodexResultFinalization,
+  CodexResultFinalizer,
   CodexToolUsageObserver,
   DeferredToolRunner,
   SessionClaimState
@@ -20,6 +27,7 @@ export interface SessionToolJobProcessorOptions {
   codexRunner: CodexRunner;
   cleanupCodexProcess: CodexProcessCleanup;
   runDeferredTool?: DeferredToolRunner;
+  finalizeCodexResult?: CodexResultFinalizer;
   observeCodexToolUsage?: CodexToolUsageObserver;
   workerId: string;
   isStopped(): boolean;
@@ -37,11 +45,15 @@ export class SessionToolJobProcessor {
     const attemptToken = requiredText(job.attemptToken, "tool job attemptToken");
     let codexProcessStarted = false;
     let codexAttemptResult: CodexToolResult | undefined;
+    let stagedFinalization: CodexResultFinalization | undefined;
     try {
       if (job.toolName !== "codex") {
         const runner = this.options.runDeferredTool;
         if (!runner) throw new Error(`Deferred tool runner is not configured for ${job.toolName}.`);
-        const outcome = await runner(job, signal);
+        const outcome = await runModelTaskWithinDeadline(
+          (taskSignal) => runner(job, taskSignal),
+          { parentSignal: signal }
+        );
         this.options.assertClaimUsable(state, signal);
         this.options.store.completeToolJob({
           jobId: job.id,
@@ -81,7 +93,7 @@ export class SessionToolJobProcessor {
           job.processIdentity.runToken
         );
       }
-      const result: CodexToolResult = await this.options.codexRunner.run(job.arguments as CodexToolInput, {
+      const runnerResult: CodexToolResult = await this.options.codexRunner.run(job.arguments as CodexToolInput, {
         jobId: job.id,
         jobDir: path.join(settings.jobRoot, job.id),
         workspacePath: settings.workspacePath,
@@ -103,6 +115,33 @@ export class SessionToolJobProcessor {
           );
         }
       });
+      codexAttemptResult = runnerResult;
+      this.options.assertClaimUsable(state, signal);
+      let result = runnerResult;
+      try {
+        if (this.options.finalizeCodexResult) {
+          stagedFinalization = await this.options.finalizeCodexResult({
+            job,
+            settings,
+            result: runnerResult,
+            signal
+          });
+          result = stagedFinalization.result;
+        } else if (runnerResult.artifacts?.length) {
+          throw Object.assign(new Error("Codex artifact finalizer is not configured."), {
+            code: "codex_artifact_finalizer_unavailable"
+          });
+        }
+      } catch (error) {
+        const sensitivePaths = await codexResultSensitivePaths({
+          job,
+          settings,
+          resultFile: runnerResult.resultFile
+        });
+        const finalizationError = sanitizeCodexArtifactError(error, sensitivePaths);
+        codexAttemptResult = codexArtifactFailureResult(runnerResult, finalizationError);
+        throw finalizationError;
+      }
       codexAttemptResult = result;
       this.options.assertClaimUsable(state, signal);
       this.options.store.completeToolJob({
@@ -114,16 +153,45 @@ export class SessionToolJobProcessor {
         result,
         error: result.ok ? undefined : result.error
       });
+      stagedFinalization?.commit();
+      stagedFinalization = undefined;
       state.finalized = true;
     } catch (error) {
-      const status: CodexTaskStatus = signal.aborted ? "timed_out" : "failed";
+      let terminalError = error;
+      let rollbackFailed = false;
+      if (stagedFinalization) {
+        try {
+          await stagedFinalization.rollback();
+        } catch {
+          rollbackFailed = true;
+          terminalError = Object.assign(
+            new Error("codex_artifact_rollback_failed"),
+            { code: "codex_artifact_rollback_failed" }
+          );
+          if (codexAttemptResult) {
+            codexAttemptResult = codexArtifactFailureResult(
+              codexAttemptResult,
+              terminalError
+            );
+          }
+        }
+      }
+      stagedFinalization = undefined;
+      const status: CodexTaskStatus = rollbackFailed
+        ? "failed"
+        : signal.aborted || isTimeoutError(terminalError) ? "timed_out" : "failed";
       if (job.toolName === "codex" && codexProcessStarted && !codexAttemptResult) {
         codexAttemptResult = {
           ok: false,
           status,
           jobId: job.id,
           kind: "analysis",
-          error: { code: "worker_failed", message: error instanceof Error ? error.message : String(error) }
+          error: {
+            code: "worker_failed",
+            message: terminalError instanceof Error
+              ? terminalError.message
+              : String(terminalError)
+          }
         };
       }
       if (state.finalized || this.options.isStopped()) return;
@@ -133,7 +201,7 @@ export class SessionToolJobProcessor {
         attempt: job.attempts,
         attemptToken,
         status,
-        error: serializeError(error)
+        error: serializeError(terminalError)
       });
       state.finalized = true;
     } finally {
@@ -196,6 +264,10 @@ function combineSignals(...signals: AbortSignal[]) {
   return controller.signal;
 }
 
+function isTimeoutError(error: unknown) {
+  return error instanceof Error && error.name === "TimeoutError";
+}
+
 function serializeError(error: unknown) {
   if (error instanceof Error) {
     return {
@@ -212,4 +284,23 @@ function serializeError(error: unknown) {
 function requiredText(value: unknown, name: string) {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required.`);
   return value.trim();
+}
+
+function codexArtifactFailureResult(
+  result: CodexToolResult,
+  error: unknown
+): CodexToolResult {
+  return {
+    ...result,
+    ok: false,
+    status: "failed",
+    artifacts: undefined,
+    error: {
+      code: typeof (error as { code?: unknown } | undefined)?.code === "string"
+        ? String((error as { code: string }).code)
+        : "codex_artifact_publish_failed",
+      message: error instanceof Error ? error.message : String(error),
+      retryable: false
+    }
+  };
 }

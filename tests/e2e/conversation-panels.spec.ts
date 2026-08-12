@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { installMockApi } from "./mock-api";
 
 test("会话快捷开关与设置、Token 侧栏保持独立", async ({ page }) => {
-  await installMockApi(page);
+  const state = await installMockApi(page);
   await page.goto("/conversations/group%3A10001");
 
   const quick = page.getByLabel("会话快捷操作");
@@ -35,6 +35,20 @@ test("会话快捷开关与设置、Token 侧栏保持独立", async ({ page }) 
   const settingsPanel = page.getByRole("dialog", { name: "会话设置" });
   await expect(settingsPanel).toBeVisible();
   await expect(settingsPanel.getByRole("heading", { name: "回复控制" })).toBeVisible();
+  const responseTimeOverride = settingsPanel.getByLabel("编排器时间覆盖");
+  await expect(responseTimeOverride).not.toBeChecked();
+  await expect(settingsPanel.getByLabel("编排器响应时间")).toHaveCount(0);
+  await responseTimeOverride.check();
+  const responseTime = settingsPanel.getByLabel("编排器响应时间");
+  await expect(responseTime).toBeVisible();
+  await expect(responseTime).toBeEnabled();
+  await expect(responseTime).toHaveValue("60");
+  await responseTime.fill("12");
+  await responseTime.blur();
+  await expect.poll(() => state.conversationReplySettings["group:10001"]).toMatchObject({
+    orchestratorResponseTimeOverrideEnabled: true,
+    orchestratorResponseTimeMs: 12_000
+  });
   const settingsClose = settingsPanel.getByRole("button", { name: "关闭会话设置" });
   expect(await settingsPanel.locator('[data-slot="conversation-side-panel-header"]').evaluate((header) => header.firstElementChild?.getAttribute("aria-label"))).toBe("关闭会话设置");
   await settingsClose.click();

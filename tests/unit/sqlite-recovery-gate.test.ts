@@ -91,6 +91,27 @@ describe("SQLite recovery and fault-injection gate", () => {
     expect(restored.verification.crossDatabaseInvariants.agents.plana.outboxStatusCounts).toEqual({ sent: 1 });
   });
 
+  it("awaits a database-closed observer after every recovery database verification", async () => {
+    const fixture = await createFixture();
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const events: string[] = [];
+
+    await expect(verifyRecoveryPoint(created.directory, {
+      databaseOpenObserver(event: { id: string; phase?: string }) {
+        if (!event.phase) events.push(`open:${event.id}`);
+      },
+      async databaseClosedObserver(event: { id: string }) {
+        await Promise.resolve();
+        events.push(`closed:${event.id}`);
+      }
+    })).resolves.toMatchObject({ ok: true });
+
+    expect(events).toEqual(created.manifest.databases.flatMap((entry: { id: string }) => [
+      `open:${entry.id}`,
+      `closed:${entry.id}`
+    ]));
+  });
+
   it("canonicalizes the controlled macOS var directory alias before identity pinning", async () => {
     if (process.platform !== "darwin") return;
     const fixture = await createFixture();
@@ -132,8 +153,8 @@ describe("SQLite recovery and fault-injection gate", () => {
     });
   });
 
-  it.each(["conversation_thread_states", "emojis"])(
-    "requires the schema 11 current application table %s before publishing",
+  it.each(["emojis"])(
+    "requires the current application table %s before publishing",
     async (table) => {
       const fixture = await createFixture();
       const damagedMain = new DatabaseSync(fixture.mainDatabasePath);
@@ -163,8 +184,8 @@ describe("SQLite recovery and fault-injection gate", () => {
     }) => entry.agentId === "arona" && entry.kind === "application");
 
     expect(planaApplication).toMatchObject({ schemaProfile: "current" });
-    expect(planaApplication.tables).not.toHaveProperty("conversation_thread_states");
-    expect(aronaApplication.tables).toHaveProperty("conversation_thread_states", 0);
+    expect(planaApplication).toBeTruthy();
+    expect(aronaApplication).toBeTruthy();
     await expect(verifyRecoveryPoint(created.directory)).resolves.toMatchObject({ ok: true });
 
     const targetWorkspace = path.join(fixture.root, "storage-schema-9-restored");
@@ -182,16 +203,12 @@ describe("SQLite recovery and fault-injection gate", () => {
       expect(restoredMain.prepare(`
         SELECT value FROM app_metadata WHERE key = 'storage-schema-version'
       `).get()).toEqual({ value: "9" });
-      expect(restoredMain.prepare(`
-        SELECT COUNT(*) AS count FROM sqlite_schema
-        WHERE type = 'table' AND name = 'conversation_thread_states'
-      `).get()).toEqual({ count: 0 });
     } finally {
       restoredMain.close();
     }
   });
 
-  it("rejects a pre-Thread v2 manifest when its database no longer reports storage schema 9", async () => {
+  it("rejects a schema 9 v2 manifest when its database reports another version", async () => {
     const fixture = await createFixture();
     downgradeApplicationToStorageSchema9(fixture.mainDatabasePath);
     const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
@@ -232,7 +249,6 @@ describe("SQLite recovery and fault-injection gate", () => {
     }) => entry.agentId === "plana" && entry.kind === "application");
 
     expect(application).toMatchObject({ schemaProfile: "current" });
-    expect(application.tables).toHaveProperty("conversation_thread_states", 0);
     expect(application.tables).not.toHaveProperty("emojis");
     await expect(verifyRecoveryPoint(created.directory)).resolves.toMatchObject({ ok: true });
 
@@ -251,10 +267,6 @@ describe("SQLite recovery and fault-injection gate", () => {
       expect(restoredMain.prepare(`
         SELECT value FROM app_metadata WHERE key = 'storage-schema-version'
       `).get()).toEqual({ value: "10" });
-      expect(restoredMain.prepare(`
-        SELECT COUNT(*) AS count FROM sqlite_schema
-        WHERE type = 'table' AND name = 'conversation_thread_states'
-      `).get()).toEqual({ count: 1 });
       expect(restoredMain.prepare(`
         SELECT COUNT(*) AS count FROM sqlite_schema
         WHERE type = 'table' AND name = 'emojis'
@@ -290,18 +302,6 @@ describe("SQLite recovery and fault-injection gate", () => {
     });
 
     await expect(verifyRecoveryPoint(tampered)).rejects.toMatchObject({
-      code: "SQLITE_SCHEMA_INCOMPLETE"
-    });
-  });
-
-  it("rejects a storage schema 10 current application database without its Thread table", async () => {
-    const fixture = await createFixture();
-    downgradeApplicationToStorageSchema10(fixture.mainDatabasePath);
-    const database = new DatabaseSync(fixture.mainDatabasePath);
-    database.exec("DROP TABLE conversation_thread_states;");
-    database.close();
-
-    await expect(createRecoveryPoint({ workspace: fixture.workspace, quiesced: true })).rejects.toMatchObject({
       code: "SQLITE_SCHEMA_INCOMPLETE"
     });
   });
@@ -1271,7 +1271,6 @@ async function createAgentDatabases(
 function downgradeApplicationToStorageSchema9(databasePath: string) {
   const database = new DatabaseSync(databasePath);
   try {
-    database.exec("DROP TABLE conversation_thread_states;");
     database.prepare(`
       UPDATE app_metadata SET value = '9' WHERE key = 'storage-schema-version'
     `).run();

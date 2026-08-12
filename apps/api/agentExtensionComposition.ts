@@ -3,7 +3,6 @@ import { AgentExtensionStore } from "../../adapters/filesystem/agentExtensionSto
 import { AgentSkillRuntimeReader } from "../../adapters/filesystem/agentSkillRuntimeReader.js";
 import {
   BubblewrapMcpStdioLauncher,
-  DockerMcpStdioLauncher,
   EncryptedFileMcpCredentialVault,
   EnvironmentMcpServerSecretResolver,
   MCP_OAUTH_ADMIN_SUBJECT,
@@ -13,6 +12,7 @@ import {
   SdkMcpRuntimeClientFactory,
   createControlledMcpOAuthTokenExchange,
   fetchPinnedMcpAddress,
+  resolveMcpBubblewrapExecutable,
   resolveMcpHostname,
   type McpOAuthCredentialVault,
   type McpOAuthLoopbackBrokerOptions,
@@ -20,12 +20,17 @@ import {
 } from "../../adapters/mcp/public.js";
 import {
   AgentExtensionService,
+  AgentExtensionServiceError,
   AgentMcpHost,
   McpToolApprovalTransactions,
   SkillActivationService,
   buildSkillCatalog,
   type McpRuntimeClientFactory
 } from "../../services/extensions/public.js";
+import {
+  projectBashSkillRepositoryRecord,
+  type BashSkillRepositoryPort
+} from "../../services/tools/bashSkillRepository.js";
 import {
   BUILTIN_SKILL_TOOL_CAPABILITIES,
   UNAVAILABLE_SKILL_TOOL_CAPABILITIES,
@@ -37,6 +42,7 @@ import {
   RuntimeAgentExtensions,
   type RuntimeAgentExtensionsPort
 } from "../../src/runtime/agentExtensions.js";
+import { BundledAgentSkillInstaller } from "./bundledAgentSkills.js";
 
 export interface AgentExtensionCompositionOptions {
   workspaceRoot: string;
@@ -53,11 +59,6 @@ export interface AgentExtensionCompositionOptions {
   mcpStdio?: false | {
     backend: "bubblewrap";
     executableManifestPath: string;
-  } | {
-    backend: "docker";
-    dockerExecutable?: string;
-    dockerImage: string;
-    executableManifestSha256: string;
   };
 }
 
@@ -65,6 +66,7 @@ export const MCP_OAUTH_VAULT_KEY_ENV = "SUNABOT_MCP_CREDENTIAL_VAULT_KEY";
 
 export function buildAgentExtensionComposition(options: AgentExtensionCompositionOptions) {
   const store = new AgentExtensionStore({ workspaceRoot: options.workspaceRoot });
+  const bundledSkills = new BundledAgentSkillInstaller(store);
   const oauth = buildOAuth(options);
   const factory = options.mcpClientFactory ?? defaultMcpClientFactory(
     options.workspaceRoot,
@@ -124,6 +126,42 @@ export function buildAgentExtensionComposition(options: AgentExtensionCompositio
     } : undefined
   );
   const mcpRuntimeService = new McpRuntimeService(store, host, options.agentExists, approvals);
+  const bashSkillRepository: BashSkillRepositoryPort = {
+    async install(input) {
+      const record = await service.installSkill({
+        agentId: input.agentId,
+        archive: input.archive,
+        replace: input.replace
+      });
+      await notifyAgentChanged(input.agentId);
+      return projectBashSkillRepositoryRecord(record);
+    },
+    async review(input) {
+      const record = await service.reviewSkill({
+        agentId: input.agentId,
+        skillId: input.skillId,
+        approve: true
+      });
+      await notifyAgentChanged(input.agentId);
+      return projectBashSkillRepositoryRecord(record);
+    },
+    async enable(input) {
+      const record = await service.setSkillEnabled({
+        agentId: input.agentId,
+        skillId: input.skillId,
+        enabled: true
+      });
+      await notifyAgentChanged(input.agentId);
+      return projectBashSkillRepositoryRecord(record);
+    },
+    async status(input) {
+      const record = (await service.overview(input.agentId)).skills.find((skill) => skill.id === input.skillId);
+      if (!record) {
+        throw new AgentExtensionServiceError(404, "SKILL_NOT_FOUND", "Skill 不存在。", "skillId");
+      }
+      return projectBashSkillRepositoryRecord(record);
+    }
+  };
   const mcpOAuthService = oauth ? new McpOAuthAdminService({
     repository: store,
     oauth: oauth.service,
@@ -134,8 +172,12 @@ export function buildAgentExtensionComposition(options: AgentExtensionCompositio
   return {
     service,
     runtime,
+    bashSkillRepository,
     mcpRuntimeService,
     mcpOAuthService,
+    ensureBundledSkills(agentId: string) {
+      return bundledSkills.ensure(agentId);
+    },
     async skillToolCapabilities(agentId: string) {
       const index = await store.readSkillIndex(agentId);
       return {
@@ -200,32 +242,20 @@ function defaultMcpClientFactory(
   const projectionBuilder = stdioOptions ? new McpSandboxProjectionBuilder({
     workspaceRoot,
     repository: store,
-    ...(stdioOptions.backend === "bubblewrap" ? {
-      executableManifestPath: stdioOptions.executableManifestPath,
-      nodeExecutable: mcpBubblewrapNodeExecutable()
-    } : {
-      executableManifestSha256: stdioOptions.executableManifestSha256
-    })
+    executableManifestPath: stdioOptions.executableManifestPath,
+    nodeExecutable: mcpBubblewrapNodeExecutable()
   }) : undefined;
   return new SdkMcpRuntimeClientFactory({
     secrets: new EnvironmentMcpServerSecretResolver(process.env, { oauthVault }),
-    stdioLauncherFor: async ({ agentId, server, signal }) => {
+    stdioLauncherFor: async ({ agentId, server }) => {
       if (!stdioOptions) throw new Error("MCP_STDIO_ISOLATION_UNAVAILABLE");
       return {
         async launch(spec, handlers) {
-          if (!projectionBuilder || (stdioOptions.backend !== "docker" && stdioOptions.backend !== "bubblewrap")) {
-            throw new Error("MCP_STDIO_ISOLATION_UNAVAILABLE");
-          }
+          if (!projectionBuilder || stdioOptions.backend !== "bubblewrap") throw new Error("MCP_STDIO_ISOLATION_UNAVAILABLE");
           const projection = await projectionBuilder.build({ agentId, server });
-          if (stdioOptions.backend === "docker") {
-            return new DockerMcpStdioLauncher(projection, {
-              abortSignal: signal,
-              dockerExecutable: stdioOptions.dockerExecutable,
-              dockerImage: stdioOptions.dockerImage,
-              dockerEnvironment: process.env.DOCKER_HOST ? { DOCKER_HOST: process.env.DOCKER_HOST } : {}
-            }).launch(spec, handlers);
-          }
-          return new BubblewrapMcpStdioLauncher(projection).launch(spec, handlers);
+          return new BubblewrapMcpStdioLauncher(projection, {
+            bwrap: resolveMcpBubblewrapExecutable()
+          }).launch(spec, handlers);
         }
       };
     },

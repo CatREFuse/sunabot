@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AppConfig } from "../../../src/types.js";
-import { resolveProjectPath } from "../../../src/config.js";
+import type { AppConfig } from "../../../packages/contracts/admin/public.js";
+import { resolveProjectPath } from "../../../packages/platform/projectPaths.js";
 import { normalizeText } from "../domain/normalizers.js";
 import { readOptional } from "./legacyJsonl.js";
 

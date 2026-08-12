@@ -56,21 +56,9 @@ export type {
 } from "./sandboxProjection.js";
 export {
   BubblewrapMcpStdioLauncher,
-  buildMcpBubblewrapInvocation
+  buildMcpBubblewrapInvocation,
+  resolveMcpBubblewrapExecutable
 } from "./stdioSandboxLauncher.js";
-export {
-  DockerMcpStdioLauncher,
-  MCP_STDIO_DOCKER_EXECUTABLE,
-  MCP_STDIO_DOCKER_IMAGE,
-  buildMcpDockerInvocation
-} from "./dockerStdioLauncher.js";
-export type {
-  DockerMcpStdioLauncherOptions,
-  McpDockerCleanupRunner,
-  McpDockerInvocation,
-  McpDockerStdioChild,
-  McpDockerStdioSpawn
-} from "./dockerStdioLauncher.js";
 export {
   fetchPinnedMcpAddress,
   resolveMcpHostname

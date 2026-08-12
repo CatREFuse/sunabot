@@ -1,18 +1,31 @@
 import type OpenAI from "openai";
-import type { AgentToolName, BotConfig, ImageResult, ProviderConfig } from "../../../src/types.js";
+import type { AgentToolName, BotConfig, ProviderConfig } from "../../../packages/contracts/admin/public.js";
+import type { ImageResult } from "../../../packages/contracts/media/media.js";
 import type { OpenAIToolDefinition } from "../../../services/agent/promptSystem.js";
 import type { MemoryRecallInput } from "../../../services/memory/memoryService.js";
+import type { KnowledgeSearchToolPort } from "../../../services/tools/knowledgeSearchTool.js";
 import type {
   GenerateImageRunner,
-  GenerateImgReferenceContext
+  GenerateImgReferenceContext,
+  WorkbenchImagePathResolver
 } from "../../../services/tools/generateImgTool.js";
 import type { SelfieRunner } from "../../../services/tools/selfieTool.js";
 import type { SystemConfigToolPort } from "../../../services/tools/systemConfigTool.js";
+import type { CronToolPort } from "../../../services/tools/cronTool.js";
+import type { CallDirectorToolPort } from "../../../services/tools/callDirectorTool.js";
+import type {
+  AddUserProfileToolPort,
+  AddWorkMemoryToolPort,
+  ReadAirToolPort
+} from "../../../services/tools/public.js";
 import type { PrepareOutboundConversationAssetInput } from "../../../services/delivery/public.js";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
 import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
 import type { WorkspaceBashProviderOptions } from "../../../services/tools/bashTool.js";
 import type { SkillRuntimeToolPort } from "../../../services/tools/skillRuntimeTool.js";
+import type { VoiceLanguage } from "../../../services/voice/public.js";
+import type { ChatMediaToolPort } from "../../../services/tools/chatMediaTool.js";
+import type { ProviderToolSchemaProtocol } from "../../../services/tools/providerToolSchema.js";
 
 export interface ProviderCompleteOptions {
   signal?: AbortSignal;
@@ -20,25 +33,42 @@ export interface ProviderCompleteOptions {
   modelRequestAttemptTimeoutMs?: number;
   allowNoReply?: boolean;
   workbenchFiles?: ProviderWorkbenchFileOptions;
+  chatMedia?: ChatMediaToolPort;
   bash?: ProviderBashOptions;
   bot?: BotConfig;
   generateImage?: GenerateImageRunner;
   onAssistantText?: (text: string, source?: ProviderAssistantTextSource) => void | Promise<void>;
   onToolCall?: (name: string) => void;
-  onImageGenerated?: (image: ImageResult) => void;
+  onImageGenerated?: (image: ImageResult, metadata?: GeneratedImageMetadata) => void;
   referenceImageUrls?: string[];
   imageReferences?: GenerateImgReferenceContext;
+  resolveWorkbenchImagePaths?: WorkbenchImagePathResolver;
   memory?: ProviderMemoryOptions;
+  knowledge?: KnowledgeSearchToolPort;
   selfie?: ProviderSelfieOptions;
   conversationAssets?: ProviderConversationAssetOptions;
+  voice?: ProviderVoiceCapability;
   asyncCodex?: boolean;
+  codexControl?: boolean;
   asyncImage?: boolean;
   imageTools?: boolean;
   systemConfig?: SystemConfigToolPort;
+  cron?: CronToolPort;
+  director?: CallDirectorToolPort;
+  air?: ReadAirToolPort;
+  workingMemory?: AddWorkMemoryToolPort;
+  userProfile?: AddUserProfileToolPort;
   skills?: SkillRuntimeToolPort;
   disabledTools?: readonly AgentToolName[];
+  blockedToolExecutions?: readonly AgentToolName[];
   mcp?: ProviderMcpOptions;
   logContext?: ProviderLogContext;
+}
+
+export interface GeneratedImageMetadata {
+  prompt?: string;
+  size?: string;
+  resolution?: string;
 }
 
 export type ProviderAssistantTextSource = "text" | "assistant_text";
@@ -46,13 +76,21 @@ export type ProviderAssistantTextSource = "text" | "assistant_text";
 export interface TurnToolState {
   toolCallCount: number;
   assistantTextSent: boolean;
+  assistantTextDeliveryCount: number;
+  deliveredAssistantText?: {
+    text: string;
+    source: ProviderAssistantTextSource;
+  };
   acceptedToolNames: string[];
-  terminal?: "deferred" | "no_reply";
+  terminal?: "deferred" | "no_reply" | "voice";
 }
 
 export interface ProviderCompletedTurn {
   kind: "completed";
   text: string;
+  messageOrigin?: ProviderAssistantTextSource;
+  textAlreadyDelivered?: boolean;
+  voice?: ProviderVoiceCompanion;
 }
 
 export interface ProviderDeferredTurn {
@@ -63,6 +101,14 @@ export interface ProviderDeferredTurn {
     callId: string;
     arguments: Record<string, unknown>;
   };
+  voice?: ProviderVoiceCompanion;
+}
+
+export interface ProviderVoiceCompanion {
+  text: string;
+  language: VoiceLanguage;
+  callId: string;
+  toolName: "send_voice_message";
 }
 
 export interface ProviderNoReplyTurn {
@@ -95,6 +141,12 @@ export interface ProviderConversationAssetOptions {
     input: PrepareOutboundConversationAssetInput,
     context: { callId: string; toolName: "send_file" }
   ) => Promise<unknown>;
+}
+
+export interface ProviderVoiceCapability {
+  enabled: boolean;
+  languages: readonly VoiceLanguage[];
+  defaultLanguage: VoiceLanguage;
 }
 
 export interface ProviderMcpOptions {
@@ -134,7 +186,18 @@ export interface ProviderLoggerPort {
 }
 
 export interface ProviderToolExecutorPort {
-  resolveDefinitions(options: ProviderCompleteOptions, definitions?: OpenAIToolDefinition[]): Record<string, unknown>[];
+  resolveDefinitions(
+    options: ProviderCompleteOptions,
+    definitions?: OpenAIToolDefinition[],
+    protocol?: ProviderToolSchemaProtocol
+  ): Record<string, unknown>[];
+  companionTurn(
+    calls: ResponseFunctionCallItem[],
+    siblingText: string,
+    options: ProviderCompleteOptions,
+    definitions: readonly Record<string, unknown>[],
+    state?: TurnToolState
+  ): ProviderCompletedTurn | ProviderDeferredTurn | null;
   deferredTurn(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,
@@ -146,7 +209,7 @@ export interface ProviderToolExecutorPort {
     options: ProviderCompleteOptions,
     definitions: readonly Record<string, unknown>[],
     state?: TurnToolState
-  ): ProviderNoReplyTurn | null;
+  ): Promise<ProviderNoReplyTurn | null>;
   execute(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,
@@ -156,13 +219,14 @@ export interface ProviderToolExecutorPort {
 }
 
 export interface GeneratedImageWriterPort {
-  write(payload: unknown, imageModel: string, size: string): ImageResult;
+  write(payload: unknown, imageModel: string, size: string): ImageResult | Promise<ImageResult>;
 }
 
 export interface ProviderTransportFactories {
   createResponsesClient(options?: { maxRetries?: number }): OpenAI;
   createChatClient(options?: { maxRetries?: number }): OpenAI;
   getApiKey(): string;
+  getApiKeyAsync(): Promise<string>;
 }
 
 export interface ProviderAdapterContext extends ProviderTransportFactories {

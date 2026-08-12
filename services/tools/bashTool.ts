@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
-import { resolveAgentWorkbench } from "../agents/public.js";
+import { resolveAgentBashEnvironment } from "../agents/public.js";
 import {
   bashApprovalStore,
   isValidBashApprovalContext,
@@ -14,64 +14,72 @@ import {
   type BashPathAccess
 } from "./bashAudit.js";
 import {
-  captureWorkbenchIdentity,
+  captureWorkbenchIdentities,
   prepareOutsideApprovalAccesses,
   prepareRestrictedPaths,
   verifyApprovalAccesses,
-  verifyFrozenFilesystemIdentity,
+  verifyWorkbenchIdentities,
   verifyRestrictedPaths,
-  type FrozenFilesystemIdentity,
+  type FrozenWorkbenchIdentities,
   type FrozenRestrictedPath
 } from "./bashFilesystemGuard.js";
+import { evaluateBashPolicy } from "./bashPolicy.js";
+import { runBashAuditWithDeadline } from "./bashAuditDeadline.js";
 import {
   WORKSPACE_BASH_ISOLATION_ERROR,
   WORKSPACE_BASH_VIRTUAL_ROOT,
+  buildWorkspaceBashEnvironment,
   buildWorkspaceBashInvocation,
   ensureWorkspaceBashIsolation,
   type WorkspaceBashInvocation,
+  type WorkspaceBashReadOnlyMounts,
   type WorkspaceBashSandboxOptions
 } from "./bashSandbox.js";
-import { evaluateBashPolicy } from "./bashPolicy.js";
-import { TOOL_CALL_TIMEOUT_MS } from "./toolConstants.js";
+import {
+  isBashConfigurationCurrent,
+  normalizeBashCommand,
+  normalizeBashTimeout,
+  normalizeBashUserRequest,
+  validateBasicBashCommand
+} from "./bashToolInput.js";
+import {
+  OUTSIDE_READ_APPROVAL_GUARANTEE,
+  blockedResult,
+  configurationStaleResult,
+  sanitizeAuditResult,
+  truncateOutput,
+  visibleBashText,
+  withOutsideReadApprovalGuarantee,
+  type WorkspaceBashResult
+} from "./bashToolResult.js";
+import {
+  BashSkillRepositoryCommandError,
+  executeBashSkillRepositoryCommand,
+  isBashSkillRepositoryPort,
+  parseBashSkillRepositoryCommand,
+  type BashSkillRepositoryCommand,
+  type BashSkillRepositoryPort
+} from "./bashSkillRepository.js";
+import { nativeBashTool } from "./bashToolDefinition.js";
 
-export const WORKSPACE_BASH_TOOL_NAME = "workspace_bash";
-
-const MAX_COMMAND_LENGTH = 4_000;
-const MAX_OUTPUT_CHARS = 24_000;
-const OUTSIDE_READ_APPROVAL_GUARANTEE = "仅授权读取既存 canonical regular file；完整父链身份已冻结，并会在只读 bind 前复验。";
+export {
+  NATIVE_BASH_TOOL_NAME,
+  nativeBashTool
+} from "./bashToolDefinition.js";
 
 export interface WorkspaceBashInput {
   command?: unknown;
   timeoutMs?: unknown;
 }
 
-export interface WorkspaceBashResult {
-  ok: boolean;
-  command: string;
-  cwd: string;
-  backend: BashExecutionBackend;
-  accessMode: BashAccessMode;
-  exitCode: number | null;
-  signal: string | null;
-  timedOut: boolean;
-  stdout: string;
-  stderr: string;
-  audit?: BashAuditResult;
-  approvalRequired?: boolean;
-  approvalId?: string;
-  approvalExpiresAt?: string;
-  confirmationText?: string;
-  approvalSummary?: string;
-  approvalAccesses?: Array<{ path: string; access: "read" | "write" | "delete" }>;
-  cleanupAttempted?: boolean;
-  cleanupSucceeded?: boolean;
-  cleanupError?: "BASH_DOCKER_CLEANUP_FAILED";
-}
+export type { WorkspaceBashResult } from "./bashToolResult.js";
 
 export interface WorkspaceBashOptions {
   backend?: BashExecutionBackend;
   accessMode?: BashAccessMode;
   strictMode?: boolean;
+  isAdmin?: boolean;
+  userRequest?: string;
   audit?: BashAuditRunner;
   approvalContext?: BashApprovalContext;
   confirmedApprovalId?: string;
@@ -79,6 +87,7 @@ export interface WorkspaceBashOptions {
   abortSignal?: AbortSignal;
   isCurrent?: () => boolean;
   sandbox?: WorkspaceBashSandboxOptions;
+  skillRepository?: BashSkillRepositoryPort;
   /** @deprecated Retained until the runtime configuration migration is committed. */
   workspaceOnly?: boolean;
   /** @deprecated Deterministic policy and the audit agent replace keyword matching. */
@@ -91,39 +100,21 @@ export interface WorkspaceBashProviderOptions {
   backend: BashExecutionBackend;
   accessMode: BashAccessMode;
   strictMode: boolean;
+  isAdmin: boolean;
+  userRequest: string;
   isCurrent: () => boolean;
   audit: BashAuditRunner;
   approvalContext: BashApprovalContext;
   confirmedApprovalId?: string;
+  skillRepository?: BashSkillRepositoryPort;
 }
 
-export const workspaceBashTool = {
-  type: "function",
-  name: WORKSPACE_BASH_TOOL_NAME,
-  description: "Run an independently audited command from the current Agent workbench. Restricted conversations accept one fixed local file-operation argv without shell syntax or network access. Administrator Bash remains strongly sandboxed; external access is denied or requires an exact one-time confirmation.",
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      command: {
-        type: "string",
-        description: "Bash command to run from the current Agent workbench."
-      },
-      timeoutMs: {
-        type: ["integer", "null"],
-        enum: [TOOL_CALL_TIMEOUT_MS, null],
-        description: "Tool timeout is fixed at 300000 milliseconds. Use null to apply it."
-      }
-    },
-    required: ["command", "timeoutMs"]
-  },
-  strict: true
-};
+/** @deprecated Use nativeBashTool. */
+export const workspaceBashTool = nativeBashTool;
 
-export function createWorkspaceBashTool(_options: WorkspaceBashOptions = {}) {
-  return workspaceBashTool;
+export function createWorkspaceBashTool() {
+  return nativeBashTool;
 }
-
 export function isWorkspaceBashProviderOptions(value: unknown): value is WorkspaceBashProviderOptions {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const options = value as Record<string, unknown>;
@@ -134,40 +125,56 @@ export function isWorkspaceBashProviderOptions(value: unknown): value is Workspa
     "backend",
     "accessMode",
     "strictMode",
+    "isAdmin",
+    "userRequest",
     "isCurrent",
     "audit",
     "approvalContext",
-    "confirmedApprovalId"
+    "confirmedApprovalId",
+    "skillRepository"
   ]);
   if (Object.keys(options).some((key) => !allowedKeys.has(key))) return false;
   if (
     options.enabled !== true
     || typeof options.workspacePath !== "string"
     || !path.isAbsolute(options.workspacePath)
-    || (options.backend !== "native" && options.backend !== "docker")
-    || (options.accessMode !== "admin" && options.accessMode !== "restricted")
+    || options.backend !== "native"
+    || (options.accessMode !== "admin" && options.accessMode !== "isolated" && options.accessMode !== "restricted")
+    || (options.accessMode !== "admin" && options.accessMode !== "isolated")
     || typeof options.strictMode !== "boolean"
+    || typeof options.isAdmin !== "boolean"
+    || typeof options.userRequest !== "string"
+    || !options.userRequest.trim()
+    || options.userRequest.length > 32_000
     || typeof options.isCurrent !== "function"
     || typeof options.audit !== "function"
     || !approvalContext
     || typeof approvalContext !== "object"
     || Array.isArray(approvalContext)
     || !isValidBashApprovalContext(approvalContext as BashApprovalContext)
+    || (approvalContext as BashApprovalContext).backend !== options.backend
   ) return false;
+  if (options.skillRepository !== undefined && !isBashSkillRepositoryPort(options.skillRepository)) return false;
+  if (options.skillRepository !== undefined && (
+    options.backend !== "native" || options.accessMode !== "admin" || options.isAdmin !== true
+  )) return false;
   return options.confirmedApprovalId === undefined
     || (typeof options.confirmedApprovalId === "string" && /^bash-[a-f0-9]{24}$/.test(options.confirmedApprovalId));
 }
-
 export async function runWorkspaceBash(
   input: WorkspaceBashInput,
   agentWorkspacePath: string,
   options: WorkspaceBashOptions = {}
 ): Promise<WorkspaceBashResult> {
-  const command = normalizeCommand(input.command);
-  const backend = options.backend ?? "native";
+  const command = normalizeBashCommand(input.command);
+  const backend = "native" as const;
   const accessMode = options.accessMode ?? "admin";
-  const timeoutMs = normalizeTimeout(input.timeoutMs);
+  const isAdmin = options.isAdmin ?? accessMode === "admin";
+  const userRequest = normalizeBashUserRequest(options.userRequest, command);
+  const timeoutMs = normalizeBashTimeout(input.timeoutMs);
   let workbenchRoot = "";
+  let addressableWorkbenchRoot = "";
+  let readOnlyMounts: WorkspaceBashReadOnlyMounts | undefined;
   const stale = (audit?: BashAuditResult) => configurationStaleResult(
     command,
     workbenchRoot,
@@ -176,11 +183,14 @@ export async function runWorkspaceBash(
     audit
   );
   if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
-  let workbenchIdentity: FrozenFilesystemIdentity;
+  let workbenchIdentities: FrozenWorkbenchIdentities;
   try {
-    workbenchRoot = await resolveAgentWorkbench(agentWorkspacePath);
+    const bashEnvironment = await resolveAgentBashEnvironment(agentWorkspacePath);
+    workbenchRoot = bashEnvironment.workbenchRoot;
+    addressableWorkbenchRoot = bashEnvironment.addressableWorkbenchRoot;
+    readOnlyMounts = bashEnvironment.readOnlyMounts;
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
-    workbenchIdentity = await captureWorkbenchIdentity(workbenchRoot);
+    workbenchIdentities = await captureWorkbenchIdentities(workbenchRoot, addressableWorkbenchRoot);
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
   } catch {
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
@@ -192,8 +202,41 @@ export async function runWorkspaceBash(
       "BASH_WORKBENCH_INVALID: current Agent workbench is unavailable."
     );
   }
-  const basicReason = validateBasicCommand(command);
+  const basicReason = validateBasicBashCommand(command);
   if (basicReason) return blockedResult(command, workbenchRoot, backend, accessMode, basicReason);
+
+  let skillRepositoryCommand: BashSkillRepositoryCommand | undefined;
+  try {
+    skillRepositoryCommand = parseBashSkillRepositoryCommand(command);
+  } catch (error) {
+    if (error instanceof BashSkillRepositoryCommandError) {
+      return blockedResult(
+        command,
+        workbenchRoot,
+        backend,
+        accessMode,
+        `${error.code}: ${error.message}`
+      );
+    }
+    throw error;
+  }
+  if (skillRepositoryCommand && (
+    backend !== "native"
+    || accessMode !== "admin"
+    || !isAdmin
+    || !options.approvalContext
+    || !isValidBashApprovalContext(options.approvalContext)
+    || options.approvalContext.backend !== "native"
+    || !options.skillRepository
+  )) {
+    return blockedResult(
+      command,
+      workbenchRoot,
+      backend,
+      accessMode,
+      "BASH_SKILL_REPOSITORY_NATIVE_ADMIN_REQUIRED: Skill repository commands require Native Bash in an administrator private conversation."
+    );
+  }
 
   if (!options.audit) {
     return blockedResult(command, workbenchRoot, backend, accessMode, "BASH_AUDIT_UNAVAILABLE: no independent audit runner is configured.");
@@ -202,13 +245,14 @@ export async function runWorkspaceBash(
   let audit: BashAuditResult;
   if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
   try {
-    audit = await options.audit({
+    audit = await runBashAuditWithDeadline(options.audit, {
       command,
       backend,
       accessMode,
       strictMode: options.strictMode !== false,
-      ...(options.abortSignal ? { signal: options.abortSignal } : {})
-    });
+      isAdmin,
+      userRequest
+    }, options.abortSignal);
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
   } catch {
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
@@ -227,10 +271,51 @@ export async function runWorkspaceBash(
     accessMode,
     strictMode: options.strictMode !== false,
     workbenchRoot,
+    addressableWorkbenches: [{ root: addressableWorkbenchRoot, writable: true }],
     audit
   });
   if (policy.decision === "deny") {
     return blockedResult(command, workbenchRoot, backend, accessMode, policy.reason, audit);
+  }
+  if (skillRepositoryCommand && policy.decision !== "allow") {
+    return blockedResult(
+      command,
+      workbenchRoot,
+      backend,
+      accessMode,
+      "BASH_SKILL_REPOSITORY_AUDIT_DENIED: managed Skill repository commands require an allow audit decision.",
+      audit
+    );
+  }
+
+  if (skillRepositoryCommand && options.skillRepository && options.approvalContext) {
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+    try {
+      await verifyWorkbenchIdentities(workbenchIdentities);
+    } catch {
+      if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+      return blockedResult(
+        command,
+        workbenchRoot,
+        backend,
+        accessMode,
+        "BASH_WORKBENCH_CHANGED: current Agent workbench changed before execution.",
+        audit
+      );
+    }
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+    return executeBashSkillRepositoryCommand({
+      command,
+      managed: skillRepositoryCommand,
+      agentId: options.approvalContext.agentId,
+      workbenchRoot,
+      backend,
+      accessMode,
+      audit,
+      repository: options.skillRepository,
+      abortSignal: options.abortSignal,
+      isCurrent: options.isCurrent
+    });
   }
 
   let frozenRestrictedPaths: FrozenRestrictedPath[] = [];
@@ -255,7 +340,9 @@ export async function runWorkspaceBash(
   let approvedOutsideAccesses: BashPathAccess[] = policy.outsideAccesses;
   let frozenApprovalAccesses: BashApprovalAccess[] = [];
   if (policy.decision === "confirm") {
-    if (!options.approvalContext || !isValidBashApprovalContext(options.approvalContext)) {
+    if (!options.approvalContext
+      || !isValidBashApprovalContext(options.approvalContext)
+      || options.approvalContext.backend !== backend) {
       return blockedResult(command, workbenchRoot, backend, accessMode, "BASH_APPROVAL_CONTEXT_UNAVAILABLE", audit);
     }
     const store = options.approvalStore ?? bashApprovalStore;
@@ -347,7 +434,7 @@ export async function runWorkspaceBash(
 
   if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
   try {
-    await verifyFrozenFilesystemIdentity(workbenchIdentity, "directory");
+    await verifyWorkbenchIdentities(workbenchIdentities);
   } catch {
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     return blockedResult(
@@ -360,18 +447,21 @@ export async function runWorkspaceBash(
     );
   }
   if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
-  const environment = buildWorkbenchEnv();
+  const environment = buildWorkspaceBashEnvironment();
   try {
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     const sandbox = await ensureWorkspaceBashIsolation(
       backend,
       workbenchRoot,
       environment,
-      options.sandbox
+      {
+        ...options.sandbox,
+        readOnlyMounts
+      }
     );
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     try {
-      await verifyFrozenFilesystemIdentity(workbenchIdentity, "directory");
+      await verifyWorkbenchIdentities(workbenchIdentities);
     } catch {
       if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
       return blockedResult(
@@ -419,14 +509,16 @@ export async function runWorkspaceBash(
       if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     }
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+    const execution = policy.restrictedInvocation
+      ? { kind: "argv" as const, ...policy.restrictedInvocation }
+      : { kind: "shell" as const, command };
     const invocation = buildWorkspaceBashInvocation(
-      policy.restrictedInvocation
-        ? { kind: "argv", ...policy.restrictedInvocation }
-        : { kind: "shell", command },
+      execution,
       workbenchRoot,
       environment,
       sandbox,
-      approvedOutsideAccesses
+      approvedOutsideAccesses,
+      readOnlyMounts
     );
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     return await executeCommand(invocation, {
@@ -434,6 +526,7 @@ export async function runWorkspaceBash(
       workbenchRoot,
       backend,
       accessMode,
+      exposeHostPaths: sandbox.kind === "host",
       timeoutMs,
       environment,
       audit,
@@ -447,7 +540,7 @@ export async function runWorkspaceBash(
       workbenchRoot,
       backend,
       accessMode,
-      `${WORKSPACE_BASH_ISOLATION_ERROR}: strong sandbox capability check failed.`,
+      `${WORKSPACE_BASH_ISOLATION_ERROR}: Bash execution capability check failed.`,
       audit
     );
   }
@@ -464,6 +557,7 @@ interface ExecuteCommandOptions {
   workbenchRoot: string;
   backend: BashExecutionBackend;
   accessMode: BashAccessMode;
+  exposeHostPaths: boolean;
   timeoutMs: number;
   environment: Record<string, string>;
   audit: BashAuditResult;
@@ -495,59 +589,44 @@ function executeCommand(invocation: WorkspaceBashInvocation, options: ExecuteCom
       error: ExecFileError | null,
       stdout: string,
       stderr: string,
-      forcedTermination?: "timeout" | "abort",
-      cleanupEligible = true
+      forcedTermination?: "timeout" | "abort"
     ) => {
       if (completionStarted) return;
       completionStarted = true;
       clearTerminationHooks();
       const nodeError = error as ExecFileError | null;
-      const cleanup = error && cleanupEligible && invocation.cleanup
-        ? await cleanupInvocation(invocation.cleanup)
-        : undefined;
       const timedOut = forcedTermination === "timeout";
-      let resultStderr = forcedTermination === "timeout"
+      const resultStderr = forcedTermination === "timeout"
         ? "BASH_EXECUTION_TIMEOUT: sandboxed command exceeded the fixed deadline."
         : forcedTermination === "abort"
           ? "BASH_EXECUTION_ABORTED: sandboxed command was aborted."
           : error
             ? "BASH_EXECUTION_FAILED: sandboxed command did not complete."
             : stderr;
-      if (cleanup && !cleanup.succeeded) {
-        resultStderr = [
-          resultStderr,
-          "BASH_DOCKER_CLEANUP_FAILED: Docker container cleanup could not be verified."
-        ].filter(Boolean).join("\n");
-      }
       resolve({
         ok: !error,
-        command: sanitizeHostText(options.command, options.workbenchRoot),
-        cwd: WORKSPACE_BASH_VIRTUAL_ROOT,
+        command: visibleBashText(options.command, options),
+        cwd: options.exposeHostPaths ? options.workbenchRoot : WORKSPACE_BASH_VIRTUAL_ROOT,
         backend: options.backend,
         accessMode: options.accessMode,
         exitCode: typeof nodeError?.code === "number" ? nodeError.code : error ? 1 : 0,
         signal: typeof nodeError?.signal === "string" ? nodeError.signal : null,
         timedOut,
-        stdout: truncateOutput(sanitizeHostText(stdout, options.workbenchRoot)),
-        stderr: truncateOutput(sanitizeHostText(resultStderr, options.workbenchRoot)),
-        audit: sanitizeAuditResult(options.audit, options.workbenchRoot),
-        cleanupAttempted: cleanup?.attempted,
-        cleanupSucceeded: cleanup?.succeeded,
-        cleanupError: cleanup && !cleanup.succeeded ? "BASH_DOCKER_CLEANUP_FAILED" : undefined
+        stdout: truncateOutput(visibleBashText(stdout, options)),
+        stderr: truncateOutput(visibleBashText(resultStderr, options)),
+        audit: sanitizeAuditResult(options.audit, options.workbenchRoot)
       });
     };
     const terminate = (kind: "timeout" | "abort") => {
       try {
         child?.kill("SIGKILL");
-      } catch {
-        // Cleanup below remains the authoritative Docker container termination path.
-      }
+      } catch {}
       const error = Object.assign(new Error(kind), { killed: true, signal: "SIGKILL" });
       void finish(error, "", "", kind);
     };
     if (options.signal?.aborted) {
       const error = Object.assign(new Error("aborted"), { killed: true, signal: "SIGKILL" });
-      void finish(error, "", "", "abort", false);
+      void finish(error, "", "", "abort");
       return;
     }
     try {
@@ -568,156 +647,4 @@ function executeCommand(invocation: WorkspaceBashInvocation, options: ExecuteCom
       void finish(error as ExecFileError, "", "");
     }
   });
-}
-
-function cleanupInvocation(cleanup: NonNullable<WorkspaceBashInvocation["cleanup"]>) {
-  return new Promise<{ attempted: true; succeeded: boolean }>((resolve) => {
-    let child: { kill(signal?: NodeJS.Signals | number): boolean } | undefined;
-    let watchdog: NodeJS.Timeout | undefined;
-    let completed = false;
-    const finish = (succeeded: boolean) => {
-      if (completed) return;
-      completed = true;
-      if (watchdog) clearTimeout(watchdog);
-      resolve({ attempted: true, succeeded });
-    };
-    try {
-      child = execFile(cleanup.file, cleanup.args, {
-        env: cleanup.env,
-        timeout: 10_000,
-        maxBuffer: 64 * 1_024,
-        killSignal: "SIGKILL"
-      }, (error, _stdout, stderr) => {
-        const alreadyAbsent = /no such container/i.test(`${stderr}\n${error?.message ?? ""}`);
-        finish(!error || alreadyAbsent);
-      });
-      watchdog = setTimeout(() => {
-        try {
-          child?.kill("SIGKILL");
-        } catch {
-          // The bounded cleanup result remains failed even if launcher termination throws.
-        }
-        finish(false);
-      }, 10_000);
-      watchdog.unref();
-    } catch {
-      finish(false);
-    }
-  });
-}
-
-function normalizeCommand(value: unknown) {
-  return String(value ?? "").trim();
-}
-
-function normalizeTimeout(_value: unknown) {
-  return TOOL_CALL_TIMEOUT_MS;
-}
-
-function validateBasicCommand(command: string) {
-  if (!command) return "Empty bash command.";
-  if (command.length > MAX_COMMAND_LENGTH) return `Command is too long. Maximum length is ${MAX_COMMAND_LENGTH} characters.`;
-  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(command)) return "Control characters are not allowed.";
-  return "";
-}
-
-function isBashConfigurationCurrent(isCurrent?: () => boolean) {
-  if (!isCurrent) return true;
-  try {
-    return isCurrent() === true;
-  } catch {
-    return false;
-  }
-}
-
-function configurationStaleResult(
-  command: string,
-  workbenchRoot: string,
-  backend: BashExecutionBackend,
-  accessMode: BashAccessMode,
-  audit?: BashAuditResult
-) {
-  return blockedResult(
-    command,
-    workbenchRoot,
-    backend,
-    accessMode,
-    "BASH_CONFIGURATION_STALE: Bash configuration changed before execution.",
-    audit
-  );
-}
-
-function buildWorkbenchEnv(): Record<string, string> {
-  return {
-    PATH: "/usr/local/bin:/usr/bin:/bin",
-    HOME: WORKSPACE_BASH_VIRTUAL_ROOT,
-    PWD: WORKSPACE_BASH_VIRTUAL_ROOT,
-    TMPDIR: "/tmp/",
-    TMP: "/tmp",
-    TEMP: "/tmp",
-    LANG: process.env.LANG || "C.UTF-8",
-    LC_ALL: process.env.LC_ALL || "",
-    SHELL: "/bin/bash",
-    USER: "sunabot"
-  };
-}
-
-function blockedResult(
-  command: string,
-  workbenchRoot: string,
-  backend: BashExecutionBackend,
-  accessMode: BashAccessMode,
-  reason: string,
-  audit?: BashAuditResult
-): WorkspaceBashResult {
-  return {
-    ok: false,
-    command: sanitizeHostText(command, workbenchRoot),
-    cwd: WORKSPACE_BASH_VIRTUAL_ROOT,
-    backend,
-    accessMode,
-    exitCode: null,
-    signal: null,
-    timedOut: false,
-    stdout: "",
-    stderr: sanitizeHostText(reason, workbenchRoot),
-    audit: audit ? sanitizeAuditResult(audit, workbenchRoot) : undefined
-  };
-}
-
-function sanitizeAuditResult(audit: BashAuditResult, workbenchRoot: string): BashAuditResult {
-  return {
-    ...audit,
-    outsideAccesses: audit.outsideAccesses.map((access) => ({
-      ...access,
-      path: sanitizeHostText(access.path, workbenchRoot)
-    })),
-    violations: audit.violations.map((violation) => sanitizeHostText(violation, workbenchRoot)),
-    summary: sanitizeHostText(audit.summary, workbenchRoot)
-  };
-}
-
-function withOutsideReadApprovalGuarantee(audit: BashAuditResult): BashAuditResult {
-  if (audit.summary.includes(OUTSIDE_READ_APPROVAL_GUARANTEE)) return audit;
-  return { ...audit, summary: `${audit.summary} ${OUTSIDE_READ_APPROVAL_GUARANTEE}` };
-}
-
-function sanitizeHostText(value: string, workbenchRoot: string) {
-  if (!workbenchRoot) return value;
-  const agentWorkspace = path.dirname(workbenchRoot);
-  return [
-    [workbenchRoot, WORKSPACE_BASH_VIRTUAL_ROOT],
-    [agentWorkspace, "/agent-workspace"]
-  ].reduce((text, [hostPath, virtualPath]) => hostPath && hostPath !== "/"
-    ? text.split(hostPath).join(virtualPath)
-    : text, value);
-}
-
-function truncateOutput(value: string) {
-  if (value.length <= MAX_OUTPUT_CHARS) return value;
-  return `${value.slice(0, MAX_OUTPUT_CHARS)}\n[truncated]`;
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error || "unknown error");
 }

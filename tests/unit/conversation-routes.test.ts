@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +10,7 @@ import type { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import type { ConversationDirectory } from "../../services/conversations/conversationDirectory.js";
 import { SunaRuntime } from "../../src/runtime.js";
-import { appendRequestLog } from "../../src/requestLog.js";
+import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import { applicationDataStore, closeApplicationDataStores } from "../../adapters/sqlite/applicationDataStore.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
@@ -64,13 +65,13 @@ describe("conversation API plugin", () => {
 
     registerConversationRoutes(app, { runtime, onebotGateway, conversationDirectory });
 
-    expect((await app.inject({ method: "GET", url: "/api/conversations" })).json())
+    expect((await app.inject({ method: "GET", url: "/api/conversations?agentId=plana" })).json())
       .toEqual({ conversations: records });
     expect(hydrateConversationRecords).toHaveBeenCalledWith(onebotGateway);
 
     expect((await app.inject({
       method: "GET",
-      url: "/api/conversations/private%3A171419991/messages?before=12&limit=5"
+      url: "/api/conversations/private%3A171419991/messages?agentId=plana&before=12&limit=5"
     })).json()).toEqual({ messages: [{ role: "user", content: "hello" }] });
     expect(hydrateConversationIdentities).toHaveBeenCalledWith("private:171419991", onebotGateway);
     expect(getConversationMessages).toHaveBeenCalledWith("private:171419991", {
@@ -80,14 +81,14 @@ describe("conversation API plugin", () => {
 
     expect((await app.inject({
       method: "GET",
-      url: "/api/conversations/private%3A171419991/stats"
+      url: "/api/conversations/private%3A171419991/stats?agentId=plana"
     })).json()).toMatchObject({
       conversationId: "private:171419991",
       messages: messageStats,
       modelCalls: { conversationId: "private:171419991" }
     });
 
-    expect((await app.inject({ method: "GET", url: "/api/web-chat/messages" })).json())
+    expect((await app.inject({ method: "GET", url: "/api/web-chat/messages?agentId=plana" })).json())
       .toEqual({ messages: [{ role: "user", content: "hello" }] });
     expect(getConversationMessages).toHaveBeenCalledWith("web:admin", { limit: 200 });
     for (const invalid of [
@@ -96,7 +97,7 @@ describe("conversation API plugin", () => {
     ]) {
       const response = await app.inject({
         method: "POST",
-        url: "/api/web-chat/messages",
+        url: "/api/web-chat/messages?agentId=plana",
         payload: { text: invalid.text }
       });
       expect(response.statusCode).toBe(400);
@@ -109,24 +110,51 @@ describe("conversation API plugin", () => {
       });
     }
 
-    const replyBody = { id: "private:171419991", replyEnabled: false };
+    const replyBody = {
+      id: "group:10001",
+      scope: "user_group",
+      replyEnabled: false,
+      orchestratorResponseTimeOverrideEnabled: true,
+      orchestratorResponseTimeMs: 15_000,
+      directorEventsEnabled: true
+    };
     expect((await app.inject({
       method: "PUT",
-      url: "/api/conversations/reply",
+      url: "/api/conversations/reply?agentId=plana",
       payload: replyBody
     })).json()).toEqual({ ok: true, conversation: replyBody });
     expect(setConversationReplyEnabled).toHaveBeenCalledWith(replyBody);
 
+    for (const orchestratorResponseTimeMs of [999, 3_600_001, 1_500.5, "15000"]) {
+      const invalid = await app.inject({
+        method: "PUT",
+        url: "/api/conversations/reply?agentId=plana",
+        payload: {
+          id: "group:10001",
+          scope: "user_group",
+          orchestratorResponseTimeOverrideEnabled: true,
+          orchestratorResponseTimeMs
+        }
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json()).toMatchObject({
+        error: {
+          code: "CONVERSATION_ORCHESTRATOR_RESPONSE_TIME_INVALID",
+          field: "orchestratorResponseTimeMs"
+        }
+      });
+    }
+
     expect((await app.inject({
       method: "GET",
-      url: "/api/conversations/private%3A171419991/tools"
+      url: "/api/conversations/private%3A171419991/tools?agentId=plana"
     })).json()).toEqual({ conversationId: "private:171419991", disabledTools: ["websearch"] });
     expect(getConversationToolPolicy).toHaveBeenCalledWith("private:171419991");
 
-    const toolsBody = { disabledTools: ["read_file", "workspace_bash"] };
+    const toolsBody = { disabledTools: ["read_file", "native_bash"] };
     expect((await app.inject({
       method: "PUT",
-      url: "/api/conversations/private%3A171419991/tools",
+      url: "/api/conversations/private%3A171419991/tools?agentId=plana",
       payload: toolsBody
     })).json()).toEqual({ id: "private:171419991", ...toolsBody });
     expect(setConversationToolPolicy).toHaveBeenCalledWith({ id: "private:171419991", ...toolsBody });
@@ -134,7 +162,7 @@ describe("conversation API plugin", () => {
     for (const method of ["GET", "PUT"] as const) {
       const invalid = await app.inject({
         method,
-        url: "/api/conversations/not-a-conversation/tools",
+        url: "/api/conversations/not-a-conversation/tools?agentId=plana",
         ...(method === "PUT" ? { payload: { disabledTools: [] } } : {})
       });
       expect(invalid.statusCode).toBe(400);
@@ -149,7 +177,7 @@ describe("conversation API plugin", () => {
     ]) {
       const invalid = await app.inject({
         method: "PUT",
-        url: "/api/conversations/private%3A171419991/tools",
+        url: "/api/conversations/private%3A171419991/tools?agentId=plana",
         payload
       });
       expect(invalid.statusCode).toBe(400);
@@ -167,7 +195,7 @@ describe("conversation API plugin", () => {
     assertRequestAndResponseSchemas(routeSchemas);
   });
 
-  it("keeps a valid Web Chat turn alive after the HTTP request body closes", async () => {
+  it("keeps a valid Web Chat turn alive through an asynchronous HTTP handler", async () => {
     const app = Fastify();
     apps.push(app);
     app.setErrorHandler((error, _request, reply) => error instanceof ServiceError
@@ -217,18 +245,14 @@ describe("conversation API plugin", () => {
       describe: vi.fn((value: unknown) => value)
     } as unknown as ConversationDirectory;
     registerConversationRoutes(app, { runtime, onebotGateway, conversationDirectory });
-    await app.listen({ host: "127.0.0.1", port: 0 });
-    const address = app.server.address();
-    if (!address || typeof address === "string") throw new Error("Fastify test server has no TCP address.");
-
-    const response = await fetch(`http://127.0.0.1:${address.port}/api/web-chat/messages`, {
+    const response = await app.inject({
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: "请确认连接" })
+      url: "/api/web-chat/messages",
+      payload: { text: "请确认连接" }
     });
 
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
       ok: true,
       delivered: 1,
       conversationId: "web:admin",
@@ -238,6 +262,129 @@ describe("conversation API plugin", () => {
       ]
     });
     expect(replyToIncoming).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels Web Chat through the request socket close signal", async () => {
+    const started = deferred<AbortSignal>();
+    const runtime = {
+      adminIdentity: () => ({ userId: "171419991", name: "管理员" }),
+      incomingCaptureSequence: () => 1,
+      recordIncomingMessage: vi.fn(),
+      replyToIncoming: vi.fn(async (
+        _channel: string,
+        _incoming: unknown,
+        _delivery: unknown,
+        options: { signal: AbortSignal }
+      ) => {
+        started.resolve(options.signal);
+        await new Promise<never>(() => undefined);
+      }),
+      getConversationMessages: () => ({
+        conversationId: "web:admin",
+        messages: [],
+        hasMore: false,
+        memberNames: {}
+      })
+    } as unknown as SunaRuntime;
+    const handlers = new Map<string, (request: never, reply: never) => unknown>();
+    const fakeApp = {
+      addHook: vi.fn(),
+      get: (url: string, _options: unknown, handler: (request: never, reply: never) => unknown) => {
+        handlers.set(`GET ${url}`, handler);
+      },
+      post: (url: string, _options: unknown, handler: (request: never, reply: never) => unknown) => {
+        handlers.set(`POST ${url}`, handler);
+      },
+      put: (url: string, _options: unknown, handler: (request: never, reply: never) => unknown) => {
+        handlers.set(`PUT ${url}`, handler);
+      }
+    } as unknown as ReturnType<typeof Fastify>;
+    const onebotGateway = { getStatus: () => ({ connected: false }) } as unknown as OneBotGateway;
+    const conversationDirectory = {
+      enrich: vi.fn(),
+      describe: vi.fn((value: unknown) => value)
+    } as unknown as ConversationDirectory;
+    registerConversationRoutes(fakeApp, { runtime, onebotGateway, conversationDirectory });
+    const handler = handlers.get("POST /api/web-chat/messages");
+    if (!handler) throw new Error("Web Chat POST handler was not registered.");
+    const requestRaw = new EventEmitter() as EventEmitter & {
+      socket: EventEmitter;
+    };
+    requestRaw.socket = new EventEmitter();
+    const replyRaw = new EventEmitter() as EventEmitter & {
+      writableEnded: boolean;
+      writableFinished: boolean;
+    };
+    replyRaw.writableEnded = false;
+    replyRaw.writableFinished = false;
+    const response = Promise.resolve(handler({
+      body: { text: "测试断开" },
+      query: {},
+      raw: requestRaw
+    } as never, {
+      raw: replyRaw
+    } as never));
+    const taskSignal = await started.promise;
+
+    requestRaw.socket.emit("close");
+
+    await expect(response).rejects.toMatchObject({
+      statusCode: 499,
+      code: "WEB_CHAT_REQUEST_ABORTED"
+    });
+    expect(taskSignal.aborted).toBe(true);
+  });
+
+  it("aborts an in-flight Web Chat turn from Fastify preClose", async () => {
+    const app = Fastify();
+    apps.push(app);
+    app.setErrorHandler((error, _request, reply) => error instanceof ServiceError
+      ? reply.status(error.statusCode).send(error.toJSON())
+      : reply.status(500).send({ error: { code: "INTERNAL_ERROR", message: String(error) } }));
+    const started = deferred<AbortSignal>();
+    const runtime = {
+      adminIdentity: () => ({ userId: "171419991", name: "管理员" }),
+      incomingCaptureSequence: () => 1,
+      recordIncomingMessage: vi.fn(),
+      replyToIncoming: vi.fn(async (
+        _channel: string,
+        _incoming: unknown,
+        _delivery: unknown,
+        options: { signal: AbortSignal }
+      ) => {
+        started.resolve(options.signal);
+        await new Promise<never>(() => undefined);
+      }),
+      getConversationMessages: () => ({
+        conversationId: "web:admin",
+        messages: [],
+        hasMore: false,
+        memberNames: {}
+      })
+    } as unknown as SunaRuntime;
+    const onebotGateway = { getStatus: () => ({ connected: false }) } as unknown as OneBotGateway;
+    const conversationDirectory = {
+      enrich: vi.fn(),
+      describe: vi.fn((value: unknown) => value)
+    } as unknown as ConversationDirectory;
+    registerConversationRoutes(app, { runtime, onebotGateway, conversationDirectory });
+    const response = app.inject({
+      method: "POST",
+      url: "/api/web-chat/messages",
+      payload: { text: "测试关闭" }
+    });
+    const taskSignal = await started.promise;
+
+    const closing = app.close();
+
+    await vi.waitFor(() => expect(taskSignal.aborted).toBe(true));
+    expect((await response).json()).toEqual({
+      error: {
+        code: "WEB_CHAT_SHUTTING_DOWN",
+        message: "Web Chat 正在关闭，请稍后重试。"
+      }
+    });
+    await closing;
   });
 
   it("serializes concurrent HTTP sends with stable per-Agent Web Chat message ids", async () => {
@@ -291,13 +438,13 @@ describe("conversation API plugin", () => {
 
     const first = app.inject({
       method: "POST",
-      url: "/api/web-chat/messages",
+      url: "/api/web-chat/messages?agentId=plana",
       payload: { text: "第一条" }
     });
     await firstStarted.promise;
     const second = app.inject({
       method: "POST",
-      url: "/api/web-chat/messages",
+      url: "/api/web-chat/messages?agentId=plana",
       payload: { text: "第二条" }
     });
     await secondRuntimeLookup.promise;
@@ -333,24 +480,21 @@ describe("conversation API plugin", () => {
     };
     const aronaRuntime = new SunaRuntime(aronaConfig, { attachmentService: {} as never });
     const internals = aronaRuntime as unknown as {
-      reply: {
-        replyToIncoming(): Promise<void>;
-      };
+      completePromptTurn(): Promise<{ kind: "completed"; text: string }>;
       adminIdentity(): { userId: string; name: string };
       incomingCaptureSequence(): number;
       recordIncomingMessage(): void;
       getConversationMessages(): Record<string, unknown>;
     };
-    internals.reply = {
-      replyToIncoming: async () => {
-        await appendRequestLog({
-          category: "model.response",
-          action: "responses.complete",
-          model: "gpt-arona",
-          response: { usage: { input_tokens: 8, output_tokens: 2, total_tokens: 10 } },
-          metadata: { conversationId: "web:admin", stage: "reply" }
-        });
-      }
+    internals.completePromptTurn = async () => {
+      await appendRequestLog({
+        category: "model.response",
+        action: "responses.complete",
+        model: "gpt-arona",
+        response: { usage: { input_tokens: 8, output_tokens: 2, total_tokens: 10 } },
+        metadata: { conversationId: "web:admin", stage: "reply" }
+      });
+      return { kind: "completed", text: "测试回复" };
     };
     internals.adminIdentity = () => ({ userId: "171419991", name: "管理员" });
     internals.incomingCaptureSequence = () => 1;
@@ -388,7 +532,7 @@ describe("conversation API plugin", () => {
       expect(response.statusCode).toBe(200);
       expect(getRuntime).toHaveBeenCalledWith("arona");
       expect(applicationDataStore(aronaConfig).readRequestLogs({ query: "web:admin", limit: 20 }))
-        .toEqual([expect.objectContaining({ action: "responses.complete", model: "gpt-arona" })]);
+        .toContainEqual(expect.objectContaining({ action: "responses.complete", model: "gpt-arona" }));
       expect(applicationDataStore(aronaConfig).readModelCallAggregateRows("web:admin"))
         .toEqual([expect.objectContaining({ behavior: "reply", requests: 1, total: 10 })]);
       expect(applicationDataStore(planaConfig).readRequestLogs({ query: "web:admin", limit: 20 })).toEqual([]);

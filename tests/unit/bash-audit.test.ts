@@ -10,9 +10,11 @@ import {
 
 const auditInput = {
   command: "cat report.txt",
-  backend: "docker" as const,
+  backend: "native" as const,
   accessMode: "restricted" as const,
-  strictMode: true
+  strictMode: true,
+  isAdmin: false,
+  userRequest: "把聊天里的报告整理成压缩包"
 };
 
 describe("independent Bash audit", () => {
@@ -25,6 +27,26 @@ describe("independent Bash audit", () => {
       json_schema: { name: "bash_security_audit", strict: true }
     });
     expect(request.messages[0]?.content).toContain("Never execute it");
+    expect(request.messages[0]?.content).toContain("isAdmin boolean is authoritative");
+    expect(request.messages[0]?.content).toContain("directly instruct the Bot to enumerate");
+    expect(request.messages[0]?.content).toContain("High-level business outcomes are allowed");
+    expect(request.messages[0]?.content).toContain("allow only retrieval needed");
+    expect(request.messages[1]?.content).toContain('"isAdmin":false');
+    expect(request.messages[1]?.content).toContain('"userRequest":"把聊天里的报告整理成压缩包"');
+    expect(buildBashAuditRequest({ ...auditInput, accessMode: "isolated" }).messages[0]?.content)
+      .toContain("writable access only inside /workbench");
+    expect(request.messages[0]?.content).toContain("Skill and MCP configuration are exposed through SUNABOT_SKILLS and SUNABOT_MCP_CONFIG");
+    const nativeRequest = buildBashAuditRequest({ ...auditInput, accessMode: "admin" });
+    expect(nativeRequest.messages[0]?.content)
+      .toContain("Native Bash may write only the current Agent workbench");
+    expect(nativeRequest.messages[0]?.content)
+      .toContain("Native Bash runs as the Sunabot runtime OS user after approval");
+    expect(nativeRequest.messages[0]?.content)
+      .toContain("outsideAccesses must list only absolute paths outside every declared workbench");
+    expect(nativeRequest.messages[0]?.content)
+      .toContain("sunabot-skill is a host-managed current-Agent Skill repository command");
+    expect(nativeRequest.messages[1]?.content).toContain('"native":{"path":"/workbench","access":"read-write"}');
+    expect(nativeRequest.messages[1]?.content).not.toContain('"docker"');
   });
 
   it("parses the auditor response and rejects incomplete outside-path reports", async () => {
@@ -53,6 +75,7 @@ describe("independent Bash audit", () => {
     let now = 1_000;
     const store = new BashApprovalStore(() => now, 60_000);
     const context = {
+      backend: "native" as const,
       agentId: "plana",
       accountId: "qq-bot-a",
       transport: "onebot",
@@ -106,6 +129,7 @@ describe("independent Bash audit", () => {
   it("shows every approved path with its exact read, write, or delete mode", () => {
     const store = new BashApprovalStore(() => 1_000, 60_000);
     const approval = store.issue("admin command", {
+      backend: "native",
       agentId: "plana",
       accountId: "qq-bot-a",
       transport: "onebot",

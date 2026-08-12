@@ -1,17 +1,25 @@
 <script setup lang="ts">
 import { computed, reactive, shallowRef, watch } from "vue";
 import type { AgentAvatarInput } from "../../types";
+import type { AgentConfigImportPayload } from "../../composables/useAgentConfigImport";
 import AgentAvatarPicker from "./AgentAvatarPicker.vue";
+import AgentConfigImportPicker from "./AgentConfigImportPicker.vue";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 import IdentityAvatar from "../ui/IdentityAvatar.vue";
 
 const props = defineProps<{ open: boolean; busy?: boolean; error?: string }>();
 const emit = defineEmits<{
   close: [];
-  submit: [input: { id: string; name: string; avatar?: { fileName: string; dataBase64: string } }];
+  submit: [input: {
+    id: string;
+    name: string;
+    avatar?: { fileName: string; dataBase64: string };
+    import?: AgentConfigImportPayload;
+  }];
 }>();
 const draft = reactive({ name: "", id: "" });
 const avatar = shallowRef<AgentAvatarInput>();
+const imported = shallowRef<AgentConfigImportPayload>();
 const valid = computed(() => draft.name.trim().length > 0 && /^[a-z][a-z0-9-]{1,31}$/.test(draft.id.trim()));
 
 watch(() => props.open, (open) => {
@@ -19,6 +27,7 @@ watch(() => props.open, (open) => {
   draft.name = "";
   draft.id = "";
   avatar.value = undefined;
+  imported.value = undefined;
 });
 
 function updateName() {
@@ -33,7 +42,8 @@ function submit() {
   emit("submit", {
     id: draft.id.trim(),
     name: draft.name.trim(),
-    ...(avatar.value ? { avatar: avatar.value } : {})
+    ...(avatar.value ? { avatar: avatar.value } : {}),
+    ...(imported.value ? { import: imported.value } : {})
   });
 }
 </script>
@@ -62,6 +72,7 @@ function submit() {
             <AgentAvatarPicker :label="avatar ? '重新裁剪' : '选择并裁剪'" :disabled="busy" @change="avatar = $event" />
           </div>
         </div>
+        <AgentConfigImportPicker :disabled="busy" @change="imported = $event" />
       </div>
       <p v-if="error" class="mt-5 text-sm text-accent" role="alert">{{ error }}</p>
       <div class="mt-8 flex justify-end gap-3">

@@ -24,14 +24,22 @@ import {
   incomingReplyEnvelope,
   toolCompletionEnvelope
 } from "../../packages/contracts/session/runtimeMessages.js";
-import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
+import {
+  parseFinalPromptTemplate,
+  renderFinalPromptTemplate,
+  type RenderedPromptRequest
+} from "../../services/agent/promptSystem.js";
+import { DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE } from "../../services/director/public.js";
 import type { AttachmentService } from "../../services/media/attachments/service.js";
+import { defaultVoiceProfile, voicePromptVariables } from "../../services/voice/public.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
 import {
   applicationDataStore,
   closeApplicationDataStores
 } from "../../adapters/sqlite/applicationDataStore.js";
 import { SunaRuntime } from "../../src/runtime.js";
+import type { RuntimeAgentExtensionsPort } from "../../src/runtime/agentExtensions.js";
+import type { ReplyDelivery } from "../../src/runtime/runtimeContracts.js";
 import {
   conversationRecordId,
   persistentIncomingKey,
@@ -43,16 +51,23 @@ import { createAdminTestConfig } from "./admin-fixtures.js";
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 const appendRequestLogStrict = vi.hoisted(() => vi.fn(async () => undefined));
 const recallMemory = vi.hoisted(() => vi.fn(async () => ({ ok: true, matches: [] })));
+const recordModelContextRecall = vi.hoisted(() => vi.fn());
+const reserveModelContextRecall = vi.hoisted(() => vi.fn((_config: unknown, matches: unknown[]) => ({
+  accepted: [...matches],
+  stale: []
+})));
 const readUserProfileForUser = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("../../src/requestLog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../src/requestLog.js")>()),
+vi.mock("../../adapters/observability/requestLog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../adapters/observability/requestLog.js")>()),
   appendRequestLog,
   appendRequestLogStrict
 }));
 vi.mock("../../services/memory/memoryService.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../services/memory/memoryService.js")>()),
   recallMemory,
+  recordModelContextRecall,
+  reserveModelContextRecall,
   readUserProfileForUser
 }));
 
@@ -78,17 +93,271 @@ afterEach(() => {
 });
 
 describe("SunaRuntime reply debounce", () => {
-  it("uses a five-second default trailing deadline", async () => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }));
-    const before = Date.now();
-    const incoming = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_001, "default deadline"),
-      harness.gateway
+  it.each([
+    [[], "decision_missing"],
+    [["add_workmemory"], "decision_unresolved"]
+  ] as const)(
+    "records an unresolved working-memory decision when the Provider turn fails: %s",
+    async (toolNames, reasonCode) => {
+      const harness = createRuntimeHarness(async (_request, options) => {
+        for (const name of toolNames) options?.onToolCall?.(name);
+        throw Object.assign(
+          new Error("The main reply model did not complete its required working-memory decision."),
+          { code: "WORKING_MEMORY_DECISION_REQUIRED" }
+        );
+      });
+      const incoming = harness.record(privateEvent(30_984, "检查记忆决策审计"));
+
+      await harness.reply(incoming, { delivery: { outbox: [] } });
+
+      const audit = applicationDataStore(harness.runtime.config).readRequestLogs({
+        query: "working.tool_decision",
+        limit: 10
+      });
+      expect(audit).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          response: expect.objectContaining({ reasonCode })
+        })
+      ]));
+    }
+  );
+
+  it("continues an explicit Skill reply when the Agent extension directory changes", async () => {
+    const prepare = vi.fn(async () => {
+      throw Object.assign(new Error("Agent extension path changed."), {
+        code: "AGENT_EXTENSION_PATH_CHANGED"
+      });
+    });
+    const agentExtensions = {
+      prepare,
+      closeConversation: vi.fn(async () => undefined),
+      closeAgent: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined)
+    } satisfies RuntimeAgentExtensionsPort;
+    const harness = createRuntimeHarness(
+      async () => ({ kind: "completed", text: "仍可完成的正文" }),
+      { agentExtensions }
     );
+    const incoming = harness.record(privateEvent(30_985, "$fixture-skill 继续回答"));
+    const delivery: ReplyDelivery = { outbox: [] };
+
+    await harness.reply(incoming, { delivery });
+
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
+    expect(delivery.outbox).toHaveLength(1);
+    expect(delivery.outbox[0]?.payload.payload.text).toBe(
+      "仍可完成的正文\n（错误：Agent 扩展正在更新，所选 Skill 暂不可用）"
+    );
+  });
+
+  it("isolates ordinary scheduled callbacks from Director context and tools", async () => {
+    const harness = createRuntimeHarness(async (_request, options) => {
+      expect(options?.director).toBeUndefined();
+      return { kind: "completed", text: "普通定时回复" };
+    });
+    const promptContext = vi.spyOn(harness.runtime.director, "promptContext")
+      .mockRejectedValue(new Error("Stored director schedule is invalid."));
+    const toolPort = vi.spyOn(harness.runtime.director, "toolPort")
+      .mockImplementation(() => {
+        throw new Error("Director tool must not be resolved.");
+      });
+    const renderPromptRequest = vi.spyOn(harness.runtime, "renderPromptRequest");
+    const incoming = harness.record(privateEvent(30_986, "普通定时任务"));
+
+    await harness.reply(incoming, {
+      delivery: { outbox: [] },
+      directorAccess: "none",
+      messageOrigin: "async_tool_callback"
+    });
+
+    expect(promptContext).not.toHaveBeenCalled();
+    expect(toolPort).not.toHaveBeenCalled();
+    expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
+    expect(renderPromptRequest.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      [DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE]: ""
+    }));
+  });
+
+  it("keeps Director context and tools for explicitly Director-enabled replies", async () => {
+    const directorPort = { execute: vi.fn() };
+    const harness = createRuntimeHarness(async (_request, options) => {
+      expect(options?.director).toBe(directorPort);
+      return { kind: "completed", text: "导演回复" };
+    });
+    const promptContext = vi.spyOn(harness.runtime.director, "promptContext")
+      .mockResolvedValue('{"status":"active"}');
+    const toolPort = vi.spyOn(harness.runtime.director, "toolPort")
+      .mockReturnValue(directorPort);
+    const renderPromptRequest = vi.spyOn(harness.runtime, "renderPromptRequest");
+    const incoming = harness.record(privateEvent(30_985, "导演回调"));
+
+    await harness.reply(incoming, {
+      delivery: { outbox: [] },
+      directorAccess: "full",
+      messageOrigin: "async_tool_callback"
+    });
+
+    expect(promptContext).toHaveBeenCalledOnce();
+    expect(toolPort).toHaveBeenCalledOnce();
+    expect(renderPromptRequest.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      [DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE]: '{"status":"active"}'
+    }));
+  });
+
+  it("holds an atomic image reply until text and the generated image can share one outbox", async () => {
+    const image = { url: "data:image/png;base64,AA==", revisedPrompt: "现场自拍" };
+    const harness = createRuntimeHarness(async (_request, options) => {
+      expect(options?.onAssistantText).toBeUndefined();
+      expect(options?.asyncImage).toBe(false);
+      expect(options?.asyncCodex).toBe(false);
+      expect(options?.conversationAssets).toBeUndefined();
+      expect(options?.voice).toBeUndefined();
+      options?.onImageGenerated?.(image);
+      return { kind: "completed", text: "资料终于整理完了。" };
+    });
+    const incoming = harness.record(privateEvent(30_988, "日常导演分享"));
+    const delivery: ReplyDelivery = { outbox: [] };
+
+    await harness.reply(incoming, {
+      delivery,
+      atomicImageReply: true
+    });
+
+    expect(harness.gateway.send).not.toHaveBeenCalled();
+    expect(delivery.outbox).toHaveLength(1);
+    expect(decodeAssistantReply(delivery.outbox[0]!.payload)).toMatchObject({
+      text: "资料终于整理完了。",
+      generatedImages: [image]
+    });
+  });
+
+  it("does not publish a text-only fallback when an atomic image reply has no image", async () => {
+    const harness = createCompletedHarness("图片没生成，但先说一声。");
+    const incoming = harness.record(privateEvent(30_989, "日常导演分享失败"));
+    const delivery: ReplyDelivery = { outbox: [] };
+
+    await harness.reply(incoming, {
+      delivery,
+      atomicImageReply: true
+    });
+
+    expect(delivery).toMatchObject({ outbox: [], terminalStatus: "no_reply" });
+    expect(harness.gateway.send).not.toHaveBeenCalled();
+  });
+
+  it("does not publish an error bubble when an atomic image reply fails", async () => {
+    const harness = createRuntimeHarness(async () => {
+      throw new Error("selfie provider unavailable");
+    });
+    const incoming = harness.record(privateEvent(30_987, "日常导演生图异常"));
+    const delivery: ReplyDelivery = { outbox: [] };
+
+    await harness.reply(incoming, {
+      delivery,
+      atomicImageReply: true
+    });
+
+    expect(delivery).toMatchObject({ outbox: [], terminalStatus: "no_reply" });
+    expect(harness.gateway.send).not.toHaveBeenCalled();
+  });
+
+  it.each(["private", "group"] as const)("injects disabled voice context into the %s prompt and Provider", async (scope) => {
+    const harness = createCompletedHarness("voice context reply");
+    const profile = defaultVoiceProfile();
+    const variables = voicePromptVariables(profile);
+    harness.runtime.voiceSnapshot = vi.fn(async () => ({ profile, variables }));
+    const renderPromptRequest = vi.spyOn(harness.runtime, "renderPromptRequest");
+    const incoming = harness.record(scope === "private"
+      ? privateEvent(30_990, "voice context")
+      : groupEvent(30_991, 6_991, "voice context", 19_991));
+
+    await harness.reply(incoming, {
+      delivery: { outbox: [] }
+    });
+
+    expect(renderPromptRequest.mock.calls[0]?.[1]).toEqual(expect.objectContaining(variables));
+    expect(harness.completeRequestTurn.mock.calls[0]?.[1]?.voice).toEqual({
+      enabled: false,
+      languages: [],
+      defaultLanguage: "ja"
+    });
+  });
+
+  it.each(["provider_failure", "cancelled", "superseded"] as const)(
+    "does not confirm model-context recall for a %s turn",
+    async (mode) => {
+      recallMemory.mockResolvedValue({ ok: true, matches: [longTermRecallMatch()] });
+      const controller = new AbortController();
+      let current = true;
+      const harness = createRuntimeHarness(async (_request, options) => {
+        await options?.memory?.recall({ query: "灯塔", source: "long_term" });
+        if (mode === "provider_failure") throw new Error("second model round failed");
+        if (mode === "cancelled") controller.abort(new Error("cancelled after tool recall"));
+        if (mode === "superseded") current = false;
+        return { kind: "completed", text: "late reply" };
+      });
+      const incoming = harness.record(privateEvent(30_992, `recall ${mode}`));
+
+      await harness.reply(incoming, {
+        signal: controller.signal,
+        isCurrent: () => current,
+        delivery: { outbox: [] }
+      });
+
+      expect(recordModelContextRecall).not.toHaveBeenCalled();
+    }
+  );
+
+  it("confirms initial and tool memory once after a successful current model turn", async () => {
+    recallMemory.mockResolvedValue({ ok: true, matches: [longTermRecallMatch()] });
+    const harness = createRuntimeHarness(async (_request, options) => {
+      await options?.memory?.recall({ query: "灯塔", source: "long_term" });
+      return { kind: "completed", text: "current reply" };
+    });
+    harness.runtime.renderPromptRequest = async (_id, variables) => renderFinalPromptTemplate(
+      parseFinalPromptTemplate(JSON.stringify({
+        messages: [
+          { role: "system", content: "<long_term>@{memory.long_term}</long_term>" },
+          { role: "user", content: "@{user.input}" }
+        ],
+        response_format: { type: "text" }
+      })),
+      variables
+    );
+    const incoming = harness.record(privateEvent(30_993, "successful recall"));
+
+    await harness.reply(incoming, {
+      delivery: { outbox: [] }
+    });
+
+    expect(recordModelContextRecall).toHaveBeenCalledOnce();
+    expect(recordModelContextRecall.mock.calls[0]?.[1]).toEqual([longTermRecallMatch()]);
+  });
+
+  it("does not infer memory-variable use from matching user text", async () => {
+    const match = longTermRecallMatch();
+    recallMemory.mockResolvedValue({ ok: true, matches: [match] });
+    const harness = createCompletedHarness("reply");
+    const incoming = harness.record(privateEvent(
+      30_994,
+      `${match.sourceTitle}：${match.text}`
+    ));
+
+    await harness.reply(incoming, {
+      delivery: { outbox: [] }
+    });
+
+    expect(recordModelContextRecall).not.toHaveBeenCalled();
+  });
+
+  it("uses a five-second default trailing deadline", async () => {
+    const harness = createCompletedHarness("unused");
+    const before = Date.now();
+    const incoming = await harness.handle(privateEvent(31_001, "default deadline"));
     const after = Date.now();
 
-    const event = harness.store.getActiveEvent(replyDebounceSessionId(incoming), "reply_debounce");
+    const event = harness.activeDebounce(incoming);
     expect(event).toBeDefined();
     expect(event!.availableAt).toBeGreaterThanOrEqual(before + 5_000);
     expect(event!.availableAt).toBeLessThanOrEqual(after + 5_000);
@@ -96,32 +365,24 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("uses the Agent debounce setting and applies hot updates to later resets", async () => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const harness = createCompletedHarness("unused", {
       configure(config) {
         config.bot.replyDebounceMs = 1_000;
       }
     });
     const beforeFirst = Date.now();
-    const incoming = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_002, "configured deadline"),
-      harness.gateway
-    );
+    const incoming = await harness.handle(privateEvent(31_002, "configured deadline"));
     const afterFirst = Date.now();
     const sessionId = replyDebounceSessionId(incoming);
-    const initial = harness.store.getActiveEvent(sessionId, "reply_debounce")!;
+    const initial = harness.activeDebounce(sessionId)!;
     expect(initial.availableAt).toBeGreaterThanOrEqual(beforeFirst + 1_000);
     expect(initial.availableAt).toBeLessThanOrEqual(afterFirst + 1_000);
 
     harness.runtime.config.bot.replyDebounceMs = 2_000;
     const beforeReset = Date.now();
-    await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_003, "hot updated deadline"),
-      harness.gateway
-    );
+    await harness.handle(privateEvent(31_003, "hot updated deadline"));
     const afterReset = Date.now();
-    const bumped = harness.store.getActiveEvent(sessionId, "reply_debounce")!;
+    const bumped = harness.activeDebounce(sessionId)!;
     expect(bumped.id).toBe(initial.id);
     expect(bumped.availableAt).toBeGreaterThanOrEqual(beforeReset + 2_000);
     expect(bumped.availableAt).toBeLessThanOrEqual(afterReset + 2_000);
@@ -134,27 +395,18 @@ describe("SunaRuntime reply debounce", () => {
       return { kind: "completed", text: "private reply" };
     }, { replyDebounceMs: 90 });
 
-    const first = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_010, "first private trigger"),
-      harness.gateway
-    );
+    const first = await harness.handle(privateEvent(31_010, "first private trigger"));
     const debounceSessionId = replyDebounceSessionId(first);
-    const initial = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const initial = harness.activeDebounce(debounceSessionId)!;
     await delay(25);
-    await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_011, "second private context"),
-      harness.gateway
-    );
-    const bumped = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    await harness.handle(privateEvent(31_011, "second private context"));
+    const bumped = harness.activeDebounce(debounceSessionId)!;
 
     expect(bumped.id).toBe(initial.id);
     expect(bumped.availableAt).toBeGreaterThan(initial.availableAt);
     expect(harness.store.listEvents(debounceSessionId)).toHaveLength(1);
 
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(1);
 
     expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
     expect(lastUserText(requests[0]!)).toContain("first private trigger");
@@ -168,7 +420,7 @@ describe("SunaRuntime reply debounce", () => {
       ]);
   });
 
-  it("keeps another group sender ambient, preserves the trigger deadline, and quotes the first trigger", async () => {
+  it("loads only the active group wake sender during debounce while retaining every raw group message", async () => {
     const requests: RenderedPromptRequest[] = [];
     const harness = createRuntimeHarness(async (request) => {
       requests.push(request);
@@ -182,36 +434,42 @@ describe("SunaRuntime reply debounce", () => {
     const scheduleAmbientIdleReply = vi.fn();
     harness.runtime.scheduleAmbientIdleReply = scheduleAmbientIdleReply;
 
-    const trigger = await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_020, 7_020, "Plana first group trigger", 20_001),
-      harness.gateway
-    );
+    const trigger = await harness.handle(groupEvent(31_020, 7_020, "Plana first group trigger", 20_001));
     const triggerSessionId = replyDebounceSessionId(trigger);
-    const initial = harness.store.getActiveEvent(triggerSessionId, "reply_debounce")!;
+    const initial = harness.activeDebounce(triggerSessionId)!;
     await delay(20);
-    const ambient = await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_021, 7_020, "ambient context from another sender", 20_002),
-      harness.gateway
-    );
+    const ambient = await harness.handle(groupEvent(31_021, 7_020, "ambient context from another sender", 20_002));
     await waitUntil(() => scheduleAmbientIdleReply.mock.calls.length === 1);
 
-    const unchanged = harness.store.getActiveEvent(triggerSessionId, "reply_debounce")!;
+    const unchanged = harness.activeDebounce(triggerSessionId)!;
     expect(unchanged.id).toBe(initial.id);
     expect(unchanged.availableAt).toBe(initial.availableAt);
-    expect(harness.store.getActiveEvent(replyDebounceSessionId(ambient), "reply_debounce")).toBeUndefined();
+    expect(harness.activeDebounce(ambient)).toBeUndefined();
     expect(scheduleAmbientIdleReply).toHaveBeenCalledWith(expect.objectContaining({
       incoming: expect.objectContaining({ userId: 20_002 })
     }));
 
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await delay(20);
+    await harness.handle(groupEvent(31_022, 7_020, "additional detail from the active wake sender", 20_001));
+    const bumped = harness.activeDebounce(triggerSessionId)!;
+    expect(bumped.id).toBe(initial.id);
+    expect(bumped.availableAt).toBeGreaterThan(initial.availableAt);
+
+    await harness.waitForOutbounds(1);
 
     expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
-    expect(requests[0]!.messages.some((message) => (
-      message.content.includes("ambient context from another sender")
-    ))).toBe(true);
+    const providerPrompt = requests[0]!.messages.map((message) => message.content).join("\n");
+    const rawMessages = harness.runtime.conversationRecords.get(conversationRecordId(trigger))?.messages
+      .filter((message) => message.role === "user")
+      .map((message) => ({ userId: message.userId, text: message.text }));
+    expect(providerPrompt).toContain("Plana first group trigger");
+    expect(providerPrompt).toContain("additional detail from the active wake sender");
+    expect(providerPrompt).not.toContain("ambient context from another sender");
+    expect(rawMessages).toEqual([
+        { userId: 20_001, text: "Plana first group trigger" },
+        { userId: 20_002, text: "ambient context from another sender" },
+        { userId: 20_001, text: "additional detail from the active wake sender" }
+      ]);
     expect(sentOutbounds(harness.gateway)[0]).toMatchObject({
       groupId: 7_020,
       userId: 20_001,
@@ -229,27 +487,18 @@ describe("SunaRuntime reply debounce", () => {
       return { kind: "completed", text: `reply:${marker}` };
     }, { replyDebounceMs: 120 });
 
-    const senderA = await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_030, 7_030, "Plana sender-a", 21_001),
-      harness.gateway
-    );
-    const eventA = harness.store.getActiveEvent(replyDebounceSessionId(senderA), "reply_debounce")!;
+    const senderA = await harness.handle(groupEvent(31_030, 7_030, "Plana sender-a", 21_001));
+    const eventA = harness.activeDebounce(senderA)!;
     await delay(35);
-    const senderB = await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_031, 7_030, "Plana sender-b", 21_002),
-      harness.gateway
-    );
-    const eventB = harness.store.getActiveEvent(replyDebounceSessionId(senderB), "reply_debounce")!;
+    const senderB = await harness.handle(groupEvent(31_031, 7_030, "Plana sender-b", 21_002));
+    const eventB = harness.activeDebounce(senderB)!;
 
     expect(eventA.id).not.toBe(eventB.id);
     expect(eventB.availableAt).toBeGreaterThan(eventA.availableAt);
-    expect(harness.store.getActiveEvent(replyDebounceSessionId(senderA), "reply_debounce")?.availableAt)
+    expect(harness.activeDebounce(senderA)?.availableAt)
       .toBe(eventA.availableAt);
 
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 2);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(2);
 
     expect(starts).toEqual(["sender-a", "sender-b"]);
     expect(sentOutbounds(harness.gateway).map((message) => ({
@@ -262,15 +511,8 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("does not revive a waiting reply after its conversation gate closes and reopens", async () => {
-    const harness = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "must not be sent"
-    }), { replyDebounceMs: 90 });
-    const incoming = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_040, "gate-bound trigger"),
-      harness.gateway
-    );
+    const harness = createCompletedHarness("must not be sent", { replyDebounceMs: 90 });
+    const incoming = await harness.handle(privateEvent(31_040, "gate-bound trigger"));
     const conversationId = conversationRecordId(incoming);
     const debounceSessionId = replyDebounceSessionId(incoming);
 
@@ -300,28 +542,17 @@ describe("SunaRuntime reply debounce", () => {
       };
     }, { replyDebounceMs: 90 });
 
-    const accountA = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_050, "from account-a"),
-      harness.gateway,
-      "qq-account-a"
-    );
-    const accountB = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_051, "from account-b"),
-      harness.gateway,
-      "qq-account-b"
-    );
+    const accountA = await harness.handle(privateEvent(31_050, "from account-a"), "qq-account-a");
+    const accountB = await harness.handle(privateEvent(31_051, "from account-b"), "qq-account-b");
     const conversationA = conversationRecordId(accountA);
     const conversationB = conversationRecordId(accountB);
 
     expect(conversationA).toBe("account:qq-account-a:private:171419991");
     expect(conversationB).toBe("account:qq-account-b:private:171419991");
-    expect(harness.store.getActiveEvent(replyDebounceSessionId(accountA), "reply_debounce")?.id)
-      .not.toBe(harness.store.getActiveEvent(replyDebounceSessionId(accountB), "reply_debounce")?.id);
+    expect(harness.activeDebounce(accountA)?.id)
+      .not.toBe(harness.activeDebounce(accountB)?.id);
 
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 2);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(2);
 
     expect(harness.completeRequestTurn).toHaveBeenCalledTimes(2);
     expect(sentOutbounds(harness.gateway).map((message) => ({
@@ -347,26 +578,15 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("recovers one pending debounce from its remaining file-backed deadline and rebuilds the trigger", async () => {
-    const runtimeRoot = path.join(
-      testDataRoot,
-      `restart-${process.pid}-${++runtimeRootSequence}`
-    );
-    const databasePath = path.join(runtimeRoot, "data", "session-queue.sqlite");
-    const before = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "old runtime must not reply"
-    }), {
+    const { runtimeRoot, databasePath } = restartPaths("restart");
+    const before = createCompletedHarness("old runtime must not reply", {
       replyDebounceMs: 600,
       runtimeRoot,
       storeOptions: { databasePath }
     });
-    const incoming = await handleOneBotEvent(
-      before.runtime,
-      privateEvent(31_060, "persisted restart trigger"),
-      before.gateway
-    );
+    const incoming = await before.handle(privateEvent(31_060, "persisted restart trigger"));
     const debounceSessionId = replyDebounceSessionId(incoming);
-    const pending = before.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const pending = before.activeDebounce(debounceSessionId)!;
 
     await delay(400);
     expect(pending.availableAt - Date.now()).toBeGreaterThan(100);
@@ -390,8 +610,7 @@ describe("SunaRuntime reply debounce", () => {
 
     await delay(Math.max(1, remaining - 30));
     expect(after.completeRequestTurn).not.toHaveBeenCalled();
-    await waitUntil(() => sentOutbounds(after.gateway).length === 1);
-    await after.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await after.waitForOutbounds(1);
 
     expect(after.completeRequestTurn).toHaveBeenCalledOnce();
     expect(providerStartedAt).toBeGreaterThanOrEqual(pending.availableAt);
@@ -423,12 +642,8 @@ describe("SunaRuntime reply debounce", () => {
     mentionNames,
     personaName
   }) => {
-    const runtimeRoot = path.join(
-      testDataRoot,
-      `command-restart-${process.pid}-${++runtimeRootSequence}`
-    );
-    const databasePath = path.join(runtimeRoot, "data", "session-queue.sqlite");
-    const before = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const { runtimeRoot, databasePath } = restartPaths("command-restart");
+    const before = createCompletedHarness("unused", {
       replyDebounceMs: 60_000,
       runtimeRoot,
       storeOptions: { databasePath },
@@ -437,13 +652,9 @@ describe("SunaRuntime reply debounce", () => {
         config.persona.name = personaName;
       }
     });
-    const incoming = await handleOneBotEvent(
-      before.runtime,
-      groupEvent(31_061, 7_061, commandText, 24_061),
-      before.gateway
-    );
+    const incoming = await before.handle(groupEvent(31_061, 7_061, commandText, 24_061));
     const debounceSessionId = replyDebounceSessionId(incoming);
-    const pending = before.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const pending = before.activeDebounce(debounceSessionId)!;
     const frozenInvocation = decodeReplyDebounce(pending.payload).commandInvocation;
     expect(frozenInvocation).toEqual({
       id: "group-summary",
@@ -453,7 +664,7 @@ describe("SunaRuntime reply debounce", () => {
     });
     disposeRuntimeHarness(before);
 
-    const after = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const after = createCompletedHarness("unused", {
       replyDebounceMs: 60_000,
       runtimeRoot,
       storeOptions: { databasePath, recoverOnOpen: "all" },
@@ -465,7 +676,7 @@ describe("SunaRuntime reply debounce", () => {
     const replyWithGroupChatSummary = vi.fn(async () => undefined);
     after.runtime.replyWithGroupChatSummary = replyWithGroupChatSummary;
     after.runtime.activeGateway = after.gateway;
-    const recovered = after.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const recovered = after.activeDebounce(debounceSessionId)!;
     after.runtime.sessionCoordinator.reschedulePendingEvent(recovered.id, Date.now() + 30);
     after.runtime.sessionCoordinator.resume();
 
@@ -479,20 +690,14 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("isolates identical account, conversation, and sender keys across two Agent stores", async () => {
-    const agentA = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "reply:agent-a"
-    }), {
+    const agentA = createCompletedHarness("reply:agent-a", {
       replyDebounceMs: 90,
       configure(config) {
         config.persona.defaultAgentId = "agent-a";
         config.persona.name = "Agent A";
       }
     });
-    const agentB = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "reply:agent-b"
-    }), {
+    const agentB = createCompletedHarness("reply:agent-b", {
       replyDebounceMs: 90,
       configure(config) {
         config.persona.defaultAgentId = "agent-b";
@@ -502,8 +707,8 @@ describe("SunaRuntime reply debounce", () => {
     const event = groupEvent(31_070, 7_070, "Plana identical agent trigger", 25_001);
 
     const [incomingA, incomingB] = await Promise.all([
-      handleOneBotEvent(agentA.runtime, event, agentA.gateway, "shared-account", "agent-a"),
-      handleOneBotEvent(agentB.runtime, event, agentB.gateway, "shared-account", "agent-b")
+      agentA.handle(event, "shared-account", "agent-a"),
+      agentB.handle(event, "shared-account", "agent-b")
     ]);
     const conversationId = conversationRecordId(incomingA);
 
@@ -536,7 +741,7 @@ describe("SunaRuntime reply debounce", () => {
     expect(agentB.store.listTurns(conversationId).map((turn) => turn.status)).toEqual(["replied"]);
   });
 
-  it("waits for another sender's conversation preparation before building Provider context", async () => {
+  it("does not wait for or load another group sender's pending preparation", async () => {
     const pendingPreparation = deferred<void>();
     const requests: RenderedPromptRequest[] = [];
     const harness = createRuntimeHarness(async (request) => {
@@ -555,49 +760,26 @@ describe("SunaRuntime reply debounce", () => {
       incoming.text = "ambient prepared image attachment context";
     };
 
-    const trigger = await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_080, 7_080, "Plana preparation trigger", 26_001),
-      harness.gateway
-    );
-    await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_081, 7_080, "ambient preparation pending", 26_002),
-      harness.gateway
-    );
+    const trigger = await harness.handle(groupEvent(31_080, 7_080, "Plana preparation trigger", 26_001));
+    await harness.handle(groupEvent(31_081, 7_080, "ambient preparation pending", 26_002));
     const debounceSessionId = replyDebounceSessionId(trigger);
 
-    const conversationId = conversationRecordId(trigger);
-    await waitUntil(() => (
-      harness.store.listEvents(debounceSessionId)[0]?.status === "completed"
-      && harness.store.listTurns(debounceSessionId)[0]?.status === "no_reply"
-      && harness.store.listTurns(conversationId)[0]?.status === "running"
-    ));
-    expect(harness.completeRequestTurn).not.toHaveBeenCalled();
-    expect(sentOutbounds(harness.gateway)).toEqual([]);
-    pendingPreparation.resolve();
-
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(1);
 
     expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
     expect(requests[0]!.messages.some((message) => (
       message.content.includes("ambient prepared image attachment context")
-    ))).toBe(true);
+    ))).toBe(false);
+    expect(harness.store.listEvents(debounceSessionId)[0]?.status).toBe("completed");
+    pendingPreparation.resolve();
+    await pendingPreparation.promise;
   });
 
   it("clears the trigger preparation after a waiting debounce is cancelled by its gate", async () => {
     const pendingPreparation = deferred<void>();
-    const harness = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "must not run"
-    }), { replyDebounceMs: 90 });
+    const harness = createCompletedHarness("must not run", { replyDebounceMs: 90 });
     harness.runtime.prepareIncomingMessage = () => pendingPreparation.promise;
-    const incoming = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_090, "cancel preparation trigger"),
-      harness.gateway
-    );
+    const incoming = await harness.handle(privateEvent(31_090, "cancel preparation trigger"));
     const preparationKey = persistentIncomingKey(incoming);
     const debounceSessionId = replyDebounceSessionId(incoming);
     expect(harness.runtime.incomingPreparations.has(preparationKey)).toBe(true);
@@ -615,22 +797,19 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("ignores a replayed durable OneBot message without extending its active deadline", async () => {
-    const harness = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "deduplicated reply"
-    }), { replyDebounceMs: 140 });
+    const harness = createCompletedHarness("deduplicated reply", { replyDebounceMs: 140 });
     const event = privateEvent(31_100, "durable duplicate trigger");
-    const incoming = await handleOneBotEvent(harness.runtime, event, harness.gateway);
+    const incoming = await harness.handle(event);
     const debounceSessionId = replyDebounceSessionId(incoming);
-    const initial = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const initial = harness.activeDebounce(debounceSessionId)!;
     expect(harness.runtime.conversationRecords.get(conversationRecordId(incoming))?.messages)
       .toHaveLength(1);
 
     harness.runtime.seenIncomingEvents.clear();
     await delay(20);
-    await handleOneBotEvent(harness.runtime, event, harness.gateway);
+    await harness.handle(event);
 
-    const replayed = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const replayed = harness.activeDebounce(debounceSessionId)!;
     expect(replayed.id).toBe(initial.id);
     expect(replayed.availableAt).toBe(initial.availableAt);
     expect(harness.store.listEvents(debounceSessionId)).toHaveLength(1);
@@ -641,12 +820,9 @@ describe("SunaRuntime reply debounce", () => {
     expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
   });
 
-  it("turns a positive ambient orchestrator decision into one delayed debounce reply", async () => {
-    const harness = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "ambient delayed reply"
-    }), {
-      replyDebounceMs: 120,
+  it("dispatches a positive ambient orchestrator decision without a debounce event", async () => {
+    const harness = createCompletedHarness("ambient immediate reply", {
+      replyDebounceMs: 60_000,
       configure(config) {
         config.bot.orchestrator.enabled = true;
       }
@@ -679,17 +855,13 @@ describe("SunaRuntime reply debounce", () => {
     await harness.runtime.pumpAmbientReply(channelKey, state);
 
     expect(harness.runtime.runUserGroupchatOrchestrator).toHaveBeenCalledOnce();
-    expect(harness.store.getActiveEvent(replyDebounceSessionId(incoming), "reply_debounce"))
-      .toBeDefined();
-    expect(harness.completeRequestTurn).not.toHaveBeenCalled();
-    await delay(45);
-    expect(harness.completeRequestTurn).not.toHaveBeenCalled();
+    expect(harness.activeDebounce(incoming))
+      .toBeUndefined();
 
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(1);
     expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
     expect(sentOutbounds(harness.gateway).map((message) => message.text))
-      .toEqual(["ambient delayed reply"]);
+      .toEqual(["ambient immediate reply"]);
   });
 
   it("keeps the ambient orchestrator result exact through handoff, Provider, and deferred callback", async () => {
@@ -770,8 +942,12 @@ describe("SunaRuntime reply debounce", () => {
 
     await harness.runtime.pumpAmbientReply(channelKey, state);
 
-    const debounce = harness.store.getActiveEvent(replyDebounceSessionId(incoming), "reply_debounce")!;
-    expect(decodeReplyDebounce(debounce.payload).orchestratorResult).toEqual(orchestratorResult);
+    expect(harness.activeDebounce(incoming))
+      .toBeUndefined();
+    const incomingReply = harness.store.listEvents(channelKey)
+      .find((event) => event.kind === "incoming_reply");
+    expect(incomingReply).toBeDefined();
+    expect(decodeIncomingReply(incomingReply!.payload).orchestratorResult).toEqual(orchestratorResult);
     await waitUntil(() => requests.length >= 2, 5_000);
     await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 5_000 });
 
@@ -786,11 +962,7 @@ describe("SunaRuntime reply debounce", () => {
       orchestratorResult
     });
 
-    await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_116, 7_115, "Plana direct trigger", 27_002),
-      harness.gateway
-    );
+    await harness.handle(groupEvent(31_116, 7_115, "Plana direct trigger", 27_002));
     await waitUntil(() => requests.length >= 3, 5_000);
     await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 5_000 });
     expect(orchestratorResultText(requests[2]!)).toBe("");
@@ -802,23 +974,14 @@ describe("SunaRuntime reply debounce", () => {
       requests.push(request);
       return { kind: "completed", text: "frozen quote reply" };
     }, { replyDebounceMs: 120 });
-    const first = groupEvent(31_120, 7_120, "unused", 28_001);
-    first.message = [
-      { type: "reply", data: { id: "91001" } },
-      { type: "text", data: { text: "Plana first quoted trigger" } }
-    ];
-    const later = groupEvent(31_121, 7_120, "unused", 28_001);
-    later.message = [
-      { type: "reply", data: { id: "91002" } },
-      { type: "text", data: { text: "later quoted context" } }
-    ];
+    const first = quotedEvent(groupEvent(31_120, 7_120, "unused", 28_001), "91001", "Plana first quoted trigger");
+    const later = quotedEvent(groupEvent(31_121, 7_120, "unused", 28_001), "91002", "later quoted context");
 
-    await handleOneBotEvent(harness.runtime, first, harness.gateway);
+    await harness.handle(first);
     await delay(20);
-    await handleOneBotEvent(harness.runtime, later, harness.gateway);
+    await harness.handle(later);
 
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(1);
 
     expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
     expect(sentOutbounds(harness.gateway)[0]).toMatchObject({
@@ -880,24 +1043,16 @@ describe("SunaRuntime reply debounce", () => {
     mutate,
     expectedReplyTo
   }) => {
-    const harness = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "quote setting frozen"
-    }), { replyDebounceMs: 100, configure });
-    const incoming = await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_122, 7_122, "Plana freeze quote setting", 28_001),
-      harness.gateway
-    );
-    const source = harness.store.getActiveEvent(replyDebounceSessionId(incoming), "reply_debounce")!;
+    const harness = createCompletedHarness("quote setting frozen", { replyDebounceMs: 100, configure });
+    const incoming = await harness.handle(groupEvent(31_122, 7_122, "Plana freeze quote setting", 28_001));
+    const source = harness.activeDebounce(incoming)!;
     expect(decodeReplyDebounce(source.payload).replyQuote).toEqual({
       enabled: expectedReplyTo != null,
       replyToMessageId: expectedReplyTo ?? null
     });
 
     mutate(harness.runtime.config);
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(1);
 
     expect(sentOutbounds(harness.gateway)[0]?.replyToMessageId).toBe(expectedReplyTo);
   });
@@ -911,23 +1066,18 @@ describe("SunaRuntime reply debounce", () => {
       return { kind: "completed", text: "provider phase quote frozen" };
     }, { replyDebounceMs: 25 });
 
-    await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_123, 7_123, "Plana provider quote trigger", 28_002),
-      harness.gateway
-    );
+    await harness.handle(groupEvent(31_123, 7_123, "Plana provider quote trigger", 28_002));
     await providerStarted.promise;
     harness.runtime.config.bot.quoteGroupReplies = false;
     harness.runtime.config.bot.quoteGroupReplyExcludedUserIds = ["28002"];
     releaseProvider.resolve();
 
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(1);
     expect(sentOutbounds(harness.gateway)[0]?.replyToMessageId).toBe(31_123);
   });
 
   it("passes the frozen quote through the command handler delivery", async () => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const harness = createCompletedHarness("unused", {
       replyDebounceMs: 80
     });
     harness.runtime.replyWithGroupChatSummary = vi.fn(async (
@@ -947,15 +1097,10 @@ describe("SunaRuntime reply debounce", () => {
       );
     });
 
-    await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_124, 7_124, "/总结群聊", 28_003),
-      harness.gateway
-    );
+    await harness.handle(groupEvent(31_124, 7_124, "/总结群聊@Plana", 28_003));
     harness.runtime.config.bot.quoteGroupReplies = false;
 
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(1);
     expect(sentOutbounds(harness.gateway)[0]).toMatchObject({
       text: "command quote frozen",
       replyToMessageId: 31_124
@@ -963,33 +1108,22 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("restores the frozen quote from SQLite after restart despite new quote settings", async () => {
-    const runtimeRoot = path.join(
-      testDataRoot,
-      `quote-restart-${process.pid}-${++runtimeRootSequence}`
-    );
-    const databasePath = path.join(runtimeRoot, "data", "session-queue.sqlite");
-    const before = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const { runtimeRoot, databasePath } = restartPaths("quote-restart");
+    const before = createCompletedHarness("unused", {
       replyDebounceMs: 60_000,
       runtimeRoot,
       storeOptions: { databasePath },
       persistConversations: true
     });
-    const incoming = await handleOneBotEvent(
-      before.runtime,
-      groupEvent(31_125, 7_125, "Plana durable quote trigger", 28_004),
-      before.gateway
-    );
+    const incoming = await before.handle(groupEvent(31_125, 7_125, "Plana durable quote trigger", 28_004));
     const debounceSessionId = replyDebounceSessionId(incoming);
     expect(decodeReplyDebounce(
-      before.store.getActiveEvent(debounceSessionId, "reply_debounce")!.payload
+      before.activeDebounce(debounceSessionId)!.payload
     ).replyQuote).toEqual({ enabled: true, replyToMessageId: 31_125 });
     disposeRuntimeHarness(before);
     closeApplicationDataStores();
 
-    const after = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "restart quote frozen"
-    }), {
+    const after = createCompletedHarness("restart quote frozen", {
       replyDebounceMs: 60_000,
       runtimeRoot,
       storeOptions: { databasePath, recoverOnOpen: "all" },
@@ -1001,12 +1135,11 @@ describe("SunaRuntime reply debounce", () => {
       }
     });
     after.runtime.activeGateway = after.gateway;
-    const recovered = after.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const recovered = after.activeDebounce(debounceSessionId)!;
     after.runtime.sessionCoordinator.reschedulePendingEvent(recovered.id, Date.now() + 20);
     after.runtime.sessionCoordinator.resume();
 
-    await waitUntil(() => sentOutbounds(after.gateway).length === 1);
-    await after.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await after.waitForOutbounds(1);
     expect(sentOutbounds(after.gateway)[0]?.replyToMessageId).toBe(31_125);
   });
 
@@ -1020,10 +1153,7 @@ describe("SunaRuntime reply debounce", () => {
         arguments: { task: "inspect" }
       }
     }), { replyDebounceMs: 60_000 });
-    const incoming = parseOneBotInboundMessage(
-      groupEvent(31_126, 7_126, "Plana deferred quote", 28_005)
-    )!;
-    harness.runtime.recordIncomingMessage(incoming, { persist: false });
+    const incoming = harness.record(groupEvent(31_126, 7_126, "Plana deferred quote", 28_005));
     const replyQuote = { enabled: true, replyToMessageId: 31_126 };
     const delivery = { outbox: [], replyQuote };
     const rewriteToneText = vi.fn(async (text: string) => `toned: ${text}`);
@@ -1032,17 +1162,12 @@ describe("SunaRuntime reply debounce", () => {
       | undefined;
     harness.runtime.config.bot.quoteGroupReplies = false;
 
-    await harness.runtime.replyToIncoming(
-      conversationRecordId(incoming),
-      incoming,
-      harness.gateway,
-      {
+    await harness.reply(incoming, {
         captureSequence: 1,
         contextThroughSequence: 1,
         delivery,
         onDeferred: (value) => { deferredTurn = value; }
-      }
-    );
+      });
 
     expect(deferredTurn?.originalRequest.replyQuote).toEqual(replyQuote);
     const acknowledgement = decodeAssistantReply(deferredTurn!.acknowledgement.payload);
@@ -1065,10 +1190,7 @@ describe("SunaRuntime reply debounce", () => {
       result: { image: { url: "https://example.test/deferred-image.png" } }
     }
   ])("uses the frozen quote for a durable deferred $label callback", async ({ toolName, result }) => {
-    const harness = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "deferred callback quote frozen"
-    }), { replyDebounceMs: 60_000 });
+    const harness = createCompletedHarness("deferred callback quote frozen", { replyDebounceMs: 60_000 });
     const incoming = parseOneBotInboundMessage(
       groupEvent(toolName === "codex" ? 31_127 : 31_128, 7_127, "Plana callback quote", 28_006)
     )!;
@@ -1103,13 +1225,12 @@ describe("SunaRuntime reply debounce", () => {
     }, { schedule: false });
     harness.runtime.sessionCoordinator.resume();
 
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(1);
     expect(sentOutbounds(harness.gateway)[0]?.replyToMessageId).toBe(incoming.messageId);
   });
 
   it("uses the frozen quote for an outer aborted-turn reply", async () => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const harness = createCompletedHarness("unused", {
       replyDebounceMs: 60_000
     });
     const incoming = parseOneBotInboundMessage(
@@ -1142,6 +1263,11 @@ describe("SunaRuntime reply debounce", () => {
     const abortError = new Error("operation timed out in quote test");
     abortError.name = "AbortError";
     controller.abort(abortError);
+    const rewriteToneText = vi.spyOn(harness.runtime, "rewriteToneText")
+      .mockImplementation(async (text, context) => {
+        expect(context.signal?.aborted).toBe(true);
+        return text;
+      });
 
     const result = await harness.runtime.processSessionEvent(committed.event, {
       signal: controller.signal,
@@ -1150,16 +1276,14 @@ describe("SunaRuntime reply debounce", () => {
     });
     const draft = (result as { outbox: Array<{ payload: unknown }> }).outbox[0]!;
     const timeoutReply = decodeAssistantReply(draft.payload);
+    expect(rewriteToneText).toHaveBeenCalledOnce();
     expect(timeoutReply.replyToMessageId).toBe(31_129);
     await harness.runtime.deliverReplyOutbox(timeoutReply, harness.gateway);
     expect(sentOutbounds(harness.gateway)[0]?.replyToMessageId).toBe(31_129);
   });
 
   it("debounces the group summary command and freezes its handoff context boundary", async () => {
-    const harness = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "unused"
-    }), { replyDebounceMs: 100 });
+    const harness = createCompletedHarness("unused", { replyDebounceMs: 100 });
     const replyWithGroupChatSummary = vi.fn(async () => undefined);
     harness.runtime.replyWithGroupChatSummary = replyWithGroupChatSummary;
     const targetStarted = deferred<void>();
@@ -1171,12 +1295,8 @@ describe("SunaRuntime reply debounce", () => {
       return processIncomingReplyEvent(...args);
     };
 
-    const command = await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_130, 7_130, "/总结群聊", 29_001),
-      harness.gateway
-    );
-    expect(harness.store.getActiveEvent(replyDebounceSessionId(command), "reply_debounce"))
+    const command = await harness.handle(groupEvent(31_130, 7_130, "/总结群聊@Plana", 29_001));
+    expect(harness.activeDebounce(command))
       .toBeDefined();
     await delay(40);
     expect(replyWithGroupChatSummary).not.toHaveBeenCalled();
@@ -1195,7 +1315,7 @@ describe("SunaRuntime reply debounce", () => {
     expect(harness.runtime.conversationRecords.get(conversationRecordId(command))?.messages
       .filter((message) => message.role === "user")
       .map((message) => message.text)).toEqual([
-        "/总结群聊",
+        "/总结群聊@Plana",
         "late after summary handoff"
       ]);
   });
@@ -1221,19 +1341,15 @@ describe("SunaRuntime reply debounce", () => {
     text,
     configure
   }) => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const harness = createCompletedHarness("unused", {
       replyDebounceMs: 60_000,
       configure
     });
     const replyWithGroupChatSummary = vi.fn(async () => undefined);
     harness.runtime.replyWithGroupChatSummary = replyWithGroupChatSummary;
-    const incoming = await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_132, 7_132, text, 29_132),
-      harness.gateway
-    );
+    const incoming = await harness.handle(groupEvent(31_132, 7_132, text, 29_132));
     const debounceSessionId = replyDebounceSessionId(incoming);
-    const active = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const active = harness.activeDebounce(debounceSessionId)!;
     const frozenInvocation = decodeReplyDebounce(active.payload).commandInvocation;
     expect(frozenInvocation).toEqual({
       id: "group-summary",
@@ -1257,10 +1373,7 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("does not promote a frozen direct trigger when mention and persona names become enabled", async () => {
-    const harness = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "direct route preserved"
-    }), {
+    const harness = createCompletedHarness("direct route preserved", {
       replyDebounceMs: 60_000,
       configure(config) {
         config.onebot.mentionNames = ["旧别名"];
@@ -1269,13 +1382,9 @@ describe("SunaRuntime reply debounce", () => {
     });
     const replyWithGroupChatSummary = vi.fn(async () => undefined);
     harness.runtime.replyWithGroupChatSummary = replyWithGroupChatSummary;
-    const incoming = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_134, "/总结群聊@未来名 最近三小时"),
-      harness.gateway
-    );
+    const incoming = await harness.handle(privateEvent(31_134, "/总结群聊@未来名 最近三小时"));
     const debounceSessionId = replyDebounceSessionId(incoming);
-    const active = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const active = harness.activeDebounce(debounceSessionId)!;
     const activePayload = decodeReplyDebounce(active.payload);
     expect(activePayload.route).toBe("direct");
     expect(activePayload.commandInvocation).toBeUndefined();
@@ -1286,8 +1395,7 @@ describe("SunaRuntime reply debounce", () => {
     harness.runtime.sessionCoordinator.reschedulePendingEvent(active.id, Date.now() + 30);
     harness.runtime.sessionCoordinator.resume();
 
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(1);
 
     expect(replyWithGroupChatSummary).not.toHaveBeenCalled();
     expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
@@ -1301,14 +1409,11 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("fails closed before Provider or command dispatch for an unknown frozen command id", async () => {
-    const harness = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "must not run"
-    }));
+    const harness = createCompletedHarness("must not run");
     const replyWithGroupChatSummary = vi.fn(async () => undefined);
     harness.runtime.replyWithGroupChatSummary = replyWithGroupChatSummary;
     const incoming = parseOneBotInboundMessage(
-      groupEvent(31_133, 7_133, "/总结群聊", 29_133)
+      groupEvent(31_133, 7_133, "/总结群聊@Plana", 29_133)
     )!;
     const conversationId = conversationRecordId(incoming);
     harness.runtime.activeGateway = harness.gateway;
@@ -1344,21 +1449,18 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("fails closed at intake when a matched command exceeds durable limits", async () => {
-    const harness = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "must not run"
-    }));
+    const harness = createCompletedHarness("must not run");
     const replyWithGroupChatSummary = vi.fn(async () => undefined);
     harness.runtime.replyWithGroupChatSummary = replyWithGroupChatSummary;
     const incoming = parseOneBotInboundMessage(privateEvent(
       31_135,
-      `/总结群聊 ${"a".repeat(MAX_COMMAND_INVOCATION_ARGS_CHARACTERS + 1)}`
+      `/总结群聊@Plana ${"a".repeat(MAX_COMMAND_INVOCATION_ARGS_CHARACTERS + 1)}`
     ))!;
 
     await expect(harness.runtime.handleInboundMessage(incoming, harness.gateway))
       .rejects.toThrow(/exceeds durable limits/i);
 
-    expect(harness.store.getActiveEvent(replyDebounceSessionId(incoming), "reply_debounce"))
+    expect(harness.activeDebounce(incoming))
       .toBeUndefined();
     expect(harness.store.listEvents(conversationRecordId(incoming))).toEqual([]);
     expect(replyWithGroupChatSummary).not.toHaveBeenCalled();
@@ -1367,10 +1469,7 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("interrupts a running source handoff after a deadline bump and replies exactly once", async () => {
-    const harness = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "race reply once"
-    }), { replyDebounceMs: 140 });
+    const harness = createCompletedHarness("race reply once", { replyDebounceMs: 140 });
     const firstRunning = deferred<void>();
     const releaseFirst = deferred<void>();
     const processReplyDebounceEvent = harness.runtime.processReplyDebounceEvent.bind(harness.runtime);
@@ -1383,22 +1482,14 @@ describe("SunaRuntime reply debounce", () => {
       }
       return processReplyDebounceEvent(...args);
     };
-    const first = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_140, "running handoff first"),
-      harness.gateway
-    );
+    const first = await harness.handle(privateEvent(31_140, "running handoff first"));
     const debounceSessionId = replyDebounceSessionId(first);
 
     await firstRunning.promise;
-    const running = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const running = harness.activeDebounce(debounceSessionId)!;
     expect(running.status).toBe("running");
-    await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_141, "running handoff bump"),
-      harness.gateway
-    );
-    const bumped = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    await harness.handle(privateEvent(31_141, "running handoff bump"));
+    const bumped = harness.activeDebounce(debounceSessionId)!;
     expect(bumped.status).toBe("running");
     expect(bumped.availableAt).toBeGreaterThan(running.availableAt);
     expect(decodeReplyDebounce(bumped.payload).followUps).toEqual([
@@ -1411,8 +1502,7 @@ describe("SunaRuntime reply debounce", () => {
 
     await waitUntil(() => harness.store.listTurns(debounceSessionId)[0]?.status === "interrupted");
     expect(harness.completeRequestTurn).not.toHaveBeenCalled();
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(1);
 
     const conversationId = conversationRecordId(first);
     expect(attempts).toBe(2);
@@ -1430,7 +1520,7 @@ describe("SunaRuntime reply debounce", () => {
       .map((message) => message.text)).toEqual(["running handoff first", "running handoff bump"]);
   });
 
-  it("freezes text, image, attachment, and Thread context at the debounce handoff boundary", async () => {
+  it("freezes text, image, and attachment context at the debounce handoff boundary", async () => {
     const requests: RenderedPromptRequest[] = [];
     const providerOptions: ProviderCompleteOptions[] = [];
     const buildModelContext = vi.fn(async (attachments) => ({
@@ -1447,8 +1537,6 @@ describe("SunaRuntime reply debounce", () => {
       attachmentService,
       replyDebounceMs: 120
     });
-    const prepareGroupThreadContext = vi.fn(async () => undefined);
-    harness.runtime.prepareGroupThreadContext = prepareGroupThreadContext;
     harness.runtime.prepareIncomingMessage = async (incoming) => {
       incoming.attachments = incoming.attachments.map((attachment) => ({
         ...attachment,
@@ -1465,37 +1553,20 @@ describe("SunaRuntime reply debounce", () => {
       return processIncomingReplyEvent(...args);
     };
 
-    await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_150, 7_150, "Plana multimodal boundary trigger", 30_001),
-      harness.gateway
-    );
+    await harness.handle(groupEvent(31_150, 7_150, "Plana multimodal boundary trigger", 30_001));
     await delay(20);
-    const followup = groupEvent(31_151, 7_150, "unused", 30_001);
-    followup.message = [
-      { type: "text", data: { text: "followup text with media" } },
-      { type: "image", data: { url: "https://example.test/followup.png" } },
-      { type: "file", data: { name: "boundary.txt", file_id: "boundary-file" } }
-    ];
-    await handleOneBotEvent(harness.runtime, followup, harness.gateway);
+    const followup = multimodalEvent(groupEvent(31_151, 7_150, "unused", 30_001),
+      "followup text with media", "https://example.test/followup.png", ["boundary.txt", "boundary-file"]);
+    await harness.handle(followup);
     await targetStarted.promise;
 
-    const lateEvent = groupEvent(31_152, 7_150, "unused", 30_002);
-    lateEvent.message = [
-      { type: "text", data: { text: "late outside frozen boundary" } },
-      { type: "image", data: { url: "https://example.test/late.png" } }
-    ];
+    const lateEvent = multimodalEvent(groupEvent(31_152, 7_150, "unused", 30_002),
+      "late outside frozen boundary", "https://example.test/late.png");
     const late = parseOneBotInboundMessage(lateEvent)!;
     harness.runtime.recordIncomingMessage(late);
     releaseTarget.resolve();
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(1);
 
-    expect(prepareGroupThreadContext).toHaveBeenCalledOnce();
-    expect(prepareGroupThreadContext.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
-      captureSequence: 1,
-      contextThroughSequence: 2
-    }));
     const followupHistory = requests[0]!.messages.find((message) => (
       message.content.includes("followup text with media")
     ));
@@ -1524,45 +1595,30 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("recovers atomically bumped follow-up text and attachment after a crash before conversation recording", async () => {
-    const runtimeRoot = path.join(
-      testDataRoot,
-      `followup-crash-${process.pid}-${++runtimeRootSequence}`
-    );
-    const databasePath = path.join(runtimeRoot, "data", "session-queue.sqlite");
-    const before = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "old runtime must not reply"
-    }), {
+    const { runtimeRoot, databasePath } = restartPaths("followup-crash");
+    const before = createCompletedHarness("old runtime must not reply", {
       replyDebounceMs: 450,
       runtimeRoot,
       storeOptions: { databasePath }
     });
-    const trigger = await handleOneBotEvent(
-      before.runtime,
-      privateEvent(31_160, "durable trigger before follow-up crash"),
-      before.gateway
-    );
+    const trigger = await before.handle(privateEvent(31_160, "durable trigger before follow-up crash"));
     before.runtime.recoverReplyDebounceMessages = () => {
       throw new Error("injected crash after atomic follow-up update");
     };
-    const followUpEvent = privateEvent(31_161, "unused");
-    followUpEvent.message = [
-      { type: "text", data: { text: "durable follow-up with attachment" } },
-      { type: "image", data: { url: "https://example.test/durable-followup.png" } },
-      { type: "file", data: { name: "durable.txt", file_id: "durable-file" } }
-    ];
-    await expect(handleOneBotEvent(before.runtime, followUpEvent, before.gateway))
+    const followUpEvent = multimodalEvent(privateEvent(31_161, "unused"),
+      "durable follow-up with attachment", "https://example.test/durable-followup.png", ["durable.txt", "durable-file"]);
+    await expect(before.handle(followUpEvent))
       .rejects.toThrow("injected crash after atomic follow-up update");
 
     const debounceSessionId = replyDebounceSessionId(trigger);
-    const bumped = before.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const bumped = before.activeDebounce(debounceSessionId)!;
     const durablePayload = decodeReplyDebounce(bumped.payload);
     expect(durablePayload.followUps).toEqual([
       expect.objectContaining({
         captureSequence: 2,
         incoming: expect.objectContaining({
           messageId: 31_161,
-          text: "durable follow-up with attachment",
+          text: "durable follow-up with attachment [内容图片#1]  [文件：durable.txt]",
           attachments: [expect.objectContaining({ name: "durable.txt" })]
         })
       })
@@ -1582,8 +1638,7 @@ describe("SunaRuntime reply debounce", () => {
     after.runtime.activeGateway = after.gateway;
     after.runtime.sessionCoordinator.resume();
 
-    await waitUntil(() => sentOutbounds(after.gateway).length === 1);
-    await after.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await after.waitForOutbounds(1);
 
     const recovered = after.runtime.conversationRecords.get(conversationRecordId(trigger));
     expect(recovered?.messages.filter((message) => message.role === "user").map((message) => ({
@@ -1592,7 +1647,7 @@ describe("SunaRuntime reply debounce", () => {
       attachments: message.attachments?.map((attachment) => attachment.name)
     }))).toEqual([
       { sequence: 1, text: "durable trigger before follow-up crash", attachments: [] },
-      { sequence: 2, text: "durable follow-up with attachment", attachments: ["durable.txt"] }
+      { sequence: 2, text: "durable follow-up with attachment [内容图片#1]  [文件：durable.txt]", attachments: ["durable.txt"] }
     ]);
     const providerContent = requests[0]!.messages.map((message) => message.content).join("\n");
     expect(providerContent.indexOf("durable trigger before follow-up crash"))
@@ -1605,7 +1660,7 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("globally materializes A1, B2, and durable A3 before another sender can claim a sequence", async () => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const harness = createCompletedHarness("unused", {
       replyDebounceMs: 900
     });
     const originalRecordIncoming = harness.runtime.recordIncomingMessage.bind(harness.runtime);
@@ -1618,31 +1673,19 @@ describe("SunaRuntime reply debounce", () => {
       return originalRecordIncoming(incoming, options);
     };
     const triggerEvent = groupEvent(31_170, 7_170, "Plana committed trigger", 41_001);
-    await expect(handleOneBotEvent(harness.runtime, triggerEvent, harness.gateway))
+    await expect(harness.handle(triggerEvent))
       .rejects.toThrow("injected crash after trigger queue commit");
     harness.runtime.recordIncomingMessage = originalRecordIncoming;
 
     const trigger = parseOneBotInboundMessage(triggerEvent)!;
     const debounceSessionId = replyDebounceSessionId(trigger);
-    const senderBEvent = groupEvent(31_171, 7_170, "unused", 41_002);
-    senderBEvent.message = [
-      { type: "text", data: { text: "Plana sender B trigger" } },
-      { type: "image", data: { url: "https://example.test/b2.png" } },
-      { type: "file", data: { name: "b2.txt", file_id: "b2-file" } }
-    ];
-    await handleOneBotEvent(
-      harness.runtime,
-      senderBEvent,
-      harness.gateway
-    );
-    const followUpEvent = groupEvent(31_172, 7_170, "unused", 41_001);
-    followUpEvent.message = [
-      { type: "text", data: { text: "sender A durable follow-up" } },
-      { type: "image", data: { url: "https://example.test/a3.png" } },
-      { type: "file", data: { name: "a3.txt", file_id: "a3-file" } }
-    ];
-    await handleOneBotEvent(harness.runtime, followUpEvent, harness.gateway);
-    const deadline = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!.availableAt;
+    const senderBEvent = multimodalEvent(groupEvent(31_171, 7_170, "unused", 41_002),
+      "Plana sender B trigger", "https://example.test/b2.png", ["b2.txt", "b2-file"]);
+    await harness.handle(senderBEvent);
+    const followUpEvent = multimodalEvent(groupEvent(31_172, 7_170, "unused", 41_001),
+      "sender A durable follow-up", "https://example.test/a3.png", ["a3.txt", "a3-file"]);
+    await harness.handle(followUpEvent);
+    const deadline = harness.activeDebounce(debounceSessionId)!.availableAt;
 
     harness.runtime.conversationRecords.clear();
     harness.runtime.recoverActiveReplyDebounceConversation(trigger);
@@ -1665,51 +1708,39 @@ describe("SunaRuntime reply debounce", () => {
       {
         id: "31171",
         sequence: 2,
-        text: "Plana sender B trigger",
+        text: "Plana sender B trigger [内容图片#1]  [文件：b2.txt]",
         images: ["https://example.test/b2.png"],
         attachments: ["b2.txt"]
       },
       {
         id: "31172",
         sequence: 3,
-        text: "sender A durable follow-up",
+        text: "sender A durable follow-up [内容图片#1]  [文件：a3.txt]",
         images: ["https://example.test/a3.png"],
         attachments: ["a3.txt"]
       }
     ]);
 
     harness.runtime.seenIncomingEvents.clear();
-    await handleOneBotEvent(harness.runtime, triggerEvent, harness.gateway);
-    expect(harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!.availableAt)
+    await harness.handle(triggerEvent);
+    expect(harness.activeDebounce(debounceSessionId)!.availableAt)
       .toBe(deadline);
     expect(harness.runtime.conversationRecords.get(conversationRecordId(trigger))!.messages
       .filter((message) => message.role === "user")).toHaveLength(3);
   });
 
   it("keeps the first route and stores ordered multimodal follow-up snapshots without duplicates", async () => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const harness = createCompletedHarness("unused", {
       replyDebounceMs: 900
     });
-    const trigger = await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_180, 7_180, "Plana fixed direct route", 42_001),
-      harness.gateway
-    );
-    const commandFollowUp = groupEvent(31_181, 7_180, "unused", 42_001);
-    commandFollowUp.message = [
-      { type: "text", data: { text: "/总结群聊" } },
-      { type: "image", data: { url: "https://example.test/ordered-one.png" } },
-      { type: "file", data: { name: "ordered-one.txt", file_id: "ordered-one" } }
-    ];
-    await handleOneBotEvent(harness.runtime, commandFollowUp, harness.gateway);
-    await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(31_182, 7_180, "second ordered follow-up", 42_001),
-      harness.gateway
-    );
+    const trigger = await harness.handle(groupEvent(31_180, 7_180, "Plana fixed direct route", 42_001));
+    const commandFollowUp = multimodalEvent(groupEvent(31_181, 7_180, "unused", 42_001),
+      "/总结群聊", "https://example.test/ordered-one.png", ["ordered-one.txt", "ordered-one"]);
+    await harness.handle(commandFollowUp);
+    await harness.handle(groupEvent(31_182, 7_180, "second ordered follow-up", 42_001));
 
     const debounceSessionId = replyDebounceSessionId(trigger);
-    const active = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const active = harness.activeDebounce(debounceSessionId)!;
     const decoded = decodeReplyDebounce(active.payload);
     expect(decoded.route).toBe("direct");
     expect(decoded.followUps?.map((followUp) => ({
@@ -1722,7 +1753,7 @@ describe("SunaRuntime reply debounce", () => {
       {
         sequence: 2,
         messageId: 31_181,
-        text: "/总结群聊",
+        text: "/总结群聊 [内容图片#1]  [文件：ordered-one.txt]",
         images: ["https://example.test/ordered-one.png"],
         attachments: ["ordered-one.txt"]
       },
@@ -1737,22 +1768,18 @@ describe("SunaRuntime reply debounce", () => {
 
     const beforeReplayDeadline = active.availableAt;
     harness.runtime.seenIncomingEvents.clear();
-    await handleOneBotEvent(harness.runtime, commandFollowUp, harness.gateway);
-    const replayed = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    await harness.handle(commandFollowUp);
+    const replayed = harness.activeDebounce(debounceSessionId)!;
     expect(replayed.availableAt).toBe(beforeReplayDeadline);
     expect(decodeReplyDebounce(replayed.payload).followUps).toHaveLength(2);
   });
 
   it("rejects a debounce event stored under a synthetic session for another sender", async () => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const harness = createCompletedHarness("unused", {
       replyDebounceMs: 900
     });
-    const incoming = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_190, "synthetic session guard"),
-      harness.gateway
-    );
-    const event = harness.store.getActiveEvent(replyDebounceSessionId(incoming), "reply_debounce")!;
+    const incoming = await harness.handle(privateEvent(31_190, "synthetic session guard"));
+    const event = harness.activeDebounce(incoming)!;
 
     await expect(harness.runtime.processReplyDebounceEvent({
       ...event,
@@ -1761,28 +1788,20 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("merges stale concurrent B and C follow-up updates with payload CAS and keeps duplicates inert", async () => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const harness = createCompletedHarness("unused", {
       replyDebounceMs: 900
     });
-    const trigger = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_195, "CAS trigger"),
-      harness.gateway
-    );
+    const trigger = await harness.handle(privateEvent(31_195, "CAS trigger"));
     const debounceSessionId = replyDebounceSessionId(trigger);
-    const stale = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const stale = harness.activeDebounce(debounceSessionId)!;
     const followUpB = parseOneBotInboundMessage(privateEvent(31_196, "concurrent B"))!;
-    const followUpCEvent = privateEvent(31_197, "unused");
-    followUpCEvent.message = [
-      { type: "text", data: { text: "concurrent C" } },
-      { type: "image", data: { url: "https://example.test/concurrent-c.png" } },
-      { type: "file", data: { name: "concurrent-c.txt", file_id: "concurrent-c" } }
-    ];
+    const followUpCEvent = multimodalEvent(privateEvent(31_197, "unused"),
+      "concurrent C", "https://example.test/concurrent-c.png", ["concurrent-c.txt", "concurrent-c"]);
     const followUpC = parseOneBotInboundMessage(followUpCEvent)!;
 
     expect(harness.runtime.bumpReplyDebounce(stale, followUpB).status).toBe("updated");
     expect(harness.runtime.bumpReplyDebounce(stale, followUpC).status).toBe("updated");
-    const merged = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const merged = harness.activeDebounce(debounceSessionId)!;
     expect(decodeReplyDebounce(merged.payload).followUps?.map((followUp) => ({
       sequence: followUp.captureSequence,
       messageId: followUp.incoming.messageId,
@@ -1800,7 +1819,7 @@ describe("SunaRuntime reply debounce", () => {
       {
         sequence: 3,
         messageId: 31_197,
-        text: "concurrent C",
+        text: "concurrent C [内容图片#1]  [文件：concurrent-c.txt]",
         images: ["https://example.test/concurrent-c.png"],
         attachments: ["concurrent-c.txt"]
       }
@@ -1808,21 +1827,14 @@ describe("SunaRuntime reply debounce", () => {
 
     const mergedDeadline = merged.availableAt;
     expect(harness.runtime.bumpReplyDebounce(stale, followUpB).status).toBe("duplicate");
-    const duplicate = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const duplicate = harness.activeDebounce(debounceSessionId)!;
     expect(duplicate.availableAt).toBe(mergedDeadline);
     expect(decodeReplyDebounce(duplicate.payload).followUps).toHaveLength(2);
   });
 
   it("bounds seventy durable follow-ups, fails closed on an evicted gap, and reopens complete business context", async () => {
-    const runtimeRoot = path.join(
-      testDataRoot,
-      `bounded-followups-${process.pid}-${++runtimeRootSequence}`
-    );
-    const databasePath = path.join(runtimeRoot, "data", "session-queue.sqlite");
-    const before = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "old runtime must not reply"
-    }), {
+    const { runtimeRoot, databasePath } = restartPaths("bounded-followups");
+    const before = createCompletedHarness("old runtime must not reply", {
       replyDebounceMs: 10_000,
       runtimeRoot,
       storeOptions: { databasePath },
@@ -1836,11 +1848,7 @@ describe("SunaRuntime reply debounce", () => {
       }));
     };
     const triggerMarker = "window-trigger|";
-    const trigger = await handleOneBotEvent(
-      before.runtime,
-      privateEvent(32_000, triggerMarker),
-      before.gateway
-    );
+    const trigger = await before.handle(privateEvent(32_000, triggerMarker));
     const followUpMarkers = Array.from({ length: 70 }, (_, index) => (
       `window-item-${String(index + 1).padStart(3, "0")}|`
     ));
@@ -1859,13 +1867,9 @@ describe("SunaRuntime reply debounce", () => {
     for (const [index, marker] of followUpMarkers.entries()) {
       const event = privateEvent(32_001 + index, marker);
       if (index === followUpMarkers.length - 1) {
-        event.message = [
-          { type: "text", data: { text: marker } },
-          { type: "image", data: { url: "https://example.test/tail-window.png" } },
-          { type: "file", data: { name: "tail-window.txt", file_id: "tail-window" } }
-        ];
+        multimodalEvent(event, marker, "https://example.test/tail-window.png", ["tail-window.txt", "tail-window"]);
       }
-      const handled = handleOneBotEvent(before.runtime, event, before.gateway);
+      const handled = before.handle(event);
       if (index === followUpMarkers.length - 1) {
         await expect(handled).rejects.toThrow("injected crash after bounded tail update");
       } else {
@@ -1875,7 +1879,7 @@ describe("SunaRuntime reply debounce", () => {
     await delay(20);
 
     const debounceSessionId = replyDebounceSessionId(trigger);
-    const pending = before.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const pending = before.activeDebounce(debounceSessionId)!;
     const boundedPayload = decodeReplyDebounce(pending.payload);
     expect(boundedPayload.followUps).toHaveLength(MAX_RUNTIME_REPLY_FOLLOW_UP_SNAPSHOTS);
     expect(boundedPayload.followUps?.at(0)?.captureSequence).toBe(8);
@@ -1883,7 +1887,7 @@ describe("SunaRuntime reply debounce", () => {
       captureSequence: 71,
       incoming: expect.objectContaining({
         messageId: 32_070,
-        text: "window-item-070|",
+        text: "window-item-070| [内容图片#1]  [文件：tail-window.txt]",
         attachments: [expect.objectContaining({ name: "tail-window.txt" })]
       })
     }));
@@ -1926,7 +1930,7 @@ describe("SunaRuntime reply debounce", () => {
     expect(recoveredRecord?.messages.filter((message) => message.role === "user"))
       .toHaveLength(70);
     after.runtime.activeGateway = after.gateway;
-    const recoveredEvent = after.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const recoveredEvent = after.activeDebounce(debounceSessionId)!;
     after.runtime.sessionCoordinator.reschedulePendingEvent(recoveredEvent.id, Date.now() + 30);
     after.runtime.sessionCoordinator.resume();
 
@@ -1961,23 +1965,15 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("leaves the full 64-item tail and deadline unchanged when the next strict snapshot upsert fails", async () => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const harness = createCompletedHarness("unused", {
       replyDebounceMs: 10_000
     });
-    const trigger = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(33_000, "strict failure trigger"),
-      harness.gateway
-    );
+    const trigger = await harness.handle(privateEvent(33_000, "strict failure trigger"));
     for (let index = 1; index <= MAX_RUNTIME_REPLY_FOLLOW_UP_SNAPSHOTS; index += 1) {
-      await handleOneBotEvent(
-        harness.runtime,
-        privateEvent(33_000 + index, `strict retained follow-up ${index}`),
-        harness.gateway
-      );
+      await harness.handle(privateEvent(33_000 + index, `strict retained follow-up ${index}`));
     }
     const debounceSessionId = replyDebounceSessionId(trigger);
-    const before = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const before = harness.activeDebounce(debounceSessionId)!;
     const beforePayload = decodeReplyDebounce(before.payload);
     expect(beforePayload.followUps).toHaveLength(MAX_RUNTIME_REPLY_FOLLOW_UP_SNAPSHOTS);
     expect(beforePayload.followUps?.at(-1)?.incoming.messageId).toBe(33_064);
@@ -1986,13 +1982,9 @@ describe("SunaRuntime reply debounce", () => {
       .mockImplementation(() => {
         throw new Error("injected strict conversation upsert failure");
       });
-    await expect(handleOneBotEvent(
-      harness.runtime,
-      privateEvent(33_065, "must not evict the durable tail"),
-      harness.gateway
-    )).rejects.toThrow("injected strict conversation upsert failure");
+    await expect(harness.handle(privateEvent(33_065, "must not evict the durable tail"))).rejects.toThrow("injected strict conversation upsert failure");
 
-    const after = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const after = harness.activeDebounce(debounceSessionId)!;
     expect(strictUpsert).toHaveBeenCalledOnce();
     expect(after.availableAt).toBe(before.availableAt);
     expect(after.payload).toEqual(before.payload);
@@ -2002,17 +1994,13 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("does not mark another sender seen when strict active-conversation persistence fails", async () => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const harness = createCompletedHarness("unused", {
       replyDebounceMs: 60_000,
       persistConversations: true
     });
-    const trigger = await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(33_100, 8_100, "Plana strict retry trigger", 60_001),
-      harness.gateway
-    );
+    const trigger = await harness.handle(groupEvent(33_100, 8_100, "Plana strict retry trigger", 60_001));
     const debounceSessionId = replyDebounceSessionId(trigger);
-    const initialEvent = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const initialEvent = harness.activeDebounce(debounceSessionId)!;
     const otherSenderEvent = groupEvent(33_101, 8_100, "ordinary context from sender B", 60_002);
     delete otherSenderEvent.message_id;
     const otherSender = parseOneBotInboundMessage(otherSenderEvent)!;
@@ -2026,10 +2014,10 @@ describe("SunaRuntime reply debounce", () => {
         return persistStrict(record);
       });
 
-    await expect(handleOneBotEvent(harness.runtime, otherSenderEvent, harness.gateway))
+    await expect(harness.handle(otherSenderEvent))
       .rejects.toThrow("injected ambient strict upsert failure");
 
-    const failedEvent = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const failedEvent = harness.activeDebounce(debounceSessionId)!;
     expect(strictUpsert).toHaveBeenCalledTimes(2);
     expect(harness.runtime.seenIncomingEvents.has(otherSenderKey)).toBe(false);
     expect(failedEvent.availableAt).toBe(initialEvent.availableAt);
@@ -2043,9 +2031,9 @@ describe("SunaRuntime reply debounce", () => {
       .find((record) => record.id === conversationRecordId(trigger))?.messages
       .some((message) => message.text === "ordinary context from sender B")).toBe(false);
 
-    await handleOneBotEvent(harness.runtime, otherSenderEvent, harness.gateway);
+    await harness.handle(otherSenderEvent);
 
-    const retriedEvent = harness.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const retriedEvent = harness.activeDebounce(debounceSessionId)!;
     expect(strictUpsert).toHaveBeenCalledTimes(4);
     expect(harness.runtime.seenIncomingEvents.has(otherSenderKey)).toBe(true);
     expect(retriedEvent.availableAt).toBe(initialEvent.availableAt);
@@ -2062,17 +2050,13 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("keeps another sender's queued candidate recoverable when strict persistence fails", async () => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const harness = createCompletedHarness("unused", {
       replyDebounceMs: 60_000,
       persistConversations: true
     });
-    const trigger = await handleOneBotEvent(
-      harness.runtime,
-      groupEvent(33_150, 8_150, "Plana existing sender trigger", 60_101),
-      harness.gateway
-    );
+    const trigger = await harness.handle(groupEvent(33_150, 8_150, "Plana existing sender trigger", 60_101));
     const triggerSessionId = replyDebounceSessionId(trigger);
-    const triggerEvent = harness.store.getActiveEvent(triggerSessionId, "reply_debounce")!;
+    const triggerEvent = harness.activeDebounce(triggerSessionId)!;
     const candidateEvent = groupEvent(33_151, 8_150, "Plana candidate from sender B", 60_102);
     const candidate = parseOneBotInboundMessage(candidateEvent)!;
     const candidateKey = persistentIncomingKey(candidate);
@@ -2085,27 +2069,27 @@ describe("SunaRuntime reply debounce", () => {
         return persistStrict(record);
       });
 
-    await expect(handleOneBotEvent(harness.runtime, candidateEvent, harness.gateway))
+    await expect(harness.handle(candidateEvent))
       .rejects.toThrow("injected candidate strict upsert failure");
 
     const candidateSessionId = replyDebounceSessionId(candidate);
-    const queuedCandidate = harness.store.getActiveEvent(candidateSessionId, "reply_debounce")!;
+    const queuedCandidate = harness.activeDebounce(candidateSessionId)!;
     expect(strictUpsert).toHaveBeenCalledTimes(2);
     expect(decodeReplyDebounce(queuedCandidate.payload).captureSequence).toBe(2);
     expect(harness.runtime.seenIncomingEvents.has(candidateKey)).toBe(false);
-    expect(harness.store.getActiveEvent(triggerSessionId, "reply_debounce")?.availableAt)
+    expect(harness.activeDebounce(triggerSessionId)?.availableAt)
       .toBe(triggerEvent.availableAt);
     expect(harness.runtime.conversationRecords.get(conversationRecordId(trigger))?.messages
       .filter((message) => message.role === "user")
       .map((message) => message.text)).toEqual(["Plana existing sender trigger"]);
 
-    await handleOneBotEvent(harness.runtime, candidateEvent, harness.gateway);
+    await harness.handle(candidateEvent);
 
     expect(strictUpsert).toHaveBeenCalledTimes(3);
     expect(harness.runtime.seenIncomingEvents.has(candidateKey)).toBe(true);
-    expect(harness.store.getActiveEvent(triggerSessionId, "reply_debounce")?.availableAt)
+    expect(harness.activeDebounce(triggerSessionId)?.availableAt)
       .toBe(triggerEvent.availableAt);
-    expect(harness.store.getActiveEvent(candidateSessionId, "reply_debounce")?.availableAt)
+    expect(harness.activeDebounce(candidateSessionId)?.availableAt)
       .toBe(queuedCandidate.availableAt);
     expect(harness.store.listEvents(candidateSessionId)).toHaveLength(1);
     expect(harness.runtime.conversationRecords.get(conversationRecordId(trigger))?.messages
@@ -2117,45 +2101,31 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("re-prepares another id-less sender's attachment after restart without moving the trigger deadline", async () => {
-    const runtimeRoot = path.join(
-      testDataRoot,
-      `other-sender-crash-${process.pid}-${++runtimeRootSequence}`
-    );
-    const databasePath = path.join(runtimeRoot, "data", "session-queue.sqlite");
-    const before = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const { runtimeRoot, databasePath } = restartPaths("other-sender-crash");
+    const before = createCompletedHarness("unused", {
       replyDebounceMs: 60_000,
       runtimeRoot,
       storeOptions: { databasePath },
       persistConversations: true
     });
-    const trigger = await handleOneBotEvent(
-      before.runtime,
-      groupEvent(33_200, 8_200, "Plana crash-safe trigger A", 61_001),
-      before.gateway
-    );
+    const trigger = await before.handle(groupEvent(33_200, 8_200, "Plana crash-safe trigger A", 61_001));
     const debounceSessionId = replyDebounceSessionId(trigger);
-    const initialDeadline = before.store.getActiveEvent(
-      debounceSessionId,
-      "reply_debounce"
-    )!.availableAt;
-    const senderBEvent = groupEvent(33_201, 8_200, "unused", 61_002);
+    const initialDeadline = before.activeDebounce(debounceSessionId)!.availableAt;
+    const senderBEvent = multimodalEvent(groupEvent(33_201, 8_200, "unused", 61_002),
+      "crash-safe context B with attachment", "https://example.test/sender-b-restart.png",
+      ["sender-b-restart.txt", "sender-b-restart"]);
     Reflect.deleteProperty(senderBEvent, "message_id");
-    senderBEvent.message = [
-      { type: "text", data: { text: "crash-safe context B with attachment" } },
-      { type: "image", data: { url: "https://example.test/sender-b-restart.png" } },
-      { type: "file", data: { name: "sender-b-restart.txt", file_id: "sender-b-restart" } }
-    ];
-    const senderB = await handleOneBotEvent(before.runtime, senderBEvent, before.gateway);
+    const senderB = await before.handle(senderBEvent);
     const senderBStoredId = before.runtime.conversationRecords
       .get(conversationRecordId(trigger))?.messages
-      .find((message) => message.text === "crash-safe context B with attachment")?.id;
+      .find((message) => message.text === "crash-safe context B with attachment [内容图片#1]  [文件：sender-b-restart.txt]")?.id;
     expect(senderBStoredId).toMatch(/^content:v1:/);
     expect(before.runtime.conversationRecords.get(conversationRecordId(trigger))?.messages
       .find((message) => message.id === senderBStoredId)?.attachments)
       .toEqual([expect.objectContaining({ name: "sender-b-restart.txt", status: "pending" })]);
-    expect(before.store.getActiveEvent(debounceSessionId, "reply_debounce")?.availableAt)
+    expect(before.activeDebounce(debounceSessionId)?.availableAt)
       .toBe(initialDeadline);
-    expect(before.store.getActiveEvent(replyDebounceSessionId(senderB), "reply_debounce"))
+    expect(before.activeDebounce(senderB))
       .toBeUndefined();
     disposeRuntimeHarness(before);
     closeApplicationDataStores();
@@ -2195,66 +2165,47 @@ describe("SunaRuntime reply debounce", () => {
       {
         id: senderBStoredId,
         sequence: 2,
-        text: "crash-safe context B with attachment"
+        text: "crash-safe context B with attachment [内容图片#1]  [文件：sender-b-restart.txt]"
       }
     ]);
-    const recoveredEvent = after.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
+    const recoveredEvent = after.activeDebounce(debounceSessionId)!;
     expect(recoveredEvent.availableAt).toBe(initialDeadline);
-    expect(after.store.getActiveEvent(replyDebounceSessionId(senderB), "reply_debounce"))
+    expect(after.activeDebounce(senderB))
       .toBeUndefined();
 
     after.runtime.activeGateway = after.gateway;
     after.runtime.sessionCoordinator.reschedulePendingEvent(recoveredEvent.id, Date.now() + 30);
     after.runtime.sessionCoordinator.resume();
-    await waitUntil(() => sentOutbounds(after.gateway).length === 1);
-    await after.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await after.waitForOutbounds(1);
 
     const providerContent = requests[0]!.messages.map((message) => message.content).join("\n");
-    expect(providerContent.indexOf("Plana crash-safe trigger A"))
-      .toBeLessThan(providerContent.indexOf("crash-safe context B with attachment"));
     expect(providerContent.match(/Plana crash-safe trigger A/g)).toHaveLength(1);
-    expect(providerContent.match(/crash-safe context B with attachment/g)).toHaveLength(1);
-    expect(providerContent).toContain("SENDER_B_RESTART_ATTACHMENT_CONTEXT");
+    expect(providerContent).not.toContain("crash-safe context B with attachment");
+    expect(providerContent).not.toContain("SENDER_B_RESTART_ATTACHMENT_CONTEXT");
     expect(requests[0]!.messages.at(-1)?.imageUrls)
-      .toContain("https://example.test/sender-b-restart.png");
+      .not.toContain("https://example.test/sender-b-restart.png");
     const preparedSenderB = prepareIncomingMessage.mock.calls
       .find(([incoming]) => incoming.userId === 61_002)?.[0];
-    expect(preparedSenderB).toEqual(expect.objectContaining({
-      userId: 61_002,
-      attachments: [expect.objectContaining({ name: "sender-b-restart.txt" })]
-    }));
-    expect(preparedSenderB?.messageId).toBeUndefined();
-    expect(Object.hasOwn(preparedSenderB!, "messageId")).toBe(false);
-    expect(buildModelContext).toHaveBeenCalledWith(
-      [expect.objectContaining({ name: "sender-b-restart.txt", status: "ready" })],
-      expect.any(String)
-    );
+    expect(preparedSenderB).toBeUndefined();
+    expect(buildModelContext).not.toHaveBeenCalled();
     expect(after.runtime.conversationRecords.get(conversationRecordId(trigger))?.messages
       .find((message) => message.id === senderBStoredId)?.attachments)
-      .toEqual([expect.objectContaining({ name: "sender-b-restart.txt", status: "ready" })]);
+      .toEqual([expect.objectContaining({ name: "sender-b-restart.txt", status: "pending" })]);
     expect(after.completeRequestTurn).toHaveBeenCalledOnce();
   });
 
   it("does not duplicate a completed id-less source when the same event is redelivered after restart", async () => {
-    const runtimeRoot = path.join(
-      testDataRoot,
-      `idless-complete-redelivery-${process.pid}-${++runtimeRootSequence}`
-    );
-    const databasePath = path.join(runtimeRoot, "data", "session-queue.sqlite");
+    const { runtimeRoot, databasePath } = restartPaths("idless-complete-redelivery");
     const event = privateEvent(33_250, "completed id-less source");
     Reflect.deleteProperty(event, "message_id");
-    const before = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "completed once"
-    }), {
+    const before = createCompletedHarness("completed once", {
       replyDebounceMs: 30,
       runtimeRoot,
       storeOptions: { databasePath },
       persistConversations: true
     });
-    const first = await handleOneBotEvent(before.runtime, event, before.gateway);
-    await waitUntil(() => sentOutbounds(before.gateway).length === 1);
-    await before.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    const first = await before.handle(event);
+    await before.waitForOutbounds(1);
     const conversationId = conversationRecordId(first);
     const firstUserMessage = before.runtime.conversationRecords.get(conversationId)?.messages
       .find((message) => message.role === "user")!;
@@ -2263,10 +2214,7 @@ describe("SunaRuntime reply debounce", () => {
     disposeRuntimeHarness(before);
     closeApplicationDataStores();
 
-    const after = createRuntimeHarness(async () => ({
-      kind: "completed",
-      text: "must not run twice"
-    }), {
+    const after = createCompletedHarness("must not run twice", {
       replyDebounceMs: 30,
       runtimeRoot,
       storeOptions: { databasePath, recoverOnOpen: "all" },
@@ -2274,21 +2222,15 @@ describe("SunaRuntime reply debounce", () => {
       loadPersistedConversations: true
     });
     const prepareIncomingMessage = vi.fn(async () => undefined);
-    const scheduleMemoryCompression = vi.fn();
-    const enqueueConversationMemory = vi.fn(async () => undefined);
     after.runtime.prepareIncomingMessage = prepareIncomingMessage;
-    after.runtime.scheduleMemoryCompression = scheduleMemoryCompression;
-    after.runtime.enqueueConversationMemory = enqueueConversationMemory;
 
-    const redelivered = await handleOneBotEvent(after.runtime, event, after.gateway);
+    const redelivered = await after.handle(event);
     await delay(80);
 
     expect(persistentIncomingKey(redelivered)).toBe(persistentIncomingKey(first));
     expect(after.completeRequestTurn).not.toHaveBeenCalled();
     expect(sentOutbounds(after.gateway)).toEqual([]);
     expect(prepareIncomingMessage).toHaveBeenCalledOnce();
-    expect(scheduleMemoryCompression).not.toHaveBeenCalled();
-    expect(enqueueConversationMemory).not.toHaveBeenCalled();
     const userMessages = after.runtime.conversationRecords.get(conversationId)?.messages
       .filter((message) => message.role === "user");
     expect(userMessages).toEqual([expect.objectContaining({
@@ -2302,15 +2244,11 @@ describe("SunaRuntime reply debounce", () => {
   });
 
   it("keeps active debounce, frozen source and callback, and deferred jobs outside top eighty", async () => {
-    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+    const harness = createCompletedHarness("unused", {
       replyDebounceMs: 60_000,
       persistConversations: true
     });
-    const activeDebounce = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(34_000, "old active debounce"),
-      harness.gateway
-    );
+    const activeDebounce = await harness.handle(privateEvent(34_000, "old active debounce"));
     const frozenSource = parseOneBotInboundMessage(
       groupEvent(34_001, 8_001, "old frozen source", 51_001)
     )!;
@@ -2426,23 +2364,14 @@ describe("SunaRuntime reply debounce", () => {
       return processIncomingReplyEvent(...args);
     };
 
-    const first = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_200, "first handoff trigger"),
-      harness.gateway
-    );
+    const first = await harness.handle(privateEvent(31_200, "first handoff trigger"));
     await firstTargetStarted.promise;
-    const second = await handleOneBotEvent(
-      harness.runtime,
-      privateEvent(31_201, "new window after handoff"),
-      harness.gateway
-    );
-    expect(harness.store.getActiveEvent(replyDebounceSessionId(second), "reply_debounce"))
+    const second = await harness.handle(privateEvent(31_201, "new window after handoff"));
+    expect(harness.activeDebounce(second))
       .toBeDefined();
     releaseFirstTarget.resolve();
 
-    await waitUntil(() => sentOutbounds(harness.gateway).length === 2);
-    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    await harness.waitForOutbounds(2);
 
     expect(providerCalls).toBe(2);
     expect(targetAttempts).toBe(2);
@@ -2455,6 +2384,18 @@ describe("SunaRuntime reply debounce", () => {
     ]);
   });
 });
+
+function createCompletedHarness(
+  text: string,
+  options?: Parameters<typeof createRuntimeHarness>[1]
+) {
+  return createRuntimeHarness(async () => ({ kind: "completed", text }), options);
+}
+
+function restartPaths(label: string) {
+  const runtimeRoot = path.join(testDataRoot, `${label}-${process.pid}-${++runtimeRootSequence}`);
+  return { runtimeRoot, databasePath: path.join(runtimeRoot, "data", "session-queue.sqlite") };
+}
 
 function createRuntimeHarness(
   complete: (
@@ -2470,6 +2411,7 @@ function createRuntimeHarness(
     persistConversations?: boolean;
     loadPersistedConversations?: boolean;
     codexRunner?: CodexRunner;
+    agentExtensions?: RuntimeAgentExtensionsPort;
   } = {}
 ) {
   const store = new SessionStore(options.storeOptions ?? { databasePath: ":memory:" });
@@ -2490,6 +2432,7 @@ function createRuntimeHarness(
     attachmentService: options.attachmentService ?? {} as never,
     sessionStore: store,
     ...(options.codexRunner ? { codexRunner: options.codexRunner } : {}),
+    ...(options.agentExtensions ? { agentExtensions: options.agentExtensions } : {}),
     resolveToolCapabilities: async () => ({ codex: false, workspaceBash: false }),
     ...(options.replyDebounceMs === undefined
       ? {}
@@ -2517,11 +2460,7 @@ function createRuntimeHarness(
   runtime.getProvider = () => provider;
   runtime.prepareIncomingMessage = async () => undefined;
   runtime.scheduleAttachmentCacheRefresh = () => undefined;
-  runtime.scheduleMemoryCompression = () => undefined;
-  runtime.enqueueConversationMemory = async () => undefined;
-  runtime.scheduleMemoryDrain = () => undefined;
   if (!options.persistConversations) runtime.persistConversationRecords = () => undefined;
-  runtime.prepareGroupThreadContext = async () => undefined;
   runtime.renderPromptRequest = async (_id, variables) => ({
     messages: [
       { role: "system", content: "test system" },
@@ -2531,11 +2470,24 @@ function createRuntimeHarness(
     response_format: { type: "text" }
   });
 
+  const gateway = fakeGateway();
   return {
-    runtime,
-    store,
-    gateway: fakeGateway(),
-    completeRequestTurn
+    runtime, store, gateway, completeRequestTurn,
+    activeDebounce: (value: string | Parameters<typeof replyDebounceSessionId>[0]) =>
+      store.getActiveEvent(typeof value === "string" ? value : replyDebounceSessionId(value), "reply_debounce"),
+    handle: (event: OneBotEvent, accountId?: string, agentId?: string) =>
+      handleOneBotEvent(runtime, event, gateway, accountId, agentId),
+    reply: (incoming: Parameters<SunaRuntime["replyToIncoming"]>[1], options: Parameters<SunaRuntime["replyToIncoming"]>[3]) =>
+      runtime.replyToIncoming(conversationRecordId(incoming), incoming, gateway, options),
+    record: (event: OneBotEvent) => {
+      const incoming = parseOneBotInboundMessage(event)!;
+      runtime.recordIncomingMessage(incoming, { persist: false });
+      return incoming;
+    },
+    waitForOutbounds: async (count = 1) => {
+      await waitUntil(() => sentOutbounds(gateway).length === count);
+      await runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+    }
   };
 }
 
@@ -2553,6 +2505,20 @@ function fakeGateway() {
     })),
     poke: vi.fn(async () => ({ accepted: true as const }))
   } as unknown as MessagingPort;
+}
+
+function longTermRecallMatch() {
+  return {
+    id: "long-term-lighthouse",
+    source: "long_term" as const,
+    sourceTitle: "长期记忆",
+    fileName: "LONG_TERM_MEMORY.jsonl",
+    editable: true,
+    key: "long-term-lighthouse",
+    value: "我在海边看见一座发光的灯塔。",
+    text: "我在海边看见一座发光的灯塔。",
+    field: "fact"
+  };
 }
 
 async function handleOneBotEvent(
@@ -2600,6 +2566,26 @@ function privateEvent(messageId: number, text: string): OneBotEvent {
     sender: { nickname: "private-user" },
     message: text
   };
+}
+
+function quotedEvent(event: OneBotEvent, replyId: string, text: string) {
+  event.message = [
+    { type: "reply", data: { id: replyId } },
+    { type: "text", data: { text } }
+  ];
+  return event;
+}
+
+function multimodalEvent(event: OneBotEvent, text: string, imageUrl: string, file?: [name: string, id: string]) {
+  event.message = file ? [
+    { type: "text", data: { text } },
+    { type: "image", data: { url: imageUrl } },
+    { type: "file", data: { name: file[0], file_id: file[1] } }
+  ] : [
+    { type: "text", data: { text } },
+    { type: "image", data: { url: imageUrl } }
+  ];
+  return event;
 }
 
 function sentOutbounds(gateway: MessagingPort) {

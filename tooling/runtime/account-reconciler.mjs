@@ -8,7 +8,7 @@ export function planAccountReconciliation(input) {
   const running = targets.some((container) => container.state === "running");
   const observedState = running ? "running" : targets.length > 0 ? "stopped" : "missing";
   const action = desiredState === "running"
-    ? running ? "verify" : "start"
+    ? input.forceRestart === true && running ? "restart" : running ? "verify" : "start"
     : targets.length > 0 ? "remove" : "noop";
   return {
     accountId,
@@ -16,7 +16,7 @@ export function planAccountReconciliation(input) {
     observedState,
     action,
     targetContainerIds: targets.map((container) => container.id),
-    reconcileRequired: desiredState === "running" ? !running : targets.length > 0
+    reconcileRequired: desiredState === "running" ? !running || action === "restart" : targets.length > 0
   };
 }
 

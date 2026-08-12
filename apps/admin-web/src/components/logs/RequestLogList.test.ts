@@ -1,8 +1,15 @@
-import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { flushPromises, mount } from "@vue/test-utils";
+import { nextTick } from "vue";
+import { apiRequest } from "../../composables/useAdminApi";
+import { describe, expect, it, vi } from "vitest";
 import type { ConversationLogEntry } from "../../types";
+import RequestLogDetailDialog from "./RequestLogDetailDialog.vue";
 import RequestLogList from "./RequestLogList.vue";
 import RequestLogTokenUsage from "./RequestLogTokenUsage.vue";
+
+vi.mock("../../composables/useAdminApi", () => ({
+  apiRequest: vi.fn().mockResolvedValue({ logs: [] })
+}));
 
 const responseLog: ConversationLogEntry = {
   id: "response-1",
@@ -22,7 +29,7 @@ const responseLog: ConversationLogEntry = {
 };
 
 describe("RequestLogList", () => {
-  it("shows normalized Token usage before the raw response details", () => {
+  it("shows normalized Token usage before the raw response details", async () => {
     const wrapper = mount(RequestLogList, { props: { logs: [responseLog] } });
     const usage = wrapper.getComponent(RequestLogTokenUsage);
 
@@ -37,9 +44,12 @@ describe("RequestLogList", () => {
     expect(usage.text()).toContain("4.1K");
     expect(usage.text()).toContain("缓存率");
     expect(usage.text()).toContain("50%");
-    const summary = wrapper.get("details summary");
-    expect(summary.text()).toContain("响应体");
-    expect(summary.classes()).toContain("min-h-11");
+    await wrapper.get('[aria-label="查看Responses 模型调用请求详情"]').trigger("click");
+    await nextTick();
+    const detail = wrapper.getComponent(RequestLogDetailDialog);
+    expect(detail.props("open")).toBe(true);
+    expect(detail.text()).toContain("RESPONSE BODY");
+    expect(detail.text()).toContain("ok");
     expect(wrapper.get('[data-slot="request-direction-marker"]').find("i").exists()).toBe(false);
   });
 
@@ -128,12 +138,17 @@ describe("RequestLogList", () => {
     const search = wrapper.get('[data-slot="request-log-search"]');
     await search.setValue("alpha");
     expect(wrapper.findAll('[data-slot="request-log-item"]')).toHaveLength(1);
-    expect(wrapper.text()).toContain("完整最终提示词 ALPHA");
     expect(wrapper.text()).not.toContain("模型返回正文 beta");
+    await wrapper.get('[aria-label="查看Responses 模型调用请求详情"]').trigger("click");
+    await nextTick();
+    expect(wrapper.getComponent(RequestLogDetailDialog).text()).toContain("完整最终提示词 ALPHA");
 
     await search.setValue("BETA");
     expect(wrapper.findAll('[data-slot="request-log-item"]')).toHaveLength(1);
-    expect(wrapper.text()).toContain("模型返回正文 beta");
+    expect(wrapper.text()).toContain("chat.completions.complete");
+    await wrapper.get('[aria-label="查看兼容模型调用请求详情"]').trigger("click");
+    await nextTick();
+    expect(wrapper.getComponent(RequestLogDetailDialog).text()).toContain("模型返回正文 beta");
 
     await search.setValue("trace-gamma");
     expect(wrapper.findAll('[data-slot="request-log-item"]')).toHaveLength(1);
@@ -141,5 +156,80 @@ describe("RequestLogList", () => {
     await search.setValue("没有结果");
     expect(wrapper.findAll('[data-slot="request-log-item"]')).toHaveLength(0);
     expect(wrapper.text()).toContain("没有匹配的请求日志");
+  });
+
+  it("marks failed retries and opens the structured request inspector", async () => {
+    const wrapper = mount(RequestLogList, {
+      props: {
+        logs: [{
+          id: "failed-1",
+          at: "2026-07-12T08:00:00.000Z",
+          category: "model.response",
+          action: "responses.complete",
+          request: { input: "hello" },
+          response: { ok: false, status: 503, error: "temporary" },
+          metadata: { transportAttempt: 2, maxTransportAttempts: 3 },
+          presentation: {
+            businessNode: "private_conversation",
+            businessNodes: ["private_conversation"],
+            status: "error",
+            attempt: 2,
+            maxAttempts: 3,
+            retryCount: 1,
+            willRetry: true
+          }
+        }]
+      }
+    });
+
+    expect(wrapper.get('[data-slot="request-log-item"]').attributes("data-status")).toBe("error");
+    expect(wrapper.text()).toContain("[ERROR]");
+    expect(wrapper.text()).toContain("RETRY 1 · 2/3");
+    await wrapper.get('[aria-label="查看Responses 模型调用请求详情"]').trigger("click");
+    await nextTick();
+    const detail = wrapper.getComponent(RequestLogDetailDialog);
+    expect(detail.text()).toContain("REQUEST BODY");
+    expect(detail.text()).toContain("TOOL CALL");
+    expect(detail.text()).toContain("RESPONSE BODY");
+    expect(detail.text()).toContain("METADATA");
+  });
+
+  it("replaces the page fallback with the bounded cross-page run trace", async () => {
+    const selectedResponse: ConversationLogEntry = {
+      ...responseLog,
+      id: "trace-response",
+      metadata: { runId: "trace-1" }
+    };
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      logs: [
+        {
+          id: "trace-request",
+          at: "2026-07-12T08:00:00.000Z",
+          category: "model.request",
+          action: "responses.complete",
+          request: { input: "cross-page request" },
+          metadata: { runId: "trace-1" }
+        },
+        {
+          id: "trace-tool",
+          at: "2026-07-12T08:00:01.000Z",
+          category: "tool.call",
+          action: "read_air",
+          request: { callId: "call-cross-page", arguments: {} },
+          response: { ok: true },
+          metadata: { runId: "trace-1" }
+        },
+        selectedResponse
+      ]
+    });
+    const wrapper = mount(RequestLogList, { props: { logs: [selectedResponse] } });
+
+    await wrapper.get('[aria-label="查看Responses 模型调用请求详情"]').trigger("click");
+    await flushPromises();
+
+    const detail = wrapper.getComponent(RequestLogDetailDialog);
+    expect(detail.text()).toContain("cross-page request");
+    expect(detail.text()).toContain("read_air");
+    expect(detail.text()).toContain("call-cross-page");
   });
 });

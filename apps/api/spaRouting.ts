@@ -7,12 +7,19 @@ const SPA_ROUTE_SEGMENTS = [
   "system-prompts",
   "prompts",
   "memory",
+  "knowledge",
   "images",
+  "emojis",
+  "scheduled-tasks",
+  "director",
+  "design-demo",
+  "voice",
   "logs",
   "agents",
   "agent-settings",
   "settings",
-  "config-doctor"
+  "config-doctor",
+  "releases"
 ] as const;
 
 export function isSpaRoute(pathname: string) {

@@ -10,9 +10,9 @@ export const sourceDefinitions: SourceDefinition[] = [
   {
     id: "working",
     title: "工作记忆",
-    fileName: "sunabot.sqlite#memory/working",
+    fileName: "WORKING_MEMORY.md",
     legacyFileName: "WORKING_MEMORY.jsonl",
-    editable: true,
+    editable: false,
     field: "fact",
     fields: ["fact", "text", "content", "summary", "memory"],
     idPrefix: "mem"

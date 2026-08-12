@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -124,6 +125,26 @@ describe("AgentRegistry", () => {
     }
     await expect(fs.readFile(path.join(agentDirectory, "selfie_prompt_rewrite.json"), "utf8"))
       .resolves.toContain("普拉娜");
+    await expect(fs.readFile(path.join(agentDirectory, "workbench", "index.md"), "utf8"))
+      .resolves.toContain("`skills/`：Skills，入口 `index.json`");
+    await expect(fs.readFile(
+      path.join(agentDirectory, "workbench", "selfie", "references.jsonl"),
+      "utf8"
+    )).resolves.toBe("\n");
+    await expect(fs.readFile(
+      path.join(agentDirectory, "workbench", "emoji", "emojis.jsonl"),
+      "utf8"
+    )).resolves.toBe("\n");
+    expect(JSON.parse(await fs.readFile(
+      path.join(agentDirectory, "workbench", "skills", "index.json"),
+      "utf8"
+    ))).toMatchObject({ schemaVersion: 1, skills: [] });
+    expect(JSON.parse(await fs.readFile(
+      path.join(agentDirectory, "workbench", "knowledge", "index.json"),
+      "utf8"
+    ))).toMatchObject({ schemaVersion: 1, root: "knowledge", documents: [] });
+    await expect(fs.access(path.join(agentDirectory, "docker-workbench")))
+      .rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("fills missing default Plana files without overwriting legacy workspace customizations", async () => {
@@ -131,12 +152,14 @@ describe("AgentRegistry", () => {
     const agentDirectory = path.join(testPaths.workspace, "business", "agents", "plana");
     const customAgents = "保留旧工作区的 Agent 规则。\n";
     const customSelfiePrompt = "{\"custom\":true}\n";
+    const customWorkbenchIndex = "# 管理员入口\n";
     config.persona.name = "普拉娜";
     config.persona.agentWorkspace = agentDirectory;
-    await fs.mkdir(agentDirectory, { recursive: true });
+    await fs.mkdir(path.join(agentDirectory, "workbench"), { recursive: true });
     await Promise.all([
       fs.writeFile(path.join(agentDirectory, "AGENTS.md"), customAgents, "utf8"),
-      fs.writeFile(path.join(agentDirectory, "selfie_prompt_rewrite.json"), customSelfiePrompt, "utf8")
+      fs.writeFile(path.join(agentDirectory, "selfie_prompt_rewrite.json"), customSelfiePrompt, "utf8"),
+      fs.writeFile(path.join(agentDirectory, "workbench", "index.md"), customWorkbenchIndex, "utf8")
     ]);
     const registry = new AgentRegistry(config, {
       workspaceRoot: path.dirname(agentDirectory),
@@ -149,13 +172,15 @@ describe("AgentRegistry", () => {
     await expect(fs.readFile(path.join(agentDirectory, "AGENTS.md"), "utf8")).resolves.toBe(customAgents);
     await expect(fs.readFile(path.join(agentDirectory, "selfie_prompt_rewrite.json"), "utf8"))
       .resolves.toBe(customSelfiePrompt);
+    await expect(fs.readFile(path.join(agentDirectory, "workbench", "index.md"), "utf8"))
+      .resolves.toBe(customWorkbenchIndex);
     await expect(fs.readFile(path.join(agentDirectory, "SOUL.md"), "utf8")).resolves.toContain("普拉娜");
   });
 
   it("rejects symbolic links in shared system prompt paths", async () => {
     const config = createAdminTestConfig(temporaryDirectory);
     config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
-    config.bot.memory.workMemoryCompressInPrompt = "nested/compress.json";
+    config.bot.memory.workMemoryCompressOutPrompt = "nested/compress.json";
     const promptRoot = path.join(testPaths.workspace, "business", "prompts");
     const external = path.join(temporaryDirectory, "external-prompts");
     await fs.mkdir(promptRoot, { recursive: true });
@@ -186,8 +211,6 @@ describe("AgentRegistry", () => {
     delete (manifest.bot as Record<string, unknown>).replyDebounceMs;
     delete (manifest.bot as Record<string, unknown>).quoteGroupReplyExcludedUserIds;
     delete (manifest.bot as Record<string, unknown>).tone;
-    delete ((manifest.bot as Record<string, unknown>).orchestrator as Record<string, unknown>).groupThreadModel;
-    delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).adminPrivateBackend;
     delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).auditModel;
     delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).strictMode;
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -199,39 +222,17 @@ describe("AgentRegistry", () => {
         quoteGroupReplyExcludedUserIds: [],
         tone: {
           enabled: false,
+          segmentedReply: false,
+          followMainModel: false,
           providerId: "",
           model: "gpt-5.4-mini",
           maxRetries: 2
         },
-        orchestrator: { groupThreadModel: "gpt-5.4-mini" },
         bash: {
-          adminPrivateBackend: "native",
           auditModel: "gpt-5.4-mini",
           strictMode: true
         }
       }
-    });
-  });
-
-  it("uses shared Thread model updates for Plana without overriding custom Agents", async () => {
-    const config = createAdminTestConfig(temporaryDirectory);
-    config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
-    config.bot.orchestrator.groupThreadModel = "initial-thread-model";
-    const registry = new AgentRegistry(config, {
-      workspaceRoot: path.join(testPaths.workspace, "business", "agents"),
-      store,
-      allowUnmarkedMigration: true
-    });
-    await registry.initialize();
-    await registry.create({ id: "arona", name: "阿罗娜" });
-    const updatedShared = structuredClone(config);
-    updatedShared.bot.orchestrator.groupThreadModel = "updated-thread-model";
-
-    await expect(registry.config("plana", updatedShared)).resolves.toMatchObject({
-      bot: { orchestrator: { groupThreadModel: "updated-thread-model" } }
-    });
-    await expect(registry.config("arona", updatedShared)).resolves.toMatchObject({
-      bot: { orchestrator: { groupThreadModel: "initial-thread-model" } }
     });
   });
 
@@ -316,6 +317,42 @@ describe("AgentRegistry", () => {
       "onebot11_123456789.json"
     ), "utf8")).resolves.toBe("registered-primary\n");
     expect(registry.account("primary")?.qqId).toBe("123456789");
+  });
+
+  it("does not reclaim an inferred primary QQ identity owned by another account", async () => {
+    const config = createAdminTestConfig(temporaryDirectory);
+    config.persona.name = "普拉娜";
+    config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
+    const registry = new AgentRegistry(config, {
+      workspaceRoot: path.join(testPaths.workspace, "business", "agents"),
+      store,
+      allowUnmarkedMigration: true,
+      now: () => new Date("2026-08-06T08:00:00.000Z")
+    });
+    await registry.initialize();
+    const owner = await registry.createAccount("plana", { label: "现有账号" });
+    await registry.updateAccountIdentity(owner.id, "123456789");
+    await fs.mkdir(path.join(
+      testPaths.workspace,
+      "runtime",
+      "napcat",
+      "accounts",
+      "primary",
+      "config-full"
+    ), { recursive: true });
+    await fs.writeFile(path.join(
+      testPaths.workspace,
+      "runtime",
+      "napcat",
+      "accounts",
+      "primary",
+      "config-full",
+      "onebot11_123456789.json"
+    ), "stale-primary-runtime\n", "utf8");
+
+    await expect(registry.initialize()).resolves.toBeUndefined();
+    expect(registry.account("primary")?.qqId).toBeUndefined();
+    expect(registry.account(owner.id)?.qqId).toBe("123456789");
   });
 
   it("creates isolated Agent workspaces and allocates unique QQ runtimes", async () => {
@@ -406,6 +443,11 @@ describe("AgentRegistry", () => {
     await expect(registry.updateAccountIdentity(second.id, "123456789"))
       .rejects.toMatchObject({ statusCode: 409, code: "AGENT_CONFLICT" });
 
+    await expect(registry.updateAccountIdentity(second.id, "123456789", undefined, true))
+      .resolves.toMatchObject({ id: second.id, qqId: "123456789" });
+    expect(registry.account(first.id)?.qqId).toBeUndefined();
+    expect(registry.account(second.id)?.qqId).toBe("123456789");
+
     const aronaConfig = await registry.config("arona", config);
     expect(aronaConfig.persona).toMatchObject({ defaultAgentId: "arona", name: "阿罗娜" });
     expect(aronaConfig.persona).toMatchObject({
@@ -468,6 +510,38 @@ describe("AgentRegistry", () => {
     ))).resolves.toBeUndefined();
   });
 
+  it("rolls back both QQ identity rows when an automatic transfer write fails", async () => {
+    const config = createAdminTestConfig(temporaryDirectory);
+    config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
+    const registry = new AgentRegistry(config, {
+      workspaceRoot: path.join(testPaths.workspace, "business", "agents"),
+      store,
+      allowUnmarkedMigration: true,
+      now: () => new Date("2026-08-05T00:00:00.000Z")
+    });
+    await registry.initialize();
+    const target = await registry.createAccount("plana", { label: "备用账号" });
+    await registry.updateAccountIdentity("primary", "123456789");
+    const database = new DatabaseSync(store.databasePath);
+    try {
+      database.exec(`
+        CREATE TRIGGER fail_account_identity_transfer
+        BEFORE UPDATE OF qq_id ON agent_accounts
+        WHEN NEW.id <> 'primary' AND NEW.qq_id = '123456789'
+        BEGIN
+          SELECT RAISE(ABORT, 'injected account identity transfer failure');
+        END;
+      `);
+    } finally {
+      database.close();
+    }
+
+    await expect(registry.updateAccountIdentity(target.id, "123456789", undefined, true))
+      .rejects.toThrow("injected account identity transfer failure");
+    expect(registry.account("primary")?.qqId).toBe("123456789");
+    expect(registry.account(target.id)?.qqId).toBeUndefined();
+  });
+
   it("removes the registry row and workspace when runtime initialization fails after creation", async () => {
     const config = createAdminTestConfig(temporaryDirectory);
     config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
@@ -488,7 +562,17 @@ describe("AgentRegistry", () => {
       const response = await app.inject({
         method: "POST",
         url: "/api/agents",
-        payload: { id: "arona", name: "阿罗娜" }
+        payload: {
+          id: "arona",
+          name: "阿罗娜",
+          import: {
+            source: "folder",
+            files: [{
+              path: "AGENTS.md",
+              dataBase64: Buffer.from("导入的人格文件。", "utf8").toString("base64")
+            }]
+          }
+        }
       });
 
       expect(response.statusCode).toBe(500);
@@ -502,6 +586,140 @@ describe("AgentRegistry", () => {
       ))).rejects.toMatchObject({ code: "ENOENT" });
       expect((await fs.readdir(path.join(testPaths.workspace, "business", "agents")))
         .some((entry) => entry.startsWith(".rollback-arona-"))).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("previews and creates an Agent from a validated folder while filling missing defaults", async () => {
+    const config = createAdminTestConfig(temporaryDirectory);
+    config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
+    const registry = new AgentRegistry(config, {
+      workspaceRoot: path.join(testPaths.workspace, "business", "agents"),
+      store,
+      allowUnmarkedMigration: true
+    });
+    await registry.initialize();
+    const imported = {
+      source: "folder" as const,
+      files: [
+        {
+          path: "agent.json",
+          dataBase64: Buffer.from(JSON.stringify({
+            schemaVersion: 1,
+            id: "legacy-id",
+            name: "旧名称",
+            enabled: false,
+            bot: {
+              adminQq: "999999999",
+              adminName: "源管理员",
+              replyDebounceMs: 2_500,
+              unknownSecret: "discard-me",
+              tools: {
+                websearch: {
+                  tavilyApiKey: "source-secret",
+                  tavilyApiKeys: ["source-secret-2"],
+                  tavilyApiKeyEnv: "SOURCE_TAVILY_KEY"
+                }
+              }
+            },
+            onebot: { mentionNames: ["旧称"] }
+          })).toString("base64")
+        },
+        {
+          path: "AGENTS.md",
+          dataBase64: Buffer.from("导入的人格文件。", "utf8").toString("base64")
+        }
+      ]
+    };
+    const app = Fastify();
+    registerAgentRoutes(app, registry);
+
+    try {
+      const preview = await app.inject({
+        method: "POST",
+        url: "/api/agent-imports/preview",
+        payload: imported
+      });
+      expect(preview.statusCode).toBe(200);
+      expect(preview.json()).toMatchObject({
+        source: "folder",
+        included: ["AGENTS.md", "agent.json"]
+      });
+      expect(preview.json().missing).toContain("人格文件：SOUL.md");
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/agents",
+        payload: { id: "arona", name: "阿罗娜", import: imported }
+      });
+      expect(created.statusCode).toBe(200);
+      expect(created.json()).toMatchObject({ id: "arona", name: "阿罗娜", enabled: true });
+      await expect(fs.readFile(path.join(
+        testPaths.workspace,
+        "business",
+        "agents",
+        "arona",
+        "AGENTS.md"
+      ), "utf8")).resolves.toBe("导入的人格文件。");
+      await expect(fs.readFile(path.join(
+        testPaths.workspace,
+        "business",
+        "agents",
+        "arona",
+        "SOUL.md"
+      ), "utf8")).resolves.toContain("阿罗娜");
+      const manifest = await registry.manifest("arona");
+      expect(manifest).toMatchObject({
+        id: "arona",
+        name: "阿罗娜",
+        enabled: true,
+        bot: { replyDebounceMs: 2_500 },
+        onebot: { mentionNames: ["旧称"] }
+      });
+      expect(manifest.bot).not.toHaveProperty("unknownSecret");
+      expect(manifest.bot).toMatchObject({
+        adminQq: config.bot.adminQq,
+        adminName: config.bot.adminName,
+        tools: {
+          websearch: {
+            tavilyApiKey: "",
+            tavilyApiKeys: [],
+            tavilyApiKeyEnv: config.bot.tools.websearch.tavilyApiKeyEnv
+          }
+        }
+      });
+
+      const partialManifest = {
+        source: "folder" as const,
+        files: [{
+          path: "agent.json",
+          dataBase64: Buffer.from(JSON.stringify({ schemaVersion: 1 })).toString("base64")
+        }]
+      };
+      const partial = await app.inject({
+        method: "POST",
+        url: "/api/agents",
+        payload: { id: "hoshino", name: "星野", import: partialManifest }
+      });
+      expect(partial.statusCode).toBe(200);
+      const partialConfig = await registry.manifest("hoshino");
+      expect(partialConfig.bot.replyDebounceMs).toBe(config.bot.replyDebounceMs);
+      expect(partialConfig.onebot).toMatchObject({
+        autoReplyPrivate: config.onebot.autoReplyPrivate,
+        mentionNames: ["星野", "hoshino"]
+      });
+
+      const unsafe = await app.inject({
+        method: "POST",
+        url: "/api/agent-imports/preview",
+        payload: {
+          source: "folder",
+          files: [{ path: ".env", dataBase64: Buffer.from("TOKEN=secret").toString("base64") }]
+        }
+      });
+      expect(unsafe.statusCode).toBe(400);
+      expect(unsafe.json()).toMatchObject({ code: "AGENT_IMPORT_UNKNOWN_FILE" });
     } finally {
       await app.close();
     }

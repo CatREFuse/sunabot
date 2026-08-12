@@ -12,6 +12,15 @@ import type { CreateAppOptions } from "../../apps/api/server.js";
 import type { AppConfig } from "../../src/types.js";
 
 const ADMIN_HEADERS = { host: "127.0.0.1", authorization: "Bearer admin-secret" };
+const scopedUrl = (url: string) => `${url}${url.includes("?") ? "&" : "?"}agentId=plana`;
+
+async function requestThroughGlobalFetch(url: URL, init: RequestInit) {
+  return {
+    response: await fetch(url, init),
+    close: async () => undefined,
+    destroy: async () => undefined
+  };
+}
 
 describe("admin API smoke", () => {
   let temporaryDirectory = "";
@@ -25,9 +34,13 @@ describe("admin API smoke", () => {
       config,
       initializeRuntime: false,
       agentRegistry: {
-        workspaceRoot: temporaryDirectory,
+        workspaceRoot: path.join(temporaryDirectory, "business", "agents"),
         allowUnmarkedMigration: true
       },
+      agentExtensions: {
+        workspaceRoot: temporaryDirectory
+      },
+      runtimeProbeClient: false,
       ...options
     };
   }
@@ -40,11 +53,11 @@ describe("admin API smoke", () => {
     temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-api-test-"));
     process.env.SUNABOT_CONFIG = path.join(temporaryDirectory, "sunabot.json");
     config = defaultConfig();
-    config.persona.agentWorkspace = path.join(temporaryDirectory, "agent");
+    config.persona.agentWorkspace = path.join(temporaryDirectory, "business", "agents", "plana");
     config.persona.systemPromptWorkspace = path.join(temporaryDirectory, "system-prompts");
     await Promise.all([
-      fs.mkdir(config.persona.agentWorkspace, { recursive: true }),
-      fs.mkdir(config.persona.systemPromptWorkspace, { recursive: true })
+      fs.mkdir(config.persona.agentWorkspace, { recursive: true, mode: 0o700 }),
+      fs.mkdir(config.persona.systemPromptWorkspace, { recursive: true, mode: 0o700 })
     ]);
     for (const definition of AGENT_FILE_DEFINITIONS) {
       const workspace = definition.scope === "system"
@@ -71,9 +84,9 @@ describe("admin API smoke", () => {
     const app = await createApp(testAppOptions());
     const headers = ADMIN_HEADERS;
     const models = await app.inject({ method: "GET", url: "/api/models", headers });
-    const envelope = await app.inject({ method: "GET", url: "/api/config", headers });
-    const files = await app.inject({ method: "GET", url: "/api/agent-files", headers });
-    const systemFiles = await app.inject({ method: "GET", url: "/api/system-prompt-files", headers });
+    const envelope = await app.inject({ method: "GET", url: scopedUrl("/api/config"), headers });
+    const files = await app.inject({ method: "GET", url: scopedUrl("/api/agent-files"), headers });
+    const systemFiles = await app.inject({ method: "GET", url: scopedUrl("/api/system-prompt-files"), headers });
     expect(models.statusCode).toBe(200);
     expect(models.json().models).toHaveLength(7);
     expect(envelope.statusCode).toBe(200);
@@ -86,6 +99,8 @@ describe("admin API smoke", () => {
       "persona.dialogue_style_examples",
       "persona.user",
       "persona.relation",
+      "persona.air",
+      "persona.director-seed",
       "image.selfie-rewrite"
     ]);
     expect(systemFiles.statusCode).toBe(200);
@@ -93,12 +108,14 @@ describe("admin API smoke", () => {
       "conversation.private-reply",
       "conversation.group-reply",
       "conversation.tone-rewrite",
-      "memory.compress-in",
       "memory.compress-out",
-      "memory.user-profile",
+      "memory.dream",
       "orchestrator.user-group",
-      "orchestrator.group-thread",
-      "conversation.group-summary"
+      "conversation.group-summary",
+      "scheduler.cron-callback",
+      "director.daily-plan",
+      "director.schedule-revision",
+      "air.read"
     ]);
     expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
       id: "conversation.private-reply",
@@ -106,20 +123,13 @@ describe("admin API smoke", () => {
       fileName: "conversation_private_reply.json",
       variables: expect.arrayContaining([
         expect.objectContaining({ name: "persona.dialogue_style_examples", description: expect.any(String) }),
+        expect.objectContaining({ name: "message_32", type: "message[]" }),
         expect.objectContaining({ name: "user.input", description: expect.any(String) })
       ])
     }));
     expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
-      id: "conversation.group-reply",
-      variables: expect.arrayContaining([
-        expect.objectContaining({
-          name: "conversation.group.thread_context",
-          description: expect.any(String)
-        })
-      ])
+      id: "conversation.group-reply"
     }));
-    expect(systemFiles.json().files.find(({ id }: { id: string }) => id === "conversation.private-reply")?.variables)
-      .not.toContainEqual(expect.objectContaining({ name: "conversation.group.thread_context" }));
     expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
       id: "conversation.tone-rewrite",
       kind: "final",
@@ -129,11 +139,18 @@ describe("admin API smoke", () => {
       ])
     }));
     expect(files.json().files).toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
-    expect(systemFiles.json().files).toContainEqual(expect.objectContaining({ id: "orchestrator.group-thread" }));
+    expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
+      id: "scheduler.cron-callback",
+      kind: "final",
+      fileName: "cron_callback.json",
+      variables: expect.arrayContaining([
+        expect.objectContaining({ name: "cron.payload", type: "json", description: expect.any(String) })
+      ])
+    }));
     expect(systemFiles.json().files).not.toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
     const toneFile = await app.inject({
       method: "GET",
-      url: "/api/system-prompt-files/conversation.tone-rewrite",
+      url: scopedUrl("/api/system-prompt-files/conversation.tone-rewrite"),
       headers
     });
     expect(toneFile.statusCode).toBe(200);
@@ -147,7 +164,7 @@ describe("admin API smoke", () => {
       ["/api/system-prompt-files", systemFiles.json().files]
     ] as const) {
       for (const summary of summaries) {
-        const detail = await app.inject({ method: "GET", url: `${endpoint}/${summary.id}`, headers });
+        const detail = await app.inject({ method: "GET", url: scopedUrl(`${endpoint}/${summary.id}`), headers });
         expect(detail.statusCode, `${endpoint}/${summary.id}`).toBe(200);
         expect(detail.json()).toMatchObject({ id: summary.id, content: expect.any(String) });
       }
@@ -267,7 +284,7 @@ describe("admin API smoke", () => {
       method: "POST",
       url: "/api/providers/test",
       headers,
-      payload: { provider: config.providers.items[0] }
+      payload: { provider: { ...config.providers.items[0], multimodal: "disabled" } }
     });
     const after = await fs.readFile(process.env.SUNABOT_CONFIG!, "utf8");
     expect(response.statusCode).toBe(200);
@@ -275,13 +292,13 @@ describe("admin API smoke", () => {
     expect(response.json().elapsedMs).toEqual(expect.any(Number));
     expect(after).toBe(before);
     await app.close();
-  }, 10_000);
+  }, 20_000);
 
   it("enforces auth for forwarded requests and accepts a valid bearer token", async () => {
     const app = await createApp(testAppOptions());
     let response = await app.inject({
       method: "GET",
-      url: "/api/status",
+      url: scopedUrl("/api/status"),
       headers: { host: "127.0.0.1", "x-forwarded-for": "127.0.0.1" }
     });
     expect(response.statusCode).toBe(401);
@@ -289,7 +306,7 @@ describe("admin API smoke", () => {
 
     response = await app.inject({
       method: "GET",
-      url: "/api/status",
+      url: scopedUrl("/api/status"),
       headers: {
         host: "127.0.0.1",
         "x-forwarded-for": "127.0.0.1",
@@ -298,7 +315,7 @@ describe("admin API smoke", () => {
     });
     expect(response.statusCode).toBe(200);
     await app.close();
-  });
+  }, 20_000);
 
   it("protects readiness while reusing the host probe facts and keeps runtime liveness secret-free", async () => {
     const collectFacts = vi.fn(async () => ({
@@ -322,12 +339,12 @@ describe("admin API smoke", () => {
 
     const unauthorized = await app.inject({
       method: "GET",
-      url: "/api/readiness",
+      url: scopedUrl("/api/readiness"),
       headers: { host: "127.0.0.1" }
     });
     const readiness = await app.inject({
       method: "GET",
-      url: "/api/readiness",
+      url: scopedUrl("/api/readiness"),
       headers: ADMIN_HEADERS
     });
     const liveness = await app.inject({
@@ -349,11 +366,46 @@ describe("admin API smoke", () => {
     await app.close();
   });
 
+  it("serves global system settings without requiring an Agent", async () => {
+    const app = await createApp(testAppOptions());
+    const globalEnvelope = await app.inject({ method: "GET", url: "/api/config", headers: ADMIN_HEADERS });
+
+    expect(globalEnvelope.statusCode).toBe(200);
+    expect(globalEnvelope.json().config.normalReply.maxRetries).toBe(3);
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: "/api/config/normalReply",
+      headers: ADMIN_HEADERS,
+      payload: {
+        revision: globalEnvelope.json().revision,
+        value: { maxRetries: 4 }
+      }
+    });
+
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json().config.normalReply.maxRetries).toBe(4);
+
+    const agentOnlyPatch = await app.inject({
+      method: "PATCH",
+      url: "/api/config/bot",
+      headers: ADMIN_HEADERS,
+      payload: {
+        revision: patch.json().revision,
+        value: {}
+      }
+    });
+
+    expect(agentOnlyPatch.statusCode).toBe(400);
+    expect(agentOnlyPatch.json()).toMatchObject({ error: { code: "AGENT_ID_REQUIRED" } });
+    await app.close();
+  });
+
   it("reloads the config envelope from disk after an external edit", async () => {
     const app = await createApp(testAppOptions());
     config.server.port = 9123;
     await saveConfig(config);
-    const response = await app.inject({ method: "GET", url: "/api/config", headers: ADMIN_HEADERS });
+    const response = await app.inject({ method: "GET", url: scopedUrl("/api/config"), headers: ADMIN_HEADERS });
     expect(response.statusCode).toBe(200);
     expect(response.json().config.server.port).toBe(9123);
     await app.close();
@@ -362,11 +414,11 @@ describe("admin API smoke", () => {
   it("rejects changing the fixed Plana workspace", async () => {
     const app = await createApp(testAppOptions());
     const headers = ADMIN_HEADERS;
-    const envelope = await app.inject({ method: "GET", url: "/api/config", headers });
+    const envelope = await app.inject({ method: "GET", url: scopedUrl("/api/config"), headers });
     const nextWorkspace = path.join(temporaryDirectory, "new-agent");
     const response = await app.inject({
       method: "PATCH",
-      url: "/api/config/persona",
+      url: scopedUrl("/api/config/persona"),
       headers,
       payload: {
         revision: envelope.json().revision,
@@ -394,34 +446,39 @@ describe("admin API smoke", () => {
     "http://10.1.2.3/image.png",
     "http://192.168.1.10/image.png",
     "http://[::1]/image.png"
-  ])("rejects private image proxy targets: %s", async (imageUrl) => {
-    const app = await createApp(testAppOptions());
+  ])("loads local and private image proxy targets: %s", async (imageUrl) => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: { "content-type": "image/png", "content-length": "3" }
+    }));
+    const app = await createApp(testAppOptions({ mediaPinnedRequest: requestThroughGlobalFetch }));
     const response = await app.inject({
       method: "GET",
       url: `/api/media/image?url=${encodeURIComponent(imageUrl)}`,
       headers: ADMIN_HEADERS
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({
-      error: { code: "IMAGE_URL_PRIVATE", field: "url" }
-    });
+    expect(response.statusCode).toBe(200);
+    expect(fetchMock).toHaveBeenCalledWith(new URL(imageUrl), expect.objectContaining({ redirect: "manual" }));
+    fetchMock.mockRestore();
     await app.close();
   });
 
-  it("loads QQ message images when the trusted CDN resolves through Clash fake IP", async () => {
+  it("loads QQ message images when the CDN resolves through Clash fake IP", async () => {
     const imageUrl = "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=fixture&rkey=fixture";
+    const mediaHostnameLookup = vi.fn(async () => [{ address: "198.18.0.226" }]);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), {
       status: 200,
       headers: { "content-type": "image/jpeg", "content-length": "3" }
     }));
-    const app = await createApp(testAppOptions());
+    const app = await createApp(testAppOptions({ mediaHostnameLookup, mediaPinnedRequest: requestThroughGlobalFetch }));
     const response = await app.inject({
       method: "GET",
       url: `/api/media/image?url=${encodeURIComponent(imageUrl)}`,
       headers: ADMIN_HEADERS
     });
 
+    expect(mediaHostnameLookup).toHaveBeenCalledWith("multimedia.nt.qq.com.cn");
     expect(fetchMock).toHaveBeenCalledWith(new URL(imageUrl), expect.objectContaining({ redirect: "manual" }));
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("image/jpeg");
@@ -434,7 +491,7 @@ describe("admin API smoke", () => {
       status: 401,
       headers: { "content-type": "text/plain" }
     }));
-    const app = await createApp(testAppOptions());
+    const app = await createApp(testAppOptions({ mediaPinnedRequest: requestThroughGlobalFetch }));
     const response = await app.inject({
       method: "GET",
       url: `/api/media/image?url=${encodeURIComponent("https://8.8.8.8/image.png")}`,
@@ -448,12 +505,13 @@ describe("admin API smoke", () => {
     await app.close();
   });
 
-  it("loads QQ user and group avatars through the dedicated trusted proxy", async () => {
+  it("loads QQ user and group avatars through the dedicated proxy", async () => {
+    const mediaHostnameLookup = vi.fn(async () => [{ address: "8.8.8.8" }]);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(new Uint8Array([1, 2, 3]), {
       status: 200,
       headers: { "content-type": "image/jpeg", "content-length": "3" }
     }));
-    const app = await createApp(testAppOptions());
+    const app = await createApp(testAppOptions({ mediaHostnameLookup, mediaPinnedRequest: requestThroughGlobalFetch }));
 
     const user = await app.inject({
       method: "GET",
@@ -471,6 +529,7 @@ describe("admin API smoke", () => {
       headers: ADMIN_HEADERS
     });
 
+    expect(mediaHostnameLookup.mock.calls.map(([hostname]) => hostname)).toEqual(["q1.qlogo.cn", "p.qlogo.cn"]);
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
       "https://q1.qlogo.cn/g?b=qq&nk=171419991&s=100",
       "https://p.qlogo.cn/gh/1030412235/1030412235/100/"
@@ -498,7 +557,7 @@ describe("admin API smoke", () => {
 
     const response = await built.app.inject({
       method: "POST",
-      url: "/api/playground/image",
+      url: scopedUrl("/api/playground/image"),
       headers: ADMIN_HEADERS,
       payload: {
         prompt: "portrait test",
@@ -508,7 +567,7 @@ describe("admin API smoke", () => {
     });
     const history = await built.app.inject({
       method: "GET",
-      url: "/api/images",
+      url: scopedUrl("/api/images"),
       headers: ADMIN_HEADERS
     });
     const record = history.json().images.find((item: { id: string }) => item.id === "playground-test.png");

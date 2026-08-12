@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeTokenUsageRecord } from "../../src/tokenUsage.js";
+import { normalizeTokenUsageRecord } from "../../packages/contracts/model/tokenUsage.js";
 
 describe("compatible provider token usage", () => {
   it("recognizes prompt cache hit and miss counters", () => {

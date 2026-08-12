@@ -405,7 +405,7 @@ try {
   if (!initial.isDirectory() || initial.isSymbolicLink()) fail("BOUND_PARENT_INVALID");
   const realPath = await fs.realpath(".");
   const afterRealpath = await fs.lstat(".", { bigint: true });
-  if (initial.dev !== afterRealpath.dev || initial.ino !== afterRealpath.ino || initial.ctimeNs !== afterRealpath.ctimeNs) {
+  if (initial.dev !== afterRealpath.dev || initial.ino !== afterRealpath.ino) {
     fail("BOUND_PARENT_CHANGED");
   }
   emit({ phase: "ready", realPath, identity: serializeIdentity(afterRealpath) });

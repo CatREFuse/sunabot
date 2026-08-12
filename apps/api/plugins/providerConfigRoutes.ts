@@ -4,8 +4,9 @@ import { discoverProviderModels, probeProviderMultimodal } from "../../../adapte
 import { ConfigService, validateProviderDraft } from "../../../src/admin/configService.js";
 import type { CodexAuthService } from "../../../src/admin/codexAuth.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
-import { IMAGE_MODEL_CATALOG, MODEL_CATALOG, REASONING_EFFORTS } from "../../../src/admin/models.js";
-import type { ProviderConfig } from "../../../src/types.js";
+import { IMAGE_MODEL_CATALOG, MODEL_CATALOG, REASONING_EFFORTS } from "../../../packages/contracts/admin/models.js";
+import type { ProviderConfig } from "../../../packages/contracts/admin/public.js";
+import { requestAgentId } from "../requestAgentId.js";
 
 export type ProviderTestRunner = (provider: ProviderConfig) => Promise<Record<string, unknown>>;
 export type ProviderModelsRunner = (provider: ProviderConfig) => Promise<string[]>;
@@ -26,6 +27,7 @@ export interface ProviderConfigRouteOptions {
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
+const GLOBAL_CONFIG_SECTIONS = new Set(["server", "providers", "broadcastStorm", "normalReply"]);
 
 export function registerProviderConfigRoutes(
   app: FastifyInstance,
@@ -46,19 +48,19 @@ export function registerProviderConfigRoutes(
   app.get("/api/config", {
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
-    const agentId = requestAgentId(request.query);
-    return agentId === "plana" || !options.agentConfigService
-      ? options.configService.readEnvelope()
-      : options.agentConfigService.readEnvelope(agentId);
+    const agentId = optionalAgentId(request.query, options.agentConfigService);
+    return options.agentConfigService
+      ? agentId ? options.agentConfigService.readEnvelope(agentId) : options.configService.readEnvelope()
+      : options.configService.readEnvelope();
   });
 
   app.patch("/api/config/group-reply", {
     schema: { body: passthroughBody, response: { 200: openObject } }
   }, async (request) => {
-    const agentId = requestAgentId(request.query);
-    return agentId === "plana" || !options.agentConfigService
-      ? options.configService.patchGroupReply(request.body)
-      : options.agentConfigService.patchGroupReply(agentId, request.body);
+    const agentId = options.agentConfigService ? requestAgentId(request.query) : undefined;
+    return options.agentConfigService
+      ? options.agentConfigService.patchGroupReply(agentId!, request.body)
+      : options.configService.patchGroupReply(request.body);
   });
 
   app.patch("/api/config/:section", {
@@ -74,10 +76,13 @@ export function registerProviderConfigRoutes(
     }
   }, async (request) => {
     const params = request.params as { section?: string };
-    const agentId = requestAgentId(request.query);
-    return agentId === "plana" || !options.agentConfigService
-      ? options.configService.patch(String(params.section ?? ""), request.body)
-      : options.agentConfigService.patch(agentId, String(params.section ?? ""), request.body);
+    const section = String(params.section ?? "");
+    const agentId = optionalAgentId(request.query, options.agentConfigService, section);
+    return options.agentConfigService
+      ? agentId
+        ? options.agentConfigService.patch(agentId, section, request.body)
+        : options.configService.patch(section, request.body)
+      : options.configService.patch(section, request.body);
   });
 
   app.get("/api/models", {
@@ -147,9 +152,11 @@ export function registerProviderConfigRoutes(
   });
 }
 
-function requestAgentId(query: unknown) {
+function optionalAgentId(query: unknown, agentConfigService: ProviderConfigRouteOptions["agentConfigService"], section?: string) {
+  if (!agentConfigService) return undefined;
   const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
-  return String(value ?? "plana").trim() || "plana";
+  if (value === undefined && section && !GLOBAL_CONFIG_SECTIONS.has(section)) return requestAgentId(query);
+  return value === undefined ? undefined : requestAgentId(query);
 }
 
 function providerFromBody(body: unknown, code: string) {

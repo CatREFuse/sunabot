@@ -3,9 +3,9 @@ import path from "node:path";
 import type {
   ContactIdentityV1,
   ConversationDirectoryPort,
+  ConversationRecord,
   GroupIdentityV1
 } from "../../packages/contracts/messaging/messages.js";
-import type { ConversationRecord } from "../../src/types.js";
 
 const DIRECTORY_TTL_MS = 5 * 60 * 1000;
 const DIRECTORY_RETRY_MS = 3_000;
@@ -39,7 +39,7 @@ export class ConversationDirectory {
     this.snapshots = options.cachePath ? readCachedSnapshots(options.cachePath) : new Map();
   }
 
-  async enrich(records: readonly ConversationRecord[], gateway: ConversationDirectoryPort) {
+  async enrich<T extends ConversationRecord>(records: readonly T[], gateway: ConversationDirectoryPort) {
     const accountIds = [...new Set(records.map(conversationAccountId))];
     await Promise.all(accountIds.map((accountId) => this.refresh(gateway, accountId)));
     const retryAccountIds = accountIds.filter((accountId) => {
@@ -53,7 +53,7 @@ export class ConversationDirectory {
     return enrichConversationTitles(records, this.snapshots);
   }
 
-  describe(records: readonly ConversationRecord[]) {
+  describe<T extends ConversationRecord>(records: readonly T[]) {
     return enrichConversationTitles(records, this.snapshots);
   }
 
@@ -132,7 +132,10 @@ export class ConversationDirectory {
   }
 }
 
-function enrichConversationTitles(records: readonly ConversationRecord[], snapshots: ReadonlyMap<string, DirectorySnapshot>) {
+function enrichConversationTitles<T extends ConversationRecord>(
+  records: readonly T[],
+  snapshots: ReadonlyMap<string, DirectorySnapshot>
+) {
   return records.map((record) => {
     const snapshot = snapshots.get(conversationAccountId(record)) ?? emptySnapshot();
     if (record.groupId) {

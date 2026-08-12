@@ -14,7 +14,7 @@ import {
 } from "../../services/media/attachments/chunks.js";
 import { rankAttachmentChunks } from "../../services/media/attachments/context.js";
 import type { ConversationRecord, ImageHistoryRecord } from "../../src/types.js";
-import { measuredScenario, OperationRecorder, type BenchmarkSampler } from "./metrics.js";
+import { measuredScenario, OperationRecorder } from "./metrics.js";
 import type { BenchmarkProfile, ScenarioReport } from "./types.js";
 
 const BASE_TIME = Date.UTC(2026, 6, 11, 0, 0, 0);

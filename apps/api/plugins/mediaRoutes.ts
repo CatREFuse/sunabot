@@ -1,25 +1,45 @@
 import net from "node:net";
 import path from "node:path";
-import fs, { existsSync } from "node:fs";
+import fs from "node:fs";
 import sharp from "sharp";
 import { lookup } from "node:dns/promises";
+import { Agent, fetch as undiciFetch } from "undici";
 import type { FastifyInstance } from "fastify";
 import { applicationDataStore } from "../../../adapters/sqlite/applicationDataStore.js";
-import { isTrustedQqFakeIp } from "../../../adapters/onebot/qqMedia.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
+import type {
+  RequestLogBusinessNode,
+  RequestLogMemoryTool
+} from "../../../packages/contracts/observability/requestLogPresentation.js";
 import { runWithAgentRuntimeContext } from "../../../packages/platform/runtimeAgentContext.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
-import { getWorkspacePath } from "../../../src/config.js";
-import { readModelCallStats, readRequestLogPage, readTokenUsageSummary, requestLogPath } from "../../../src/requestLog.js";
+import { getWorkspacePath } from "../../../packages/platform/projectPaths.js";
+import {
+  readModelCallStats,
+  readRequestLogPage,
+  readRequestLogTrace,
+  readTokenUsageSummary,
+  requestLogPath
+} from "../../../adapters/observability/requestLog.js";
 import type { SunaRuntime } from "../../../src/runtime.js";
-import type { AppConfig, BotToolSettings, ImageHistoryRecord } from "../../../src/types.js";
+import type { AppConfig, BotToolSettings, ImageHistoryRecord } from "../../../packages/contracts/admin/public.js";
+import { requestAgentId } from "../requestAgentId.js";
 
 export interface MediaRouteOptions {
   getConfig(): AppConfig;
   runtime: SunaRuntime;
   getAgentContext?: (agentId: string) => { config: AppConfig; runtime: SunaRuntime };
   getAllAgentConfigs?: () => Promise<AppConfig[]>;
+  lookupHostname?: MediaHostnameLookup;
+  requestRemoteImage?: MediaPinnedRequest;
 }
+
+export type MediaHostnameLookup = (hostname: string) => Promise<readonly { address: string; family?: number }[]>;
+export type MediaPinnedRequest = (
+  url: URL,
+  init: RequestInit,
+  addresses: readonly { address: string; family: 4 | 6 }[]
+) => Promise<{ response: Response; close(): Promise<void>; destroy(): Promise<void> }>;
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
@@ -40,6 +60,8 @@ const qqAvatarQuery = {
 
 export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOptions) {
   const histories = new Map<string, ImageHistoryRecord[]>();
+  const lookupHostname = options.lookupHostname ?? defaultMediaHostnameLookup;
+  const requestRemoteImage = options.requestRemoteImage ?? requestPinnedRemoteImage;
   const contextFor = (request: { query: unknown }) => options.getAgentContext?.(requestAgentId(request.query)) ?? {
     config: options.getConfig(),
     runtime: options.runtime
@@ -50,20 +72,38 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
     const { config } = contextFor(request);
-    const imageHistory = mergeImageHistoryWithFiles(historyFor(config), config);
+    const imageHistory = normalizeImageHistory(historyFor(config));
     histories.set(config.persona.defaultAgentId, imageHistory);
     return { images: imageHistory };
+  });
+
+  app.get("/api/overview/summary", {
+    schema: { querystring: openObject, response: { 200: openObject } }
+  }, async (request) => {
+    const { config } = contextFor(request);
+    historyFor(config);
+    const counts = applicationDataStore(config).counts();
+    return { conversations: counts.conversations, images: counts.imageHistory };
   });
 
   app.get("/api/request-logs", {
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
     const { config } = contextFor(request);
-    const query = request.query as { q?: string; limit?: string; page?: string; pageSize?: string };
+    const query = request.query as {
+      q?: string;
+      limit?: string;
+      page?: string;
+      pageSize?: string;
+      node?: string;
+      memoryTool?: string;
+    };
     const page = await readRequestLogPage({
       query: query.q,
       page: Number(query.page ?? 1),
       pageSize: Number(query.pageSize ?? query.limit ?? 50),
+      node: query.node as RequestLogBusinessNode | undefined,
+      memoryTool: query.memoryTool as RequestLogMemoryTool | undefined,
       config
     });
     return {
@@ -72,10 +112,18 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
     };
   });
 
+  app.get("/api/request-logs/:id/trace", {
+    schema: { querystring: openObject, response: { 200: openObject } }
+  }, async (request) => {
+    const { config } = contextFor(request);
+    const params = request.params as { id?: string };
+    return { logs: readRequestLogTrace(String(params.id ?? ""), config) };
+  });
+
   app.get("/api/token-usage", {
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
-    const agentId = requestAgentId(request.query);
+    const agentId = requestAgentId(request.query, { allowAll: true });
     const config = agentId === "all" ? options.getConfig() : contextFor(request).config;
     const configs = agentId === "all" ? await options.getAllAgentConfigs?.() : undefined;
     const query = request.query as { timezoneOffset?: string; model?: string; behavior?: string };
@@ -92,7 +140,7 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
   app.get("/api/model-call-stats", {
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
-    const agentId = requestAgentId(request.query);
+    const agentId = requestAgentId(request.query, { allowAll: true });
     const config = agentId === "all" ? options.getConfig() : contextFor(request).config;
     const configs = agentId === "all" ? await options.getAllAgentConfigs?.() : undefined;
     return readModelCallStats({ config, ...(configs ? { configs } : {}) });
@@ -107,7 +155,7 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
       badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
     }
 
-    const { bytes, contentType } = await loadRemoteImage(imageUrl);
+    const { bytes, contentType } = await loadRemoteImage(imageUrl, lookupHostname, requestRemoteImage);
     reply.header("content-type", contentType);
     reply.header("cache-control", "private, max-age=86400, stale-while-revalidate=604800");
     reply.header("vary", "Authorization");
@@ -123,7 +171,7 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
     const variant = query.variant === "placeholder" ? "placeholder" : "display";
     const cacheKey = `${variant}:${source}`;
     const cached = thumbnailCache.get(cacheKey);
-    const bytes = cached ?? await createThumbnail(source, variant);
+    const bytes = cached ?? await createThumbnail(source, variant, lookupHostname, requestRemoteImage);
     if (!cached) {
       if (thumbnailCache.size >= 200) thumbnailCache.delete(thumbnailCache.keys().next().value ?? "");
       thumbnailCache.set(cacheKey, bytes);
@@ -147,7 +195,7 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
     const imageUrl = kind === "group"
       ? `https://p.qlogo.cn/gh/${id}/${id}/100/`
       : `https://q1.qlogo.cn/g?b=qq&nk=${id}&s=100`;
-    const { bytes, contentType } = await loadRemoteImage(imageUrl);
+    const { bytes, contentType } = await loadRemoteImage(imageUrl, lookupHostname, requestRemoteImage);
     reply.header("content-type", contentType);
     reply.header("cache-control", "private, max-age=86400");
     reply.header("vary", "Authorization");
@@ -189,7 +237,12 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
   });
 }
 
-async function createThumbnail(source: string, variant: "display" | "placeholder") {
+async function createThumbnail(
+  source: string,
+  variant: "display" | "placeholder",
+  lookupHostname: MediaHostnameLookup,
+  requestRemoteImage: MediaPinnedRequest
+) {
   let bytes: Buffer;
   if (source.startsWith("/generated-images/")) {
     const relativePath = decodeURIComponent(source.slice("/generated-images/".length));
@@ -208,7 +261,7 @@ async function createThumbnail(source: string, variant: "display" | "placeholder
     bytes = await fs.promises.readFile(filePath);
   } else {
     if (!isProxyableImageUrl(source)) badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
-    bytes = (await loadRemoteImage(source)).bytes;
+    bytes = (await loadRemoteImage(source, lookupHostname, requestRemoteImage)).bytes;
   }
   try {
     const pipeline = sharp(bytes, { animated: false, limitInputPixels: 64_000_000 }).rotate();
@@ -247,84 +300,132 @@ const REMOTE_IMAGE_TYPES = new Set([
   "image/webp"
 ]);
 
-async function loadRemoteImage(value: string) {
+async function loadRemoteImage(
+  value: string,
+  lookupHostname: MediaHostnameLookup,
+  requestRemoteImage: MediaPinnedRequest
+) {
   let currentUrl = new URL(value);
   const signal = AbortSignal.timeout(REMOTE_IMAGE_TIMEOUT_MS);
 
   for (let redirectCount = 0; redirectCount <= REMOTE_IMAGE_MAX_REDIRECTS; redirectCount += 1) {
-    await assertPublicRemoteUrl(currentUrl, signal);
-    let response: Response;
+    const addresses = await resolveRemoteImageUrl(currentUrl, signal, lookupHostname);
+    let transport: Awaited<ReturnType<MediaPinnedRequest>>;
     try {
-      response = await fetch(currentUrl, {
+      transport = await requestRemoteImage(currentUrl, {
         headers: {
           accept: "image/avif,image/webp,image/apng,image/png,image/jpeg,image/gif,*/*;q=0.8",
           "user-agent": "Mozilla/5.0 sunabot"
         },
         redirect: "manual",
         signal
-      });
+      }, addresses);
     } catch (error) {
       if (error instanceof AdminApiError) throw error;
       const timedOut = signal.aborted || (error as { name?: string }).name === "AbortError";
       throw new AdminApiError(timedOut ? 504 : 502, "IMAGE_LOAD_FAILED", timedOut ? "图片加载超时。" : "图片加载失败。");
     }
+    const { response } = transport;
 
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       if (!location || redirectCount === REMOTE_IMAGE_MAX_REDIRECTS) {
+        await response.body?.cancel().catch(() => undefined);
+        await transport.destroy().catch(() => undefined);
         throw new AdminApiError(502, "IMAGE_LOAD_FAILED", "图片重定向无效。");
       }
       try {
         currentUrl = new URL(location, currentUrl);
       } catch {
+        await response.body?.cancel().catch(() => undefined);
+        await transport.destroy().catch(() => undefined);
         throw new AdminApiError(502, "IMAGE_LOAD_FAILED", "图片重定向无效。");
       }
+      await response.body?.cancel().catch(() => undefined);
+      await transport.destroy().catch(() => undefined);
       continue;
     }
 
     const contentType = (response.headers.get("content-type") ?? "").split(";", 1)[0]!.trim().toLowerCase();
     if (!response.ok || !REMOTE_IMAGE_TYPES.has(contentType)) {
+      await response.body?.cancel().catch(() => undefined);
+      await transport.destroy().catch(() => undefined);
       throw new AdminApiError(response.ok ? 415 : 502, "IMAGE_LOAD_FAILED", "图片加载失败。");
     }
     const declaredLength = Number(response.headers.get("content-length") ?? 0);
     if (Number.isFinite(declaredLength) && declaredLength > REMOTE_IMAGE_MAX_BYTES) {
+      await response.body?.cancel().catch(() => undefined);
+      await transport.destroy().catch(() => undefined);
       throw new AdminApiError(413, "IMAGE_TOO_LARGE", "图片超过 12 MiB 限制。");
     }
-    return {
-      bytes: await readLimitedResponseBody(response, REMOTE_IMAGE_MAX_BYTES),
-      contentType
-    };
+    try {
+      return {
+        bytes: await readLimitedResponseBody(response, REMOTE_IMAGE_MAX_BYTES),
+        contentType
+      };
+    } finally {
+      await transport.close().catch(() => transport.destroy().catch(() => undefined));
+    }
   }
 
   throw new AdminApiError(502, "IMAGE_LOAD_FAILED", "图片加载失败。");
 }
 
-async function assertPublicRemoteUrl(url: URL, signal: AbortSignal) {
-  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
+async function resolveRemoteImageUrl(url: URL, signal: AbortSignal, lookupHostname: MediaHostnameLookup) {
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
     badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
   }
 
   const hostname = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
-  if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local")) {
-    badRequest("IMAGE_URL_PRIVATE", "图片地址不能指向本地网络。", "url");
-  }
+  if (!hostname) badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
   if (net.isIP(hostname)) {
-    if (!isPublicIpAddress(hostname)) badRequest("IMAGE_URL_PRIVATE", "图片地址不能指向本地网络。", "url");
-    return;
+    return [{ address: hostname, family: net.isIP(hostname) as 4 | 6 }];
   }
 
-  let addresses: Array<{ address: string }>;
+  let addresses: readonly { address: string; family?: number }[];
   try {
-    addresses = await promiseWithAbort(lookup(hostname, { all: true, verbatim: true }), signal);
+    addresses = await promiseWithAbort(lookupHostname(hostname), signal);
   } catch {
     if (signal.aborted) throw new AdminApiError(504, "IMAGE_LOAD_FAILED", "图片加载超时。");
     throw new AdminApiError(502, "IMAGE_LOAD_FAILED", "图片域名无法解析。");
   }
-  if (!addresses.length || addresses.some(({ address }) =>
-    !isPublicIpAddress(address) && !isTrustedQqFakeIp(hostname, address))) {
-    badRequest("IMAGE_URL_PRIVATE", "图片地址不能指向本地网络。", "url");
+  const pinned = addresses.map(({ address, family }) => ({ address, family: (family ?? net.isIP(address)) as 4 | 6 }));
+  if (!pinned.length || pinned.some(({ address, family }) =>
+    (family !== 4 && family !== 6) || net.isIP(address) !== family)) {
+    throw new AdminApiError(502, "IMAGE_LOAD_FAILED", "图片域名无法解析。");
   }
+  return pinned;
 }
+
+const defaultMediaHostnameLookup: MediaHostnameLookup = (hostname) =>
+  lookup(hostname, { all: true, verbatim: true });
+
+const requestPinnedRemoteImage: MediaPinnedRequest = async (url, init, addresses) => {
+  const selected = addresses[0];
+  if (!selected) throw new Error("Pinned image address is unavailable.");
+  const dispatcher = new Agent({
+    connect: {
+      lookup(hostname, _options, callback) {
+        if (hostname.toLowerCase() !== url.hostname.toLowerCase()) {
+          callback(new Error("Pinned image hostname changed."), "", 0);
+          return;
+        }
+        callback(null, selected.address, selected.family);
+      }
+    }
+  });
+  try {
+    const response = await undiciFetch(url, { ...init, dispatcher } as Parameters<typeof undiciFetch>[1]);
+    return {
+      response: response as unknown as Response,
+      close: () => dispatcher.close(),
+      destroy: () => dispatcher.destroy()
+    };
+  } catch (error) {
+    await dispatcher.destroy().catch(() => undefined);
+    throw error;
+  }
+};
 
 async function promiseWithAbort<T>(operation: Promise<T>, signal: AbortSignal) {
   if (signal.aborted) throw signal.reason;
@@ -335,37 +436,6 @@ async function promiseWithAbort<T>(operation: Promise<T>, signal: AbortSignal) {
   });
 }
 
-function isPublicIpAddress(address: string) {
-  const family = net.isIP(address);
-  if (family === 4) return isPublicIpv4(address);
-  if (family !== 6) return false;
-
-  const normalized = address.toLowerCase();
-  const mapped = normalized.match(/^(?:0*:)*ffff:(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/i);
-  if (mapped?.[1]) return isPublicIpv4(mapped[1]);
-  if (mapped?.[2] && mapped[3]) {
-    const high = Number.parseInt(mapped[2], 16);
-    const low = Number.parseInt(mapped[3], 16);
-    return isPublicIpv4(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
-  }
-
-  const firstHextet = Number.parseInt(normalized.split(":", 1)[0] || "0", 16);
-  return firstHextet >= 0x2000 && firstHextet <= 0x3fff && !normalized.startsWith("2001:db8:") && !normalized.startsWith("2002:");
-}
-
-function isPublicIpv4(address: string) {
-  const octets = address.split(".").map(Number);
-  if (octets.length !== 4 || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return false;
-  const [a = 0, b = 0, c = 0] = octets;
-  if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
-  if (a === 100 && b >= 64 && b <= 127) return false;
-  if (a === 169 && b === 254) return false;
-  if (a === 172 && b >= 16 && b <= 31) return false;
-  if (a === 192 && (b === 0 || b === 168 || (b === 88 && c === 99))) return false;
-  if (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) return false;
-  if (a === 203 && b === 0 && c === 113) return false;
-  return true;
-}
 
 async function readLimitedResponseBody(response: Response, maxBytes: number) {
   if (!response.body) throw new AdminApiError(502, "IMAGE_LOAD_FAILED", "图片响应为空。");
@@ -439,35 +509,10 @@ function loadImageHistory(config?: Pick<AppConfig, "persona">) {
   try {
     const store = applicationDataStore(config);
     if (!config || config.persona.defaultAgentId === "plana") store.ensureLegacyImageHistoryImported(historyFile);
-    return mergeImageHistoryWithFiles(store.readImageHistory(), config);
+    return normalizeImageHistory(store.readImageHistory());
   } catch {
-    return mergeImageHistoryWithFiles([], config);
+    return [];
   }
-}
-
-function mergeImageHistoryWithFiles(records: ImageHistoryRecord[], config?: Pick<AppConfig, "persona">) {
-  const byUrl = new Map(records.map((record) => [record.url, record]));
-  const dir = imageDirPath(config);
-  if (!existsSync(dir)) return normalizeImageHistory([...byUrl.values()]);
-
-  for (const fileName of fs.readdirSync(dir)) {
-    if (!/\.(png|jpe?g|webp)$/i.test(fileName)) continue;
-    const agentId = config?.persona.defaultAgentId.trim() || "plana";
-    const url = agentId === "plana"
-      ? `/generated-images/${fileName}`
-      : `/generated-images/agents/${encodeURIComponent(agentId)}/${fileName}`;
-    if (byUrl.has(url)) continue;
-    const filePath = path.join(dir, fileName);
-    const stats = fs.statSync(filePath);
-    byUrl.set(url, {
-      id: fileName,
-      url,
-      filePath,
-      createdAt: stats.mtime.toISOString()
-    });
-  }
-
-  return normalizeImageHistory([...byUrl.values()]);
 }
 
 function normalizeImageHistory(records: ImageHistoryRecord[]) {
@@ -481,9 +526,4 @@ function saveImageHistory(records: ImageHistoryRecord[], config?: Pick<AppConfig
   const normalized = normalizeImageHistory(records);
   applicationDataStore(config).replaceImageHistory(normalized);
   return normalized;
-}
-
-function requestAgentId(query: unknown) {
-  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
-  return String(value ?? "plana").trim() || "plana";
 }

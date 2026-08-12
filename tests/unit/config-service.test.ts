@@ -93,11 +93,16 @@ describe("ConfigService", () => {
       value: {
         adminQq: "3971235731",
         adminName: "Updated Admin",
+        replyModel: before.bot.replyModel,
+        replyReasoningEffort: before.bot.replyReasoningEffort,
+        imageReader: before.bot.imageReader,
         replyDebounceMs: 7_500,
         pokeOnNoReply: true,
         quoteGroupReplies: false,
         quoteGroupReplyExcludedUserIds: ["20001", "20002"],
-        contextMessageLimit: 64
+        contextMessageLimit: 64,
+        emojiSendSize: 128,
+        emojiSendSeparately: true
       }
     });
 
@@ -116,7 +121,9 @@ describe("ConfigService", () => {
       pokeOnNoReply: true,
       quoteGroupReplies: false,
       quoteGroupReplyExcludedUserIds: ["20001", "20002"],
-      contextMessageLimit: 64
+      contextMessageLimit: 64,
+      emojiSendSize: 128,
+      emojiSendSeparately: true
     });
     expect(currentConfig().onebot.quoteGroupReplies).toBe(false);
 
@@ -145,6 +152,22 @@ describe("ConfigService", () => {
 
     expect(prepareApply).not.toHaveBeenCalled();
     expect(currentConfig()).toEqual(before);
+  });
+
+  it("rejects an unsupported emoji sending size before applying config", async () => {
+    const prepareApply = vi.fn(async () => ({ commit: vi.fn() }));
+    const service = new ConfigService({ prepareApply, mutex: new AdminMutationMutex() });
+    const before = currentConfig();
+
+    await expect(service.patch("bot", {
+      revision: configRevision(before),
+      value: { ...botSection(before.bot.adminName), emojiSendSize: 96 }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "bot.emojiSendSize"
+    });
+    expect(prepareApply).not.toHaveBeenCalled();
   });
 
   it("rejects arbitrary and absolute Plana workspace paths before preparing or persisting", async () => {
@@ -366,10 +389,15 @@ function botSection(adminName: string) {
   return {
     adminQq: bot.adminQq,
     adminName,
+    replyModel: bot.replyModel,
+    replyReasoningEffort: bot.replyReasoningEffort,
+    imageReader: bot.imageReader,
     replyDebounceMs: bot.replyDebounceMs,
     pokeOnNoReply: bot.pokeOnNoReply,
     quoteGroupReplies: bot.quoteGroupReplies,
     quoteGroupReplyExcludedUserIds: bot.quoteGroupReplyExcludedUserIds,
-    contextMessageLimit: bot.contextMessageLimit
+    contextMessageLimit: bot.contextMessageLimit,
+    emojiSendSize: bot.emojiSendSize,
+    emojiSendSeparately: bot.emojiSendSeparately
   };
 }

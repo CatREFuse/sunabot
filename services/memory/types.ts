@@ -30,19 +30,43 @@ export interface MemoryEntry {
   userId?: string;
   userIds?: string[];
   userName?: string;
+  addressNames?: string[];
+  /** @deprecated Legacy single-value compatibility alias. */
   addressName?: string;
   userNickname?: string;
   groupCards?: Array<{ groupId: number; card: string; lastSeenAt: string }>;
   sourceWorkingMemoryIds?: string[];
   sourceCandidateIds?: string[];
+  sourceMemoryIds?: string[];
   eventType?: string;
   subjectKey?: string;
   eventKey?: string;
+  causalChainKey?: string;
   eventFingerprint?: string;
   longTermId?: string;
   batchId?: string;
+  recordedAt?: string;
+  timeZone?: string;
+  conversationId?: string;
+  conversationScope?: string;
+  conversationTitle?: string;
+  sourceKind?: "model_merge" | "add_workmemory" | "admin" | "dream";
+  memoryKind?: string;
+  realityStatus?: string;
+  factuality?: string;
+  dreamRunId?: string;
+  dreamDate?: string;
+  dreamReviewedAt?: string;
   promoteToLongTerm?: boolean;
   score?: number;
+  recallCount?: number;
+  distinctRecallDays?: number;
+  lastRecalledAt?: string;
+  recallTrackingStartedAt?: string;
+  lastReviewedAt?: string;
+  importance?: number;
+  futureRelevance?: number;
+  emotionalSalience?: number;
 }
 
 export interface MemoryFactInput {
@@ -58,54 +82,78 @@ export interface MemoryFactInput {
   userId?: string;
   userIds?: string[];
   userName?: string;
+  addressNames?: string[];
+  /** @deprecated Legacy single-value compatibility input. */
   addressName?: string;
   address_name?: string;
   salutation?: string;
   sourceWorkingMemoryIds?: string[];
   sourceCandidateIds?: string[];
+  sourceMemoryIds?: string[];
   eventType?: string;
   subjectKey?: string;
   eventKey?: string;
+  causalChainKey?: string;
   eventFingerprint?: string;
   longTermId?: string;
   batchId?: string;
+  memoryKind?: string;
+  realityStatus?: string;
+  factuality?: string;
+  dreamRunId?: string;
+  dreamDate?: string;
+  dreamReviewedAt?: string;
   promoteToLongTerm?: boolean;
 }
-
-export interface WorkingMemorySnapshot {
-  token: string;
-  entries: MemoryEntry[];
-}
-
-export type ReplaceWorkingMemoryFactsResult =
-  | { status: "applied"; entries: MemoryEntry[] }
-  | { status: "snapshot_conflict" }
-  | { status: "empty_not_authorized" };
-
-export interface MemoryBatchTransactionInput {
-  batchId: string;
-  expectedWorkingSnapshotToken: string;
-  workingFacts: MemoryFactInput[];
-  allPreviousMemoriesInvalidated?: boolean;
-  userProfileFacts: MemoryFactInput[];
-  longTermFacts: MemoryFactInput[];
-  metadata?: Record<string, unknown>;
-}
-
-export type ApplyMemoryBatchTransactionResult =
-  | {
-    status: "applied";
-    transactionId: string;
-    workingEntries: MemoryEntry[];
-    userProfileEntries: MemoryEntry[];
-    longTermEntries: MemoryEntry[];
-  }
-  | { status: "snapshot_conflict" | "empty_not_authorized" };
 
 export interface MemoryRecallInput {
   query?: unknown;
   source?: unknown;
   limit?: unknown;
+}
+
+export interface MemoryRecallUsage {
+  kind: "model_context";
+  recallKey: string;
+  recalledAt?: Date;
+  localDate?: string;
+}
+
+export interface MemoryRecallStats {
+  recordId: string;
+  recallCount: number;
+  distinctRecallDays: number;
+  lastRecalledAt: string | null;
+  lastRecallLocalDate: string | null;
+  trackingStartedAt: string;
+  lastReviewedAt: string | null;
+  importance: number | null;
+  futureRelevance: number | null;
+  emotionalSalience: number | null;
+}
+
+export interface RecordActualMemoryRecallInput {
+  recordId: string;
+  recallKey: string;
+  localDate: string;
+  at?: Date;
+}
+
+export interface ReserveActualMemoryRecallInput {
+  recordId: string;
+  recallKey: string;
+  at?: Date;
+}
+
+export interface ReserveActualMemoryRecallResult {
+  reserved: boolean;
+  recordPresent: boolean;
+}
+
+export interface RecordActualMemoryRecallResult {
+  recorded: boolean;
+  recordPresent: boolean;
+  stats: MemoryRecallStats;
 }
 
 export interface MemoryWriteInput {
@@ -114,6 +162,7 @@ export interface MemoryWriteInput {
   text?: unknown;
   userId?: unknown;
   userName?: unknown;
+  addressNames?: unknown;
   addressName?: unknown;
 }
 
@@ -138,7 +187,7 @@ export interface NormalizedMemoryFact {
   userId: string;
   userIds: string[];
   userName: string;
-  addressName: string;
+  addressNames: string[];
   occurredAt: string;
   occurredEndAt: string;
   observedAt: string;
@@ -148,6 +197,7 @@ export interface NormalizedMemoryFact {
   eventType: string;
   subjectKey: string;
   eventKey: string;
+  causalChainKey: string;
   eventFingerprint: string;
   longTermId: string;
   batchId: string;
@@ -158,20 +208,9 @@ export interface UserProfileAggregate {
   id: string;
   userId: string;
   userName: string;
-  addressName: string;
+  addressNames: string[];
   facts: string[];
   factKeys: Set<string>;
-  createdAt: string;
-  updatedAt: string;
-  time: string;
-  source: string;
-}
-
-export interface UserProfileFactGroup {
-  userId: string;
-  userName: string;
-  addressName: string;
-  facts: string[];
   createdAt: string;
   updatedAt: string;
   time: string;

@@ -19,7 +19,7 @@ export const PRESET_EMOJI_KEYS = [
 export const MAX_AGENT_EMOJIS = 64;
 export const MAX_EMOJI_MARKERS_PER_REPLY = 4;
 export const EMOJI_MARKER_SYNTAX =
-  "需要发送表情时，在正文对应位置输出 [/表情key]。表情key 必须从可用列表中精确选择，不得编造、转义或嵌套；单条回复最多 4 个表情，没有合适表情时不要输出标记。";
+  "需要发送表情时，在正文对应位置输出由斜杠和真实 key 组成的标记。例如可用列表包含“开心”时，只能输出 [/开心]。方括号内的内容必须严格等于 key，不得添加“表情”等前缀，也不得原样输出占位文字。key 必须从可用列表中精确选择，不得编造、转义或嵌套；单条回复最多 4 个表情，没有合适表情时不要输出标记。";
 
 export const EMOJI_EXPRESSION_PROMPTS: Readonly<Record<string, string>> = {
   开心: "真诚开心地笑，眼神明亮，嘴角自然上扬",
@@ -27,7 +27,7 @@ export const EMOJI_EXPRESSION_PROMPTS: Readonly<Record<string, string>> = {
   抓狂: "快要抓狂，眉眼用力，情绪强烈又可爱",
   惊慌: "突然惊慌，眼睛睁大，嘴巴微张",
   害羞: "轻微害羞，脸颊泛红，视线稍微躲闪",
-  极度害羞: "极度害羞，满脸通红，用头侧的黑色羽翼遮住大部分脸",
+  极度害羞: "极度害羞，满脸通红，用双手或角色原有的头侧配饰遮住大部分脸",
   困倦: "非常困倦，半闭着眼，像快要睡着",
   认真: "认真专注，目光坚定，表情沉静",
   嫌弃脸: "明显嫌弃，半眯眼，嘴角轻轻下撇",
@@ -83,7 +83,7 @@ export function isValidEmojiKey(value: string) {
 }
 
 export function isEmojiFileName(value: string) {
-  return /^emoji-[a-f0-9]{64}\.png$/u.test(value);
+  return /^emoji-[a-f0-9]{64}\.(?:png|gif)$/u.test(value);
 }
 
 export function planEmojiMarkers(text: string, port: EmojiCatalogPort): EmojiMarkerPlan {
@@ -191,7 +191,7 @@ export function prepareEmojiReply(
   for (const marker of actualMarkers) {
     appendTextPart(contentSegments, text.slice(cursor, marker.index));
     images.push({ ...marker.image });
-    contentSegments.push({ type: "image", imageIndex: images.length - 1 });
+    contentSegments.push({ type: "sticker", imageIndex: images.length - 1 });
     cursor = marker.index + marker.raw.length;
   }
   appendTextPart(contentSegments, text.slice(cursor));

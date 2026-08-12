@@ -7,8 +7,10 @@ import {
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
+  symlink,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -20,7 +22,6 @@ import {
   CacheStore,
   InvalidBase64Error
 } from "../../services/media/attachments/cache.js";
-import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 import {
   CACHE_MIN_FREE_BYTES,
   CACHE_UNREFERENCED_TTL_MS,
@@ -51,7 +52,6 @@ describe("attachment cache", () => {
       bytes.subarray(6)
     ], { "content-length": String(bytes.length) })) as unknown as typeof fetch;
     const store = new CacheStore(root, {
-      allowPrivateNetwork: true,
       fetchImpl,
       now: () => new Date("2026-07-10T00:00:00.000Z")
     });
@@ -95,7 +95,6 @@ describe("attachment cache", () => {
     });
     const store = new CacheStore(root, {
       fetchImpl: vi.fn(async () => new Response(body, { status: 404 })) as unknown as typeof fetch,
-      lookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
       maxFileBytes: 1_024,
       minimumFreeBytes: 0,
       statfsImpl: ampleStatFs
@@ -131,7 +130,6 @@ describe("attachment cache", () => {
       throw new Error("HTTP test server did not expose a TCP port.");
     }
     const store = new CacheStore(root, {
-      allowPrivateNetwork: true,
       maxFileBytes: 1_024,
       minimumFreeBytes: 0,
       statfsImpl: ampleStatFs
@@ -157,7 +155,7 @@ describe("attachment cache", () => {
     const root = await temporaryRoot();
     const bytes = Buffer.from("same bytes");
     const fetchImpl = vi.fn(async () => responseFromChunks([bytes])) as unknown as typeof fetch;
-    const store = new CacheStore(root, { allowPrivateNetwork: true, fetchImpl });
+    const store = new CacheStore(root, { fetchImpl });
 
     const first = await store.downloadHttp("https://cdn.example.test/one");
     const second = await store.downloadHttp("https://cdn.example.test/two");
@@ -181,7 +179,6 @@ describe("attachment cache", () => {
       }
     } as unknown as Response;
     const store = new CacheStore(root, {
-      allowPrivateNetwork: true,
       maxFileBytes: 8,
       fetchImpl: vi.fn(async () => response) as unknown as typeof fetch
     });
@@ -199,7 +196,6 @@ describe("attachment cache", () => {
       responseFromChunks([Buffer.alloc(4), Buffer.alloc(5)])
     ];
     const store = new CacheStore(root, {
-      allowPrivateNetwork: true,
       maxFileBytes: 8,
       fetchImpl: vi.fn(async () => responses.shift()!) as unknown as typeof fetch
     });
@@ -289,6 +285,94 @@ describe("attachment cache", () => {
     expect(Object.keys((await store.getIndex()).entries)).toEqual([imported.sha256]);
   });
 
+  it("rejects a symbolic-link import source without reading its target", async () => {
+    const root = await temporaryRoot();
+    const outsidePath = path.join(root, "outside.bin");
+    const linkPath = path.join(root, "source-link.bin");
+    await writeFile(outsidePath, "outside bytes");
+    await symlink(outsidePath, linkPath);
+    const store = new CacheStore(path.join(root, "cache"), {
+      minimumFreeBytes: 0,
+      statfsImpl: ampleStatFs
+    });
+
+    await expect(store.importFile(linkPath)).rejects.toEqual(
+      expect.objectContaining({ code: "import_failed" })
+    );
+    expect(await partFiles(path.join(root, "cache"))).toEqual([]);
+  });
+
+  it("never imports replacement bytes when the source path changes mid-stream", async () => {
+    const root = await temporaryRoot();
+    const sourcePath = path.join(root, "source.bin");
+    const movedPath = path.join(root, "source-opened.bin");
+    const originalBytes = Buffer.alloc(2 * 1024 * 1024, 0x41);
+    const replacementBytes = Buffer.from("replacement path bytes");
+    await writeFile(sourcePath, originalBytes);
+    const store = new CacheStore(path.join(root, "cache"), {
+      minimumFreeBytes: 0,
+      statfsImpl: ampleStatFs
+    });
+    await store.initialize();
+    let releaseRead!: () => void;
+    let signalRead!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      signalRead = resolve;
+    });
+    const continueRead = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const ensureAvailableSpace = store.janitor.ensureAvailableSpace.bind(store.janitor);
+    let blocked = false;
+    vi.spyOn(store.janitor, "ensureAvailableSpace").mockImplementation(async (bytes) => {
+      await ensureAvailableSpace(bytes);
+      if (!blocked) {
+        blocked = true;
+        signalRead();
+        await continueRead;
+      }
+    });
+
+    const importing = store.importFile(sourcePath);
+    await readStarted;
+    await rename(sourcePath, movedPath);
+    await writeFile(sourcePath, replacementBytes);
+    releaseRead();
+    const outcome = await importing.then(
+      (value) => ({ ok: true as const, value }),
+      (error) => ({ ok: false as const, error })
+    );
+    if (outcome.ok) {
+      expect(outcome.value.sha256)
+        .toBe(createHash("sha256").update(originalBytes).digest("hex"));
+      await expect(readFile(outcome.value.filePath)).resolves.toEqual(originalBytes);
+    } else {
+      expect(outcome.error).toEqual(expect.objectContaining({ code: "import_failed" }));
+    }
+    expect(await store.getEntry(createHash("sha256").update(replacementBytes).digest("hex")))
+      .toBeUndefined();
+    await expect(readFile(sourcePath)).resolves.toEqual(replacementBytes);
+  });
+
+  it("releases a retained active task when post-commit cleanup fails", async () => {
+    const root = await temporaryRoot();
+    const sourcePath = path.join(root, "source.bin");
+    const bytes = Buffer.from("cleanup failure fixture");
+    await writeFile(sourcePath, bytes);
+    const store = new CacheStore(path.join(root, "cache"), {
+      minimumFreeBytes: 0,
+      statfsImpl: ampleStatFs
+    });
+    await store.initialize();
+    vi.spyOn(store.janitor, "cleanup").mockRejectedValueOnce(new Error("cleanup failed"));
+
+    await expect(store.importFile(sourcePath, { retainActiveTask: true }))
+      .rejects.toEqual(expect.objectContaining({ code: "import_failed" }));
+
+    expect(store.indexRepository.listReclaimableEntries().map((entry) => entry.sha256))
+      .toContain(createHash("sha256").update(bytes).digest("hex"));
+  });
+
   it("rejects an oversized shared file before creating a part", async () => {
     const root = await temporaryRoot();
     const sourcePath = path.join(root, "oversized.bin");
@@ -309,7 +393,6 @@ describe("attachment cache", () => {
     const fetchImpl = vi.fn();
     const statfsImpl = vi.fn(async () => ({ bavail: 5, bsize: 1 }));
     const store = new CacheStore(root, {
-      allowPrivateNetwork: true,
       fetchImpl: fetchImpl as unknown as typeof fetch,
       minimumFreeBytes: 10,
       statfsImpl
@@ -326,7 +409,6 @@ describe("attachment cache", () => {
     const root = await temporaryRoot();
     let statfsReads = 0;
     const store = new CacheStore(root, {
-      allowPrivateNetwork: true,
       minimumFreeBytes: 10,
       fetchImpl: vi.fn(async () => responseFromChunks([Buffer.from("streaming")])) as unknown as typeof fetch,
       statfsImpl: async () => {
@@ -372,7 +454,6 @@ describe("attachment cache", () => {
       }
     } as unknown as Response;
     const store = new CacheStore(root, {
-      allowPrivateNetwork: true,
       maxFileBytes: bytes.length,
       minimumFreeBytes: 0,
       statfsImpl: async () => ({ bavail: 15, bsize: 1 }),
@@ -583,15 +664,18 @@ describe("attachment cache", () => {
     ]);
   });
 
-  it("rejects local, private, link-local, reserved, multicast and mapped IP targets", async () => {
+  it("downloads local, private, link-local, reserved, multicast and mapped IP targets", async () => {
     const root = await temporaryRoot();
-    const fetchImpl = vi.fn(async () => responseFromChunks([Buffer.from("unreachable")])) as unknown as typeof fetch;
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => responseFromChunks([
+      Buffer.from(`downloaded:${url.toString()}`)
+    ])) as unknown as typeof fetch;
     const store = new CacheStore(root, {
       fetchImpl,
+      maxFileBytes: 1_024,
       minimumFreeBytes: 0,
       statfsImpl: ampleStatFs
     });
-    const unsafeUrls = [
+    const urls = [
       "http://localhost/file",
       "http://localhost./file",
       "http://127.0.0.1/file",
@@ -615,68 +699,38 @@ describe("attachment cache", () => {
       "http://[2002:7f00:1::]/file"
     ];
 
-    for (const url of unsafeUrls) {
-      await expect(store.downloadHttp(url)).rejects.toEqual(
-        expect.objectContaining<Partial<AttachmentCacheError>>({ code: "unsafe_url" })
+    for (const url of urls) {
+      await expect(store.downloadHttp(url)).resolves.toEqual(
+        expect.objectContaining({ sizeBytes: expect.any(Number) })
       );
     }
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(urls.length);
   });
 
-  it("rejects a hostname when any DNS lookup result is not public", async () => {
+  it("downloads arbitrary hostnames without a DNS or QQ CDN address allowlist", async () => {
     const root = await temporaryRoot();
-    const fetchImpl = vi.fn(async () => responseFromChunks([Buffer.from("unreachable")])) as unknown as typeof fetch;
-    const lookupImpl = vi.fn(async () => [
-      { address: "93.184.216.34", family: 4 },
-      { address: "127.0.0.1", family: 4 }
-    ]);
+    const bytes = Buffer.from("unrestricted host fixture");
+    const fetchImpl = vi.fn(async () => responseFromChunks([bytes])) as unknown as typeof fetch;
     const store = new CacheStore(root, {
       fetchImpl,
-      lookupImpl,
+      maxFileBytes: 1_024,
       minimumFreeBytes: 0,
       statfsImpl: ampleStatFs
     });
 
     await expect(store.downloadHttp("https://downloads.example.com/file"))
-      .rejects.toEqual(expect.objectContaining<Partial<AttachmentCacheError>>({
-        code: "unsafe_url"
-      }));
-    expect(lookupImpl).toHaveBeenCalledOnce();
-    expect(lookupImpl).toHaveBeenCalledWith("downloads.example.com");
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("allows Clash fake-IP only for fixed QQ attachment CDN hostnames", async () => {
-    const root = await temporaryRoot();
-    const bytes = Buffer.from("trusted QQ CDN fixture");
-    const fetchImpl = vi.fn(async () => responseFromChunks([bytes]));
-    const lookupImpl = vi.fn(async () => [{ address: "198.18.0.226", family: 4 }]);
-    const store = new CacheStore(root, {
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      lookupImpl,
-      maxFileBytes: 1_024,
-      minimumFreeBytes: 0,
-      statfsImpl: ampleStatFs,
-      trustedResolvedAddress: isTrustedQqFakeIp
-    });
-
-    const cached = await store.downloadHttp("https://multimedia.nt.qq.com.cn/download?id=fixture");
-    expect(await readFile(cached.filePath)).toEqual(bytes);
-
+      .resolves.toEqual(expect.objectContaining({ sizeBytes: bytes.length }));
     await expect(store.downloadHttp("https://attacker.example/download"))
-      .rejects.toEqual(expect.objectContaining<Partial<AttachmentCacheError>>({
-        code: "unsafe_url"
-      }));
-    expect(fetchImpl).toHaveBeenCalledOnce();
+      .resolves.toEqual(expect.objectContaining({ sizeBytes: bytes.length }));
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it("validates DNS before a custom fetch implementation", async () => {
+  it("uses manual redirects with a custom fetch implementation", async () => {
     const root = await temporaryRoot();
     const fetchMock = vi.fn(async () => responseFromChunks([Buffer.from("pinned")]));
     const fetchImpl = fetchMock as unknown as typeof fetch;
     const store = new CacheStore(root, {
       fetchImpl,
-      lookupImpl: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
       maxFileBytes: 1_024,
       minimumFreeBytes: 0,
       statfsImpl: ampleStatFs
@@ -691,35 +745,29 @@ describe("attachment cache", () => {
     expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty("dispatcher");
   });
 
-  it("revalidates every redirect target before issuing its request", async () => {
+  it("follows redirect targets regardless of their address source", async () => {
     const root = await temporaryRoot();
-    const fetchImpl = vi.fn(async () => new Response(null, {
-      status: 302,
-      headers: { location: "http://private.example.com/latest" }
-    }));
-    const lookupImpl = vi.fn(async (hostname: string) => hostname === "public.example.com"
-      ? [{ address: "93.184.216.34", family: 4 }]
-      : [{ address: "169.254.169.254", family: 4 }]);
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(null, {
+        status: 302,
+        headers: { location: "http://169.254.169.254/latest" }
+      }))
+      .mockResolvedValueOnce(responseFromChunks([Buffer.from("redirected")]));
     const store = new CacheStore(root, {
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      lookupImpl,
+      maxFileBytes: 1_024,
       minimumFreeBytes: 0,
       statfsImpl: ampleStatFs
     });
 
     await expect(store.downloadHttp("https://public.example.com/file"))
-      .rejects.toEqual(expect.objectContaining<Partial<AttachmentCacheError>>({
-        code: "unsafe_url"
-      }));
-    expect(fetchImpl).toHaveBeenCalledOnce();
+      .resolves.toEqual(expect.objectContaining({ sizeBytes: 10 }));
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ redirect: "manual" }));
-    expect(lookupImpl.mock.calls.map(([hostname]) => hostname)).toEqual([
-      "public.example.com",
-      "private.example.com"
-    ]);
+    expect(String(fetchImpl.mock.calls[1]?.[0])).toBe("http://169.254.169.254/latest");
   });
 
-  it("follows at most five manually validated redirects", async () => {
+  it("follows at most five redirects", async () => {
     const root = await temporaryRoot();
     let responseCount = 0;
     const fetchImpl = vi.fn(async (_url: string | URL | Request) => {
@@ -729,10 +777,8 @@ describe("attachment cache", () => {
         headers: { location: `/hop-${responseCount}` }
       });
     });
-    const lookupImpl = vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]);
     const store = new CacheStore(root, {
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      lookupImpl,
       minimumFreeBytes: 0,
       statfsImpl: ampleStatFs
     });
@@ -742,7 +788,6 @@ describe("attachment cache", () => {
         code: "redirect_limit"
       }));
     expect(fetchImpl).toHaveBeenCalledTimes(6);
-    expect(lookupImpl).toHaveBeenCalledTimes(6);
     for (const [, options] of fetchImpl.mock.calls) {
       expect(options).toEqual(expect.objectContaining({ redirect: "manual" }));
     }

@@ -1,9 +1,3 @@
-import { listToolMetadata, type ToolMetadata } from "./toolRegistry.js";
-
-export type SunaTool = ToolMetadata;
-
-export const defaultTools: SunaTool[] = listToolMetadata();
-
 export { TOOL_CALL_TIMEOUT_MS } from "./toolConstants.js";
 export {
   ACTIVATE_SKILL_TOOL_NAME,
@@ -32,3 +26,12 @@ export {
   type SystemConfigTurn,
   type SystemConfigTurnContext
 } from "./systemConfigTool.js";
+export {
+  CRON_TOOL_NAME,
+  CRON_TOOL_OPERATIONS,
+  cronTool,
+  runCronTool,
+  type CronToolInput,
+  type CronToolOperation,
+  type CronToolPort
+} from "./cronTool.js";

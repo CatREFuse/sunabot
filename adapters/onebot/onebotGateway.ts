@@ -4,11 +4,8 @@ import type { Duplex } from "node:stream";
 import { URL } from "node:url";
 import { nanoid } from "nanoid";
 import { WebSocket, WebSocketServer } from "ws";
-import {
-  prepareOutboundImageSources,
-  type OutboundMediaDelivery
-} from "../../services/delivery/outboundMedia.js";
-import type { AppConfig } from "../../src/types.js";
+import { prepareOutboundImageSources, type OutboundMediaDelivery } from "../../services/delivery/outboundMedia.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import type {
   AttachmentResolutionInput,
   AttachmentResolverOptions,
@@ -16,7 +13,6 @@ import type {
 } from "../../packages/contracts/media/media.js";
 import type {
   ConversationDirectoryPort,
-  InboundMessageV1,
   MessageLookupContextV1,
   MessagingConnectionContextV1,
   MessagingPort,
@@ -32,10 +28,16 @@ import { MAX_OUTBOUND_CONVERSATION_ASSET_INLINE_BYTES } from "../../packages/con
 import {
   extractOneBotMessageDetails,
   extractOneBotReceiptMessageId,
-  extractOneBotSender,
-  parseOneBotInboundMessage
+  extractOneBotSender
 } from "./inboundMessageAdapter.js";
+import {
+  ingestOneBotEvent,
+  type OneBotEventDelegate,
+  type OneBotEventTrace,
+  type OneBotIngressOptions
+} from "./onebotEventIngress.js";
 import type { OneBotEvent } from "./protocol.js";
+import { normalizeMentionUserIds } from "./outboundMentions.js";
 import {
   loadOneBotConversationDirectory,
   resolveOneBotAttachment,
@@ -49,30 +51,10 @@ interface PendingAction {
   timer: NodeJS.Timeout;
 }
 
-export const ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES = 384 * 1024 * 1024;
-export const ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES = 384 * 1024 * 1024;
-export const ONEBOT_UNAUTHENTICATED_MAX_PAYLOAD_BYTES = 100 * 1024 * 1024;
+export const ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+export const ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 
-export interface OneBotEventTrace {
-  receivedAt: string;
-  accountId?: string;
-  postType?: string;
-  messageType?: string;
-  detailType?: string;
-  selfId?: number;
-  userId?: number;
-  groupId?: number;
-  messageId?: number;
-  text?: string;
-}
-
-export interface OneBotGatewayDelegate {
-  handleInboundMessage(
-    message: InboundMessageV1,
-    gateway: MessagingPort,
-    connection: MessagingConnectionContextV1
-  ): Promise<void>;
-}
+export type { OneBotEventTrace, OneBotIngressOptions } from "./onebotEventIngress.js";
 
 export interface OutboundImageAsset {
   url?: string;
@@ -99,7 +81,7 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
   constructor(
     private readonly server: http.Server,
     private config: AppConfig,
-    private readonly delegate: OneBotGatewayDelegate,
+    private readonly delegate: OneBotEventDelegate,
     private readonly options: OneBotGatewayOptions = {}
   ) {
     super();
@@ -129,7 +111,9 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
       }
 
       ws.on("message", (data) => {
-        void this.handleMessage(ws, data.toString());
+        void this.handleMessage(ws, data.toString()).catch((error) => {
+          console.error("[onebot] inbound message failed", { error });
+        });
       });
 
       ws.on("close", () => {
@@ -260,7 +244,7 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
   async sendPrivateMessage(userId: number, message: string, accountId?: string) {
     return this.sendTargetedAction("send_private_msg", {
       user_id: userId,
-      message
+      message: textMessage(message)
     }, accountId);
   }
 
@@ -281,7 +265,7 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
   async sendGroupMessage(groupId: number, message: string, options: { replyToMessageId?: number; accountId?: string } = {}) {
     return this.sendTargetedAction("send_group_msg", {
       group_id: groupId,
-      message: options.replyToMessageId ? replyMessage(options.replyToMessageId, message) : message
+      message: options.replyToMessageId ? replyMessage(options.replyToMessageId, message) : textMessage(message)
     }, options.accountId);
   }
 
@@ -289,24 +273,25 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     groupId: number,
     text: string,
     images: OutboundImageAsset[],
-    options: { replyToMessageId?: number; accountId?: string } = {},
+    options: { replyToMessageId?: number; accountId?: string; mentionUserIds?: readonly number[] } = {},
     contentSegments?: OutboundContentSegmentV1[]
   ) {
+    const mentionUserIds = normalizeMentionUserIds(options.mentionUserIds);
     const imageSources = await this.resolveImageSources(images, contentSegments);
     return this.sendTargetedAction("send_group_msg", {
       group_id: groupId,
-      message: richMessage(text, imageSources, options.replyToMessageId, contentSegments)
+      message: richMessage(text, imageSources, options.replyToMessageId, contentSegments, mentionUserIds)
     }, options.accountId);
   }
 
-  async dispatchAction(action: string, params: Record<string, unknown>, accountId?: string) {
+  async dispatchAction(action: string, params: Record<string, unknown>, accountId?: string, disconnectAfterSend = false) {
     const ws = this.openSocket(accountId);
     if (!ws) throw new Error("OneBot is not connected.");
     const payload = JSON.stringify({ action, params });
     await new Promise<void>((resolve, reject) => {
       ws.send(payload, (error) => {
         if (error) reject(error instanceof Error ? error : new Error(String(error)));
-        else resolve();
+        else { if (disconnectAfterSend) ws.terminate(); resolve(); }
       });
     });
   }
@@ -345,6 +330,10 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
 
   async send(message: OutboundMessageV1): Promise<MessagingReceiptV1> {
     const accountId = message.accountId ?? accountIdFromConversationId(message.conversationId);
+    const mentionUserIds = normalizeMentionUserIds(message.mentionUserIds);
+    if (mentionUserIds.length && (message.scope === "private" || !message.groupId)) {
+      throw new Error("Outbound mentions require a group message.");
+    }
     const text = sanitizeOneBotOutboundText(message.text);
     const contentSegments = message.contentSegments?.map((segment) => segment.type === "text"
       ? { type: "text" as const, text: sanitizeOneBotOutboundText(segment.text) }
@@ -354,10 +343,11 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
       filePath: asset.source === "shared_file" ? asset.filePath : undefined
     }));
     const response = message.groupId
-      ? images.length || contentSegments?.length
+      ? images.length || contentSegments?.length || mentionUserIds.length
         ? await this.sendGroupRichMessage(message.groupId, text, images, {
           replyToMessageId: message.replyToMessageId,
-          accountId
+          accountId,
+          mentionUserIds
         }, contentSegments)
         : await this.sendGroupMessage(message.groupId, text, {
           replyToMessageId: message.replyToMessageId,
@@ -447,7 +437,7 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
   }
 
   resolveAttachmentFallback(
-    input: Pick<AttachmentResolutionInput, "fileId" | "file">,
+    input: Pick<AttachmentResolutionInput, "accountId" | "fileId" | "file">,
     options: AttachmentResolverOptions = {}
   ) {
     return resolveOneBotAttachmentFallback(this, input, options);
@@ -464,10 +454,6 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     const requested = accountId?.trim() || "primary";
     const exact = [...this.sockets].find(([, info]) => info.accountId === requested)?.[0];
     if (exact?.readyState === WebSocket.OPEN) return exact;
-    if (!accountId && this.sockets.size === 1) {
-      const only = [...this.sockets.keys()][0];
-      if (only?.readyState === WebSocket.OPEN) return only;
-    }
     return undefined;
   }
 
@@ -501,17 +487,16 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     }
 
     if (event.post_type) {
-      this.lastEventAtValue = new Date().toISOString();
-      if (event.post_type === "message") {
-        this.lastMessageEventAtValue = this.lastEventAtValue;
-      }
       const connection = this.sockets.get(ws);
-      this.recordEventTrace(event, this.lastEventAtValue, connection?.accountId);
-      this.emit("event", event);
-      const inbound = parseOneBotInboundMessage(event);
-      if (!inbound || !connection) return;
-      inbound.accountId = connection.accountId;
-      void this.delegate.handleInboundMessage(inbound, this, connection).catch((error) => {
+      if (!connection) {
+        const receivedAt = new Date().toISOString();
+        this.lastEventAtValue = receivedAt;
+        if (event.post_type === "message") this.lastMessageEventAtValue = receivedAt;
+        this.recordEventTrace(event, receivedAt);
+        this.emit("event", event);
+        return;
+      }
+      void this.ingestEvent(event, connection).catch((error) => {
         console.error("[onebot] event handling failed", {
           postType: event.post_type,
           messageType: event.message_type,
@@ -522,6 +507,31 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
         });
       });
     }
+  }
+
+  async ingestEvent(
+    event: OneBotEvent,
+    connection: MessagingConnectionContextV1,
+    options: OneBotIngressOptions = {}
+  ) {
+    return ingestOneBotEvent({
+      event,
+      connection,
+      options,
+      defaultTransport: this,
+      defaultResolveForwardMessage: (messageId) => this.sendAction(
+        "get_forward_msg",
+        { message_id: messageId },
+        connection.accountId
+      ),
+      delegate: this.delegate,
+      onReceived: (receivedAt) => {
+        this.lastEventAtValue = receivedAt;
+        if (event.post_type === "message") this.lastMessageEventAtValue = receivedAt;
+        this.recordEventTrace(event, receivedAt, connection.accountId);
+        this.emit("event", event);
+      }
+    });
   }
 
   private recordEventTrace(event: OneBotEvent, receivedAt: string, accountId?: string) {
@@ -648,11 +658,16 @@ function replyMessage(messageId: number, text: string) {
   ];
 }
 
+function textMessage(text: string) {
+  return [{ type: "text", data: { text } }];
+}
+
 function richMessage(
   text: string,
   imageSources: string[],
   replyToMessageId?: number,
-  contentSegments?: OutboundContentSegmentV1[]
+  contentSegments?: OutboundContentSegmentV1[],
+  mentionUserIds: readonly number[] = []
 ) {
   const segments = [];
   if (replyToMessageId) {
@@ -664,6 +679,10 @@ function richMessage(
     });
   }
 
+  for (const userId of mentionUserIds) {
+    segments.push({ type: "at", data: { qq: String(userId) } });
+  }
+
   if (contentSegments?.length) {
     for (const segment of contentSegments) {
       if (segment.type === "text") {
@@ -673,7 +692,13 @@ function richMessage(
       }
       const imageSource = imageSources[segment.imageIndex];
       if (!imageSource) throw new Error("Outbound image segment index is invalid.");
-      segments.push({ type: "image", data: { file: imageSource } });
+      segments.push({
+        type: "image",
+        data: {
+          file: imageSource,
+          ...(segment.type === "sticker" ? { sub_type: 1 } : {})
+        }
+      });
     }
   } else {
     const trimmedText = text.trim();

@@ -14,11 +14,21 @@ import {
   completeFirstRunBootstrap,
   FIRST_RUN_JOURNAL,
   inspectFirstRunBootstrap,
+  inspectFirstRunBootstrapCompletion,
   rollbackFirstRunBootstrap
 } from "../../tooling/runtime/first-run-state.mjs";
+import { writeAdminCredentialRecord } from "../../tooling/admin/admin-credentials-core.mjs";
 
 const temporaryDirectories: string[] = [];
 const crashFixture = fileURLToPath(new URL("../fixtures/first-run-boundary-crash.ts", import.meta.url));
+const completionReadiness = {
+  coreListening: true,
+  onebotListening: true,
+  accountRuntimeReady: true,
+  napcatReady: true,
+  runtimeReady: true,
+  stable: true
+};
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
@@ -43,10 +53,44 @@ describe("first-run bootstrap journal", () => {
     for (const segment of ["config-full", "qq", "plugins"]) {
       await fs.mkdir(path.join(workspace, "runtime/napcat/accounts/primary", segment), { recursive: true });
     }
+    await expect(inspectFirstRunBootstrapCompletion(workspace)).resolves.toMatchObject({
+      state: "pending",
+      missing: ["admin-credentials"]
+    });
+    await writeValidAdminCredentials(workspace);
 
-    await expect(completeFirstRunBootstrap(workspace, new Date("2026-07-14T01:00:00.000Z")))
-      .resolves.toMatchObject({ state: "completed" });
+    await expect(completeFirstRunBootstrap(workspace, {
+      readiness: completionReadiness,
+      now: new Date("2026-07-14T01:00:00.000Z")
+    })).resolves.toMatchObject({
+      state: "completed",
+      report: { readiness: { ...completionReadiness, adminAuthReadable: true } }
+    });
     await expect(fs.access(path.join(workspace, FIRST_RUN_JOURNAL))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps the journal rollbackable until runtime readiness succeeds", async () => {
+    const workspace = await freshWorkspace();
+    await beginFirstRunBootstrap(workspace);
+    await finishAllBoundaries(workspace);
+
+    await expect(completeFirstRunBootstrap(workspace)).rejects.toMatchObject({
+      code: "FIRST_RUN_RUNTIME_NOT_READY"
+    });
+    await expect(inspectFirstRunBootstrap(workspace)).resolves.toMatchObject({ state: "active" });
+    await expect(rollbackFirstRunBootstrap(workspace)).resolves.toMatchObject({ state: "rolled-back" });
+  });
+
+  it("revalidates administrator credentials immediately before completion", async () => {
+    const workspace = await freshWorkspace();
+    await beginFirstRunBootstrap(workspace);
+    await finishAllBoundaries(workspace);
+    await expect(inspectFirstRunBootstrapCompletion(workspace)).resolves.toMatchObject({ state: "ready" });
+    await fs.writeFile(path.join(workspace, "secrets/admin-credentials.json"), "{}\n");
+
+    await expect(completeFirstRunBootstrap(workspace, { readiness: completionReadiness }))
+      .rejects.toMatchObject({ code: "FIRST_RUN_BOUNDARY_INVALID" });
+    await expect(fs.access(path.join(workspace, FIRST_RUN_JOURNAL))).resolves.toBeUndefined();
   });
 
   it("rolls a partial bootstrap into a private backup without deleting unknown files", async () => {
@@ -168,6 +212,14 @@ describe("first-run bootstrap journal", () => {
       }
     },
     {
+      label: "future main schema version",
+      mutate(workspace: string) {
+        const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
+        database.prepare("UPDATE app_metadata SET value = '18' WHERE key = 'storage-schema-version'").run();
+        database.close();
+      }
+    },
+    {
       label: "missing main schema index",
       mutate(workspace: string) {
         const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
@@ -176,18 +228,34 @@ describe("first-run bootstrap journal", () => {
       }
     },
     {
-      label: "missing group thread state table",
-      mutate(workspace: string) {
-        const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
-        database.exec("DROP TABLE conversation_thread_states");
-        database.close();
-      }
-    },
-    {
       label: "missing emojis table",
       mutate(workspace: string) {
         const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
         database.exec("DROP TABLE emojis");
+        database.close();
+      }
+    },
+    {
+      label: "missing emoji versions table",
+      mutate(workspace: string) {
+        const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
+        database.exec("DROP TABLE emoji_versions");
+        database.close();
+      }
+    },
+    {
+      label: "missing scheduled tasks table",
+      mutate(workspace: string) {
+        const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
+        database.exec("DROP TABLE scheduled_tasks");
+        database.close();
+      }
+    },
+    {
+      label: "missing scheduled task runs index",
+      mutate(workspace: string) {
+        const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
+        database.exec("DROP INDEX scheduled_task_runs_status");
         database.close();
       }
     },
@@ -248,7 +316,8 @@ describe("first-run bootstrap journal", () => {
       await killBoundaryWriter(resumeWorkspace, boundary);
       await expect(inspectFirstRunBootstrap(resumeWorkspace)).resolves.toMatchObject({ state: "active" });
       await finishAllBoundaries(resumeWorkspace);
-      await expect(completeFirstRunBootstrap(resumeWorkspace)).resolves.toMatchObject({ state: "completed" });
+      await expect(completeFirstRunBootstrap(resumeWorkspace, { readiness: completionReadiness }))
+        .resolves.toMatchObject({ state: "completed" });
 
       const rollbackWorkspace = await freshWorkspace();
       await killBoundaryWriter(rollbackWorkspace, boundary);
@@ -328,6 +397,22 @@ async function finishAllBoundaries(workspace: string) {
   for (const segment of ["config-full", "qq", "plugins"]) {
     await fs.mkdir(path.join(workspace, "runtime/napcat/accounts/primary", segment), { recursive: true });
   }
+  await writeValidAdminCredentials(workspace);
+}
+
+async function writeValidAdminCredentials(workspace: string) {
+  await writeAdminCredentialRecord(path.join(workspace, "secrets/admin-credentials.json"), {
+    version: 1,
+    username: "admin",
+    password: {
+      algorithm: "scrypt",
+      salt: Buffer.alloc(16, 3).toString("base64url"),
+      hash: Buffer.alloc(64, 7).toString("base64url"),
+      keyLength: 64
+    },
+    createdAt: "2026-07-14T00:00:00.000Z",
+    updatedAt: "2026-07-14T00:00:00.000Z"
+  });
 }
 
 function killBoundaryWriter(workspace: string, boundary: string) {

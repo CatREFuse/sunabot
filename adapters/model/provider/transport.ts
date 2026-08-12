@@ -3,9 +3,10 @@ import path from "node:path";
 import { homedir } from "node:os";
 import OpenAI from "openai";
 import dotenv from "dotenv";
-import type { ProviderConfig } from "../../../src/types.js";
-import { getWorkspacePath, resolveProjectPath } from "../../../src/config.js";
+import type { ProviderConfig } from "../../../packages/contracts/admin/public.js";
+import { getWorkspacePath, resolveProjectPath } from "../../../packages/platform/projectPaths.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
+import { ensureCodexAccessToken } from "../../../packages/platform/codexTokenRefresh.mjs";
 
 const inheritedProcessEnvironment = { ...process.env };
 
@@ -37,6 +38,13 @@ export function createChatClient(
 }
 
 export function resolveProviderApiKey(provider: ProviderConfig) {
+  const configuredToken = resolveConfiguredProviderApiKey(provider);
+  if (configuredToken) return configuredToken;
+  if (provider.kind === "codex-responses") return resolveCodexAccessToken();
+  return "";
+}
+
+function resolveConfiguredProviderApiKey(provider: ProviderConfig) {
   const envToken = inheritedProcessEnvironment[provider.apiKeyEnv];
   if (envToken) return envToken;
   const providerToken = readEnvValue(resolveProjectPath(provider.envFile), provider.apiKeyEnv);
@@ -45,8 +53,22 @@ export function resolveProviderApiKey(provider: ProviderConfig) {
   if (projectToken) return projectToken;
   const runtimeToken = process.env[provider.apiKeyEnv];
   if (runtimeToken) return runtimeToken;
-  if (provider.kind === "codex-responses") return resolveCodexAccessToken();
   return "";
+}
+
+export async function resolveProviderApiKeyAsync(provider: ProviderConfig) {
+  const configuredToken = resolveConfiguredProviderApiKey(provider);
+  if (provider.kind !== "codex-responses") return configuredToken;
+  const authFile = resolveCodexAuthFile();
+  try {
+    const token = await ensureCodexAccessToken({
+      authFile,
+      codexHome: path.dirname(authFile)
+    });
+    return token || configuredToken;
+  } catch {
+    return configuredToken;
+  }
 }
 
 export function normalizeOpenAiBaseUrl(baseUrl?: string) {
@@ -94,11 +116,17 @@ interface TransportRetryContext {
   retryDelayMs: number;
 }
 
+interface TransportResponseFailure {
+  error: unknown;
+  retryable: boolean;
+}
+
 interface TransportRetryObserver {
   maxAttempts?: number;
   attemptTimeoutMs?: number;
   beforeAttempt?(context: { attempt: number; maxAttempts: number }): unknown | Promise<unknown>;
   attemptFailed?(error: unknown, context: TransportRetryContext): unknown | Promise<unknown>;
+  classifyResponseFailure?(response: Response, text: string): TransportResponseFailure | undefined;
 }
 
 export const PROVIDER_TRANSPORT_ATTEMPT_TIMEOUT_MS = 60_000;
@@ -146,6 +174,22 @@ export async function fetchTextWithTransportRetry(
       continue;
     } finally {
       clearTimeout(attemptTimer);
+    }
+
+    const responseFailure = observer.classifyResponseFailure?.(response, text);
+    if (responseFailure) {
+      const willRetry = !callerSignal?.aborted && attempt < maxAttempts && responseFailure.retryable;
+      const retryDelayMs = willRetry ? resolveRetryDelayMs(response.headers, attempt) : 0;
+      await observer.attemptFailed?.(responseFailure.error, {
+        attempt,
+        maxAttempts,
+        willRetry,
+        status: response.status,
+        retryDelayMs
+      });
+      if (!willRetry) throw responseFailure.error;
+      await waitForRetry(retryDelayMs, callerSignal);
+      continue;
     }
 
     const willRetry = !callerSignal?.aborted

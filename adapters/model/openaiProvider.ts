@@ -1,7 +1,12 @@
 import type OpenAI from "openai";
-import type { ChatMessage, ImageQuality, ImageResult, ProviderConfig } from "../../src/types.js";
+import type { ImageQuality, ProviderConfig } from "../../packages/contracts/admin/public.js";
+import type { ImageResult } from "../../packages/contracts/media/media.js";
+import {
+  AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS,
+  type ChatMessage,
+  type ProviderLogContext
+} from "../../packages/contracts/model/modelGateway.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
-import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 import { completeProviderTurn } from "./provider/completion.js";
 import type {
   GeneratedImageWriterPort,
@@ -12,30 +17,26 @@ import type {
   ProviderToolExecutorPort,
   ProviderTurnResult
 } from "./provider/contracts.js";
-import { FileGeneratedImageWriter } from "./provider/imageWriter.js";
 import { DEFAULT_IMAGE_MODEL, generateProviderImage } from "./provider/imageGeneration.js";
+import { FileGeneratedImageWriter } from "./provider/imageWriter.js";
 import { createProviderLogger } from "./provider/logger.js";
 import { legacyPromptRequest } from "./provider/promptMapping.js";
 import { RegistryProviderToolExecutor } from "./provider/toolExecutor.js";
 import {
   createChatClient as createOpenAIChatClient,
   createResponsesClient,
-  normalizeChatBaseUrl,
-  resolveProviderApiKey
+  resolveProviderApiKey,
+  resolveProviderApiKeyAsync
 } from "./provider/transport.js";
 
+export type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 export type {
   OpenAIProviderOptions,
-  ProviderBashOptions,
-  ProviderCompleteOptions,
-  ProviderCompletedTurn,
-  ProviderDeferredTurn,
-  ProviderNoReplyTurn,
-  ProviderMemoryOptions,
-  ProviderSelfieOptions,
-  ProviderTurnResult
+  ProviderBashOptions, ProviderCompletedTurn, ProviderCompleteOptions, ProviderDeferredTurn, ProviderMemoryOptions, ProviderNoReplyTurn, ProviderSelfieOptions,
+  ProviderTurnResult,
+  ProviderVoiceCapability,
+  ProviderVoiceCompanion
 } from "./provider/contracts.js";
-export type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 export { resolveLocalInputImage, toResponsesInputMessage } from "./provider/imageInput.js";
 
 export class OpenAIProvider {
@@ -68,7 +69,10 @@ export class OpenAIProvider {
       const client = this.createClient();
       await client.models.list();
     } else {
-      await this.complete("只返回 OK。", [{ role: "user", content: "ping" }]);
+      await this.complete("只返回 OK。", [{ role: "user", content: "ping" }], {
+        signal: AbortSignal.timeout(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS),
+        modelRequestAttemptTimeoutMs: AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS
+      });
     }
     return {
       ok: true,
@@ -112,7 +116,8 @@ export class OpenAIProvider {
     size: string,
     quality: ImageQuality,
     referenceImageUrls: string[] = [],
-    logContext?: ProviderLogContext
+    logContext?: ProviderLogContext,
+    signal?: AbortSignal
   ): Promise<ImageResult> {
     return generateProviderImage(
       this.adapterContext(),
@@ -120,7 +125,8 @@ export class OpenAIProvider {
       size,
       quality,
       referenceImageUrls,
-      logContext
+      logContext,
+      signal
     );
   }
 
@@ -133,7 +139,8 @@ export class OpenAIProvider {
       imageWriter: this.imageWriter,
       createResponsesClient: (options) => this.createClient(options),
       createChatClient: (options) => this.createChatClient(options),
-      getApiKey: () => this.getApiKey()
+      getApiKey: () => this.getApiKey(),
+      getApiKeyAsync: () => this.getApiKeyAsync()
     };
   }
 
@@ -149,11 +156,12 @@ export class OpenAIProvider {
     return resolveProviderApiKey(this.provider);
   }
 
+  private async getApiKeyAsync() {
+    return resolveProviderApiKeyAsync(this.provider);
+  }
+
   configuration() {
     return { ...this.provider };
   }
 
-  private normalizeChatBaseUrl() {
-    return normalizeChatBaseUrl(this.provider);
-  }
 }

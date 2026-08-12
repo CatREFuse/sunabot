@@ -1,16 +1,21 @@
 import type { ProviderBashOptions } from "../../adapters/model/openaiProvider.js";
 import type { MessageLookupContextV1, MessagingPort } from "../../packages/contracts/messaging/messages.js";
+import type { AttachmentService } from "../../services/media/attachments/service.js";
 import { inboundImageUrls, replaceInboundImageUrls } from "../../packages/contracts/messaging/messages.js";
-import { isAdminSender } from "../../services/messaging/replySenderPolicy.js";
+import { isAdminSender, isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
 import { generateImgMediaHandle, type GenerateImgReferenceContext } from "../../services/tools/generateImgTool.js";
 import {
   extractConfirmedBashApprovalId
 } from "../../services/tools/bashAudit.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
+import type { BashSkillRepositoryPort } from "../../services/tools/bashSkillRepository.js";
+import {
+  resolveConversationWorkbench,
+  type ConversationCapabilityContextV1
+} from "../../services/conversations/conversationCapability.js";
 import { resolveProjectPath } from "../config.js";
-import type { SunaRuntime } from "../runtime.js";
-import type { AppConfig, ChatMessage, ConversationMessageQuote, ParsedIncomingMessage } from "../types.js";
-import { clampInteger, estimatePromptTokens, isAdminUserId, toContextChatMessage } from "./conversationMemoryHelpers.js";
+import type { AppConfig, ChatMessage, ConversationMessageQuote, ConversationRecord, ParsedIncomingMessage } from "../types.js";
+import { clampInteger, estimatePromptTokens, isAdminUserId, isModelVisibleConversationMessage, toContextChatMessage } from "./conversationMemoryHelpers.js";
 import {
   conversationMessageAttachments,
   conversationRecordId,
@@ -24,35 +29,58 @@ import {
   DEFAULT_CONTEXT_MESSAGE_LIMIT,
   MAX_HISTORY_CONTEXT_IMAGES,
   MAX_STORED_CONVERSATION_MESSAGES,
-  RECENT_CONTEXT_TOKEN_BUDGET
+  RECENT_CONTEXT_TOKEN_BUDGET,
+  type AdminIdentity,
+  type RuntimeBashAuditPort,
+  type RuntimeConfigPort
 } from "./runtimeContracts.js";
 
-type RuntimeHost = SunaRuntime;
+interface RuntimeReplyContextHost extends RuntimeConfigPort {
+  readonly configEpoch: number;
+  readonly conversationRecords: ReadonlyMap<string, ConversationRecord>;
+  readonly attachmentService: Pick<AttachmentService, "cache">;
+  readonly bashAudit?: RuntimeBashAuditPort;
+  readonly bashSkillRepository?: BashSkillRepositoryPort;
+  adminIdentity(): AdminIdentity;
+  contextMessageLimit(): number;
+  loadMessageDetails(
+    gateway: MessagingPort,
+    messageId: number,
+    context?: MessageLookupContextV1
+  ): ReturnType<MessagingPort["getMessage"]>;
+}
+
+type RuntimeHost = RuntimeReplyContextHost;
 
 export async function runtime_attachReplyReferences(
   this: RuntimeHost,
   incoming: ParsedIncomingMessage,
   gateway: MessagingPort,
-  _signal?: AbortSignal
+  signal?: AbortSignal
 ) {
+  signal?.throwIfAborted();
   if (!incoming.replyMessageIds.length) return;
   const imageUrls: string[] = inboundImageUrls(incoming);
   const quoteReferences: ConversationMessageQuote[] = [...incoming.quoteReferences];
   for (const messageId of incoming.replyMessageIds.slice(0, 2)) {
     try {
+      signal?.throwIfAborted();
       const details = await this.loadMessageDetails(gateway, messageId, {
         ...(incoming.accountId ? { accountId: incoming.accountId } : {}),
         source: "quote",
         groupId: incoming.groupId,
         userId: incoming.userId
       });
+      signal?.throwIfAborted();
       imageUrls.push(...details.media.flatMap((asset) => asset.url ? [asset.url] : []));
       incoming.attachments.push(...details.attachments);
       quoteReferences.push(toConversationQuote(messageId, details));
     } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
       console.error("[runtime] load replied message failed", { messageId, error });
     }
   }
+  signal?.throwIfAborted();
   replaceInboundImageUrls(incoming, uniqueStrings(imageUrls));
   incoming.attachments = uniqueAttachments(incoming.attachments);
   incoming.quoteReferences = uniqueQuotes(quoteReferences);
@@ -119,7 +147,8 @@ export function runtime_buildRecentContextMessages(
   this: RuntimeHost,
   incoming: ParsedIncomingMessage,
   captureSequence?: number,
-  messageLimit = this.contextMessageLimit()
+  messageLimit = this.contextMessageLimit(),
+  tokenBudget = RECENT_CONTEXT_TOKEN_BUDGET
 ): ChatMessage[] {
   const record = this.conversationRecords.get(conversationRecordId(incoming));
   if (!record) return [];
@@ -127,15 +156,21 @@ export function runtime_buildRecentContextMessages(
   const admin = this.adminIdentity();
   const candidates = record.messages
     .filter((message) => !currentMessageId || message.id !== currentMessageId)
-    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter(isModelVisibleConversationMessage)
     .filter((message) => captureSequence == null || Number(message.sequence ?? 0) < captureSequence)
     .slice(-clampInteger(messageLimit, this.contextMessageLimit(), 1, 120))
     .map((message) => toContextChatMessage(message, isAdminUserId(message.userId, admin), admin));
   const selected: ChatMessage[] = [];
   let usedTokens = 0;
+  const boundedTokenBudget = clampInteger(
+    tokenBudget,
+    RECENT_CONTEXT_TOKEN_BUDGET,
+    1,
+    65_536
+  );
   for (const message of candidates.reverse()) {
     const messageTokens = estimatePromptTokens(message.content);
-    if (selected.length && usedTokens + messageTokens > RECENT_CONTEXT_TOKEN_BUDGET) break;
+    if (usedTokens + messageTokens > boundedTokenBudget) break;
     selected.unshift(message);
     usedTokens += messageTokens;
   }
@@ -153,19 +188,40 @@ export function runtime_buildRecentContextMessages(
 export function runtime_generateImgReferenceContext(
   this: RuntimeHost,
   incoming: ParsedIncomingMessage,
-  captureSequence?: number
+  captureSequence?: number,
+  currentBatchFromSequence?: number
 ): GenerateImgReferenceContext {
   const record = this.conversationRecords.get(conversationRecordId(incoming));
   const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
   const candidates = (record?.messages ?? [])
     .filter((message) => !currentMessageId || message.id !== currentMessageId)
-    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter(isModelVisibleConversationMessage)
     .filter((message) => captureSequence == null || Number(message.sequence ?? 0) < captureSequence)
+    .filter((message) => (
+      currentBatchFromSequence == null ||
+      Number(message.sequence ?? 0) < currentBatchFromSequence ||
+      incoming.scope === "private" ||
+      message.userId === incoming.userId
+    ))
     .slice(-this.contextMessageLimit());
   const mediaByHandle: Record<string, string> = {};
   for (const message of candidates) {
     for (const [index, imageUrl] of (message.imageUrls ?? []).slice(0, 4).entries()) {
       if (imageUrl) mediaByHandle[generateImgMediaHandle(message.id, index)] = imageUrl;
+    }
+  }
+  for (const [index, imageUrl] of inboundImageUrls(incoming).slice(0, 4).entries()) {
+    if (currentMessageId && imageUrl) {
+      mediaByHandle[generateImgMediaHandle(currentMessageId, index)] = imageUrl;
+    }
+  }
+  for (const quote of incoming.quoteReferences.slice(0, 2)) {
+    const quoteImageUrls = uniqueStrings([
+      ...(quote.media ?? []).flatMap((asset) => asset.url ? [asset.url] : []),
+      ...(quote.imageUrls ?? [])
+    ]).slice(0, 4);
+    for (const [index, imageUrl] of quoteImageUrls.entries()) {
+      mediaByHandle[generateImgMediaHandle(String(quote.messageId), index)] = imageUrl;
     }
   }
   const sameUserLatestFirst = [...candidates]
@@ -189,7 +245,7 @@ export function runtime_retainedConversationMessageLimit(this: RuntimeHost) {
   return Math.max(
     MAX_STORED_CONVERSATION_MESSAGES,
     this.contextMessageLimit() * 2,
-    this.config.bot.memory.messageThreshold * 2 + 8
+    this.config.bot.contextMessageLimit * 2 + 8
   );
 }
 
@@ -203,13 +259,20 @@ export async function runtime_resolveProviderBashHandle(
   this: RuntimeHost,
   incoming: ParsedIncomingMessage,
   promptOverride: string | undefined,
-  capabilityResolver?: RuntimeToolCapabilityResolver
+  capabilityResolver?: RuntimeToolCapabilityResolver,
+  capability?: Readonly<ConversationCapabilityContextV1>
 ): Promise<ProviderBashOptions | undefined> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const epoch = this.configEpoch;
-    const config = freezeConfigSnapshot(this.config);
+    if (capability && capability.configEpoch !== epoch) return undefined;
+    const config = deepFreeze(structuredClone(this.config));
     const auditPort = this.bashAudit;
-    const candidate = resolveProviderBashCandidate(config, incoming, promptOverride);
+    const candidate = resolveProviderBashCandidate(
+      config,
+      incoming,
+      promptOverride,
+      capability
+    );
     if (!candidate || !auditPort || !capabilityResolver) return undefined;
 
     let auditAvailable = false;
@@ -226,7 +289,6 @@ export async function runtime_resolveProviderBashHandle(
     try {
       const capabilities = await capabilityResolver({
         workspacePath: candidate.workspacePath,
-        workspaceBashBackend: candidate.backend,
         workspaceBashAuditAvailable: true
       });
       capabilityAvailable = capabilities.workspaceBash === true;
@@ -243,14 +305,23 @@ export async function runtime_resolveProviderBashHandle(
       backend: candidate.backend,
       accessMode: candidate.accessMode,
       strictMode: candidate.strictMode,
+      isAdmin: candidate.isAdmin,
+      userRequest: candidate.userRequest,
       approvalContext: candidate.approvalContext,
       isCurrent: () => this.configEpoch === epoch,
       audit: async (input: Parameters<ProviderBashOptions["audit"]>[0]) => {
         if (this.configEpoch !== epoch) throw new Error("BASH_AUDIT_UNAVAILABLE");
-        const result = await auditPort.run(config, input);
+        const result = await auditPort.run(config, {
+          ...input,
+          isAdmin: candidate.isAdmin,
+          userRequest: candidate.userRequest
+        });
         if (this.configEpoch !== epoch) throw new Error("BASH_AUDIT_UNAVAILABLE");
         return result;
       },
+      ...(this.bashSkillRepository && candidate.accessMode === "admin"
+        ? { skillRepository: this.bashSkillRepository }
+        : {}),
       ...(candidate.confirmedApprovalId ? { confirmedApprovalId: candidate.confirmedApprovalId } : {})
     });
     if (this.configEpoch !== epoch) continue;
@@ -262,58 +333,76 @@ export async function runtime_resolveProviderBashHandle(
 function resolveProviderBashCandidate(
   config: Readonly<AppConfig>,
   incoming: ParsedIncomingMessage,
-  promptOverride?: string
+  promptOverride: string | undefined,
+  capability?: Readonly<ConversationCapabilityContextV1>
 ) {
   const bash = config.bot.bash;
-  const adminQq = config.bot.adminQq.trim();
-  const accountId = incoming.accountId?.trim();
   const senderId = incoming.sender?.id?.trim();
+  const administrator = isAdminSender(incoming.userId, config.bot.adminQq.trim());
+  const privateConversation = incoming.scope === "private" && incoming.groupId === undefined;
+  const groupConversation = (incoming.scope === "user_group" || incoming.scope === "bot_group")
+    && Number.isSafeInteger(incoming.groupId)
+    && Number(incoming.groupId) > 0;
+  const webAdministratorPrivate = incoming.transport === "web"
+    && administrator
+    && privateConversation;
+  const oneBotConversation = incoming.transport === undefined
+    && Boolean(incoming.accountId?.trim())
+    && Number.isSafeInteger(incoming.messageId)
+    && Number(incoming.messageId) > 0
+    && Number.isSafeInteger(incoming.selfId)
+    && Number(incoming.selfId) > 0
+    && (privateConversation || groupConversation);
+  if (capability) {
+    try {
+      const plan = resolveConversationWorkbench(
+        capability,
+        "bash_native"
+      );
+      if (plan.primaryBackend !== "native") return undefined;
+    } catch {
+      return undefined;
+    }
+  }
   if (
     !bash.enabled
-    || !bash.adminOnly
     || promptOverride !== undefined
-    || incoming.transport !== undefined
-    || incoming.agentId !== config.persona.defaultAgentId
-    || !accountId
-    || !Number.isSafeInteger(incoming.messageId)
-    || Number(incoming.messageId) <= 0
-    || !Number.isSafeInteger(incoming.selfId)
-    || Number(incoming.selfId) <= 0
-    || !adminQq
-    || !isAdminSender(incoming.userId, adminQq)
+    || (!webAdministratorPrivate && incoming.agentId !== config.persona.defaultAgentId)
+    || (webAdministratorPrivate && incoming.agentId !== undefined
+      && incoming.agentId !== config.persona.defaultAgentId)
+    || !isReplySenderAllowed(incoming.userId)
     || senderId !== String(incoming.userId)
+    || (!webAdministratorPrivate && !oneBotConversation)
+    || (process.platform !== "linux" && process.platform !== "darwin")
+    || (process.platform === "darwin" && !(webAdministratorPrivate || (administrator && privateConversation)))
   ) return undefined;
 
   const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
   if (!workspacePath) return undefined;
-  const privateAdmin = incoming.scope === "private" && incoming.groupId === undefined;
-  const allowedGroup = bash.allowGroup
-    && (incoming.scope === "user_group" || incoming.scope === "bot_group")
-    && Number.isSafeInteger(incoming.groupId)
-    && Number(incoming.groupId) > 0;
-  if (!privateAdmin && !allowedGroup) return undefined;
+  const accountId = webAdministratorPrivate ? "web-admin" : incoming.accountId!.trim();
 
   const approvalContext = Object.freeze({
+    backend: "native" as const,
     agentId: config.persona.defaultAgentId,
     accountId,
-    transport: "onebot" as const,
+    transport: webAdministratorPrivate ? "web" : "onebot",
     conversationId: conversationRecordId(incoming),
     userId: String(incoming.userId),
-    ...(allowedGroup ? { groupId: String(incoming.groupId) } : {})
+    ...(groupConversation ? { groupId: String(incoming.groupId) } : {})
   });
   const confirmedApprovalId = extractConfirmedBashApprovalId(incoming.text);
   return Object.freeze({
     workspacePath,
-    backend: privateAdmin ? bash.adminPrivateBackend : "docker" as const,
-    accessMode: privateAdmin ? "admin" as const : "restricted" as const,
+    backend: "native" as const,
+    accessMode: webAdministratorPrivate || (administrator && privateConversation)
+      ? "admin" as const
+      : "isolated" as const,
     strictMode: bash.strictMode,
+    isAdmin: administrator,
+    userRequest: incoming.text,
     approvalContext,
     ...(confirmedApprovalId ? { confirmedApprovalId } : {})
   });
-}
-
-function freezeConfigSnapshot(config: AppConfig): Readonly<AppConfig> {
-  return deepFreeze(structuredClone(config));
 }
 
 function deepFreeze<T>(value: T): T {

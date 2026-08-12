@@ -1,4 +1,5 @@
-import type { ChatMessage, ProviderConfig } from "../../../src/types.js";
+import type { ProviderConfig } from "../../../packages/contracts/admin/public.js";
+import type { ChatMessage } from "../../../packages/contracts/model/modelGateway.js";
 import type { RenderedPromptRequest } from "../../../services/agent/promptSystem.js";
 import { isRecord } from "./valueUtils.js";
 
@@ -46,6 +47,26 @@ export function toChatCompletionTool(tool: Record<string, unknown>) {
       parameters: isRecord(tool.parameters) ? tool.parameters : { type: "object", properties: {} },
       ...(typeof tool.strict === "boolean" ? { strict: tool.strict } : {})
     }
+  };
+}
+
+export function toAnthropicTool(tool: Record<string, unknown>) {
+  return {
+    name: String(tool.name ?? ""),
+    description: String(tool.description ?? ""),
+    input_schema: isRecord(tool.parameters)
+      ? tool.parameters
+      : { type: "object", properties: {} }
+  };
+}
+
+export function toGeminiFunctionDeclaration(tool: Record<string, unknown>) {
+  return {
+    name: String(tool.name ?? ""),
+    description: String(tool.description ?? ""),
+    parametersJsonSchema: isRecord(tool.parameters)
+      ? tool.parameters
+      : { type: "object", properties: {} }
   };
 }
 

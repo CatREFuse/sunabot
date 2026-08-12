@@ -1,10 +1,11 @@
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
 import type { ConversationRecord, ParsedIncomingMessage } from "../types.js";
-import type { SunaRuntime } from "../runtime.js";
 import { conversationReplyEnabled } from "./messagingAttachmentHelpers.js";
 
+interface InboundConversationGateHost { ensureConversationRecord(incoming: ParsedIncomingMessage, at: string): ConversationRecord; handlePersistedReplyDuplicate(incoming: ParsedIncomingMessage, gateway: MessagingPort, record: ConversationRecord, durableMessageId: string): Promise<boolean>; recordIncomingMessage(incoming: ParsedIncomingMessage, options: { persist: boolean }): ConversationRecord; persistConversationRecordStrict(record: ConversationRecord): void; markIncomingSeen(incoming: ParsedIncomingMessage): void; markConversationMessagesAsRecordedOnly(record: ConversationRecord): void; }
+
 export async function handleInboundConversationGate(
-  host: SunaRuntime,
+  host: InboundConversationGateHost,
   incoming: ParsedIncomingMessage,
   gateway: MessagingPort,
   activeDebounceConversation: ConversationRecord | undefined,

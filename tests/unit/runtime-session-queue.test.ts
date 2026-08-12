@@ -13,12 +13,14 @@ import type {
 import { parseOneBotInboundMessage } from "../../adapters/onebot/inboundMessageAdapter.js";
 import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import {
   incomingReplyEnvelope,
   toolCompletionEnvelope,
-  type AsyncToolCompletionPayload,
-  type GroupThreadContextSnapshotV1
+  type AsyncToolCompletionPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
+import { scheduledCallbackDeliveryEnvelope } from "../../packages/contracts/session/scheduledTaskRuntimeMessages.js";
+import { buildCallbackInput } from "../../services/agent/callbackInput.js";
 import { defaultFinalPromptTemplate } from "../../services/agent/promptDefaults.js";
 import {
   renderFinalPromptTemplate,
@@ -37,20 +39,28 @@ import {
 import type { ConversationRecord, ParsedIncomingMessage } from "../../src/types.js";
 import { replyDebounceSessionId } from "../../src/runtime/replyDebounce.js";
 import { conversationRecordId } from "../../src/runtime/messagingAttachmentHelpers.js";
+import { runtime_generateImgReferenceContext } from "../../src/runtime/replyContext.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 const recallMemory = vi.hoisted(() => vi.fn(async () => ({ ok: true, matches: [] })));
 const readUserProfileForUser = vi.hoisted(() => vi.fn(async () => undefined));
+const archiveConversationImage = vi.hoisted(() => vi.fn(async (
+  agentId: string,
+  prepared: { sha256?: string }
+) => `/generated-images/conversation-assets/agents/${agentId}/${prepared.sha256}.png`));
 
-vi.mock("../../src/requestLog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../src/requestLog.js")>()),
+vi.mock("../../adapters/observability/requestLog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../adapters/observability/requestLog.js")>()),
   appendRequestLog
 }));
 vi.mock("../../services/memory/memoryService.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../services/memory/memoryService.js")>()),
   recallMemory,
   readUserProfileForUser
+}));
+vi.mock("../../services/media/conversationImageArchive.js", () => ({
+  archiveConversationImage
 }));
 
 const runtimes: SunaRuntime[] = [];
@@ -96,6 +106,7 @@ describe("SunaRuntime Session queue bridge", () => {
       options: ProviderCompleteOptions = {}
     ): Promise<ProviderTurnResult> => {
       expect(options.modelRequestMaxRetries).toBe(6);
+      expect(options.modelRequestAttemptTimeoutMs).toBeUndefined();
       return { kind: "completed", text: "已完成" };
     });
     const harness = createRuntimeHarness(completeRequestTurn, undefined, (config) => {
@@ -109,12 +120,66 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(sentTexts(harness.gateway)).toEqual(["已完成"]);
   });
 
+  it("gives a scheduled callback Provider request the shared 10-minute attempt budget", async () => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      expect(options.modelRequestAttemptTimeoutMs).toBe(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS);
+      return { kind: "completed", text: "定时任务已完成" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+    const sessionId = "private:171419991";
+    const occurredAt = "2026-07-31T02:00:00.000Z";
+    harness.runtime.activeGateway = harness.gateway;
+    (harness.runtime as unknown as {
+      sessionCoordinator: {
+        enqueueEvent(input: Parameters<SessionStore["enqueueEvent"]>[0]): unknown;
+      };
+    }).sessionCoordinator.enqueueEvent({
+      sessionId,
+      kind: "scheduled_callback_delivery",
+      dedupeKey: "scheduled-callback-budget",
+      payload: scheduledCallbackDeliveryEnvelope({
+        type: "scheduled_callback",
+        taskId: "scheduled-budget",
+        taskRevision: 1,
+        runId: "scheduled-budget-run",
+        taskName: "预算测试",
+        scheduledFor: occurredAt,
+        triggeredAt: occurredAt,
+        text: buildCallbackInput("scheduled_task", {
+          promptMessages: [{ role: "user", content: "执行定时任务" }]
+        }),
+        target: {
+          conversationId: sessionId,
+          accountId: "primary",
+          scope: "private",
+          userId: 171419991,
+          mentionUserIds: []
+        }
+      }, {
+        conversationId: sessionId,
+        correlationId: "scheduled-budget-run",
+        idempotencyKey: "scheduled-callback-budget",
+        occurredAt
+      })
+    });
+
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+    await waitUntil(() => sentTexts(harness.gateway).includes("定时任务已完成"));
+
+    expect(completeRequestTurn).toHaveBeenCalledOnce();
+    expect(sentTexts(harness.gateway)).toEqual(["定时任务已完成"]);
+  });
+
   it.each([
     {
       label: "private",
       event: privateEvent(19_980, "发送报告"),
       accountId: undefined,
       sessionId: "private:171419991",
+      workbenchDirectory: "workbench",
       target: { accountId: "primary", scope: "private", userId: 171419991 }
     },
     {
@@ -122,12 +187,14 @@ describe("SunaRuntime Session queue bridge", () => {
       event: groupEvent(19_981, 602, "发送报告"),
       accountId: "account-b",
       sessionId: "account:account-b:group:602",
+      workbenchDirectory: "workbench",
       target: { accountId: "account-b", scope: "user_group", userId: 171419991, groupId: 602 }
     }
   ])("queues send_file for the current $label conversation and account", async ({
     event,
     accountId,
     sessionId,
+    workbenchDirectory,
     target
   }) => {
     expect(parseOneBotInboundMessage(event)?.transport).toBeUndefined();
@@ -152,7 +219,11 @@ describe("SunaRuntime Session queue bridge", () => {
       });
       return { kind: "completed", text: "文件已发送" };
     });
-    const workbench = path.join(harness.runtime.config.persona.agentWorkspace, "workbench", "exports");
+    const workbench = path.join(
+      harness.runtime.config.persona.agentWorkspace,
+      workbenchDirectory,
+      "exports"
+    );
     fs.mkdirSync(workbench, { recursive: true });
     fs.writeFileSync(path.join(workbench, "report.txt"), "report");
 
@@ -176,6 +247,148 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(harness.store.listOutbox(sessionId).find((outbox) => outbox.kind === "onebot.conversation_asset"))
       .toMatchObject({ deliveryPartition: accountId ?? "primary" });
     expect(sentTexts(harness.gateway)).toEqual(["文件已发送"]);
+  });
+
+  it("projects a successfully sent workbench image into reusable assistant history", async () => {
+    archiveConversationImage.mockClear();
+    const harness = createRuntimeHarness(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      await options.conversationAssets!.send({
+        path: "exports/reference.png",
+        kind: "image"
+      }, {
+        callId: "call-send-reference-image",
+        toolName: "send_file"
+      });
+      return { kind: "completed", text: "图片已发送" };
+    });
+    const sendConversationAsset = harness.gateway.sendConversationAsset as unknown as ReturnType<typeof vi.fn>;
+    sendConversationAsset.mockResolvedValue({ accepted: true, messageId: "asset-image-9001" });
+    const workbench = path.join(
+      harness.runtime.config.persona.agentWorkspace,
+      "workbench",
+      "exports"
+    );
+    fs.mkdirSync(workbench, { recursive: true });
+    fs.writeFileSync(path.join(workbench, "reference.png"), Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64"
+    ));
+
+    const event = privateEvent(19_982, "把参考图发给我");
+    await handleOneBotEvent(harness.runtime, event, harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    const incoming = parseOneBotInboundMessage(event)!;
+    incoming.agentId = harness.runtime.config.persona.defaultAgentId;
+    incoming.accountId = "primary";
+    const record = harness.runtime.conversationRecords.get(conversationRecordId(incoming))!;
+    const imageMessage = record.messages.find((message) => message.id === "asset-image-9001");
+    expect(imageMessage).toMatchObject({
+      role: "assistant",
+      text: "[图片]",
+      toolNames: ["send_file"],
+      imageUrls: [expect.stringMatching(
+        /^\/generated-images\/conversation-assets\/agents\/plana\/[a-f0-9]{64}\.png$/
+      )]
+    });
+    expect(archiveConversationImage).toHaveBeenCalledOnce();
+    expect(harness.store.listOutbox("private:171419991").find(
+      (outbox) => outbox.kind === "onebot.conversation_asset"
+    )?.remoteReceipt).toMatchObject({
+      accepted: true,
+      messageId: "asset-image-9001",
+      conversationImageUrl: imageMessage?.imageUrls?.[0]
+    });
+    const references = runtime_generateImgReferenceContext.call(
+      harness.runtime as never,
+      { ...incoming, messageId: 19_983 },
+      record.messageCount + 1
+    );
+    expect(references.mediaByHandle).toHaveProperty(
+      "message:asset-image-9001:image:0",
+      imageMessage?.imageUrls?.[0]
+    );
+  });
+
+  it("lets an administrator private turn return a file created by explicit Docker Bash", async () => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      await expect(options.conversationAssets!.send({
+        path: "exports/docker-report.txt",
+        kind: "file"
+      }, {
+        callId: "call-admin-docker-send-file",
+        toolName: "send_file"
+      })).resolves.toMatchObject({
+        ok: true,
+        queued: true,
+        name: "docker-report.txt"
+      });
+      return { kind: "completed", text: "文件已发送" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+    const workbench = path.join(
+      harness.runtime.config.persona.agentWorkspace,
+      "workbench",
+      "exports"
+    );
+    fs.mkdirSync(workbench, { recursive: true });
+    fs.writeFileSync(path.join(workbench, "docker-report.txt"), "docker report");
+
+    await handleOneBotEvent(harness.runtime, privateEvent(19_983, "使用 Docker 生成并发送报告"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(harness.gateway.sendConversationAsset).toHaveBeenCalledOnce();
+    expect(harness.gateway.sendConversationAsset).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "private",
+      asset: expect.objectContaining({
+        name: "docker-report.txt",
+        source: `base64://${Buffer.from("docker report").toString("base64")}`
+      })
+    }));
+  });
+
+  it.each([
+    {
+      label: "ordinary private",
+      event: privateEvent(19_984, "发送 Native 文件", 998_104)
+    },
+    {
+      label: "ordinary group",
+      event: groupEvent(19_985, 603, "发送 Native 文件", 998_105)
+    }
+  ])("lets an $label turn return a file from the Agent workbench", async ({ event }) => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      await expect(options.conversationAssets!.send({
+        path: "exports/native-only.txt",
+        kind: "file"
+      }, {
+        callId: "call-ordinary-native-send-file",
+        toolName: "send_file"
+      })).resolves.toMatchObject({ ok: true, queued: true, name: "native-only.txt" });
+      return { kind: "completed", text: "文件已发送" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+    const nativeWorkbench = path.join(
+      harness.runtime.config.persona.agentWorkspace,
+      "workbench",
+      "exports"
+    );
+    fs.mkdirSync(nativeWorkbench, { recursive: true });
+    fs.writeFileSync(path.join(nativeWorkbench, "native-only.txt"), "native only");
+
+    await handleOneBotEvent(harness.runtime, event, harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(harness.gateway.sendConversationAsset).toHaveBeenCalledOnce();
   });
 
   it("delivers send_file after preparation mutates non-identity incoming fields", async () => {
@@ -332,7 +545,8 @@ describe("SunaRuntime Session queue bridge", () => {
       sourceTitle: "用户画像",
       text: "喜欢验证真实运行链路。",
       userId: "171419991",
-      addressName: "猫老师"
+      userName: "猫老师",
+      addressNames: ["猫老师"]
     });
     readUserProfileForUser.mockImplementationOnce(async () => exactUserProfile as never);
     recallMemory
@@ -356,6 +570,7 @@ describe("SunaRuntime Session queue bridge", () => {
         "persona.dialogue_style_examples": "",
         "persona.user": "",
         "persona.relation": "",
+        "persona.air": "",
         ...variables
       });
     };
@@ -365,39 +580,15 @@ describe("SunaRuntime Session queue bridge", () => {
 
     const endpointInput = lastUserText(providerRequest!);
     expect(endpointInput).toContain("<working_memory>工作记忆：猫老师正在检查记忆端点。</working_memory>");
-    expect(endpointInput).toContain("<user_profile>用户画像 称呼：猫老师：喜欢验证真实运行链路。</user_profile>");
+    expect(endpointInput).toContain("<user_profile>用户画像 猫老师（QQ 171419991）：喜欢验证真实运行链路。</user_profile>");
   });
 
   it("routes private and group replies to independent prompt families", async () => {
     const promptIds: string[] = [];
-    const classifierModels: Array<{ model: string; effort?: string }> = [];
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "routed" }));
     const internals = harness.runtime as unknown as {
       renderPromptRequest(id: string, variables: Record<string, unknown>): Promise<RenderedPromptRequest>;
-      getProviderForModel(model: string, effort?: string): OpenAIProvider;
-      completePrompt(provider: OpenAIProvider, request: RenderedPromptRequest): Promise<string>;
     };
-    internals.getProviderForModel = (model, effort) => {
-      classifierModels.push({ model, effort });
-      return {} as OpenAIProvider;
-    };
-    internals.completePrompt = async () => JSON.stringify({
-      schema_version: 1,
-      active_thread_key: "routing",
-      threads: [{
-        thread_key: "routing",
-        existing_thread_id: null,
-        topic: "群成员正在确认私聊和群聊分别使用哪个提示词。",
-        status: "active"
-      }],
-      message_assignments: [{
-        message_id: "20003",
-        primary_thread_key: "routing",
-        related_thread_keys: [],
-        relation: "new",
-        confidence: 0.99
-      }]
-    });
     internals.renderPromptRequest = async (id, variables) => {
       promptIds.push(id);
       return {
@@ -416,44 +607,25 @@ describe("SunaRuntime Session queue bridge", () => {
 
     expect(promptIds).toEqual([
       "conversation.private-reply",
-      "orchestrator.group-thread",
       "conversation.group-reply"
     ]);
-    expect(classifierModels).toEqual([{ model: "gpt-5.4-mini", effort: "low" }]);
   });
 
-  it("keeps the complete ordered group context when the thread classifier fails", async () => {
+  it("keeps the complete ordered group context in the main reply", async () => {
     const mainRequests: RenderedPromptRequest[] = [];
     const completeRequestTurn = vi.fn(async (request: RenderedPromptRequest): Promise<ProviderTurnResult> => {
       mainRequests.push(request);
       return { kind: "completed", text: `raw reply ${mainRequests.length}` };
     });
     const harness = createRuntimeHarness(completeRequestTurn);
-    const classifierFailure = vi.fn(async () => {
-      throw new Error("thread classifier unavailable");
-    });
     const internals = harness.runtime as unknown as {
-      getProviderForModel(model: string, effort?: string): OpenAIProvider;
-      completePrompt(provider: OpenAIProvider, request: RenderedPromptRequest): Promise<string>;
       renderPromptRequest(id: string, variables: Record<string, unknown>): Promise<RenderedPromptRequest>;
     };
-    internals.getProviderForModel = () => ({} as OpenAIProvider);
-    internals.completePrompt = classifierFailure;
     internals.renderPromptRequest = async (id, variables) => {
-      if (id === "orchestrator.group-thread") {
-        return {
-          messages: [{ role: "user", content: JSON.stringify(variables["thread.payload"]) }],
-          response_format: { type: "text" }
-        };
-      }
       return {
         messages: [
           { role: "system", content: id },
           ...((variables["messages_64"] ?? []) as RenderedPromptRequest["messages"]),
-          {
-            role: "developer",
-            content: `<thread_context>${String(variables["conversation.group.thread_context"] ?? "")}</thread_context>`
-          },
           { role: "user", content: String(variables["user.input"] ?? "") }
         ],
         response_format: { type: "text" }
@@ -465,18 +637,14 @@ describe("SunaRuntime Session queue bridge", () => {
     await handleOneBotEvent(harness.runtime, groupEvent(20_005, 603, "second raw message"), harness.gateway);
     await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
 
-    expect(classifierFailure).toHaveBeenCalledTimes(2);
     expect(sentTexts(harness.gateway)).toEqual(["raw reply 1", "raw reply 2"]);
     const secondRequest = mainRequests[1]!;
     const firstHistoryIndex = secondRequest.messages.findIndex((message) => message.content.includes("message_id=20004"));
     const assistantHistoryIndex = secondRequest.messages.findIndex((message) => message.content.includes("raw reply 1"));
-    const threadContextIndex = secondRequest.messages.findIndex((message) => message.content.includes("<thread_context>"));
     const currentInputIndex = secondRequest.messages.findLastIndex((message) => message.role === "user");
     expect(firstHistoryIndex).toBeGreaterThan(0);
     expect(assistantHistoryIndex).toBeGreaterThan(firstHistoryIndex);
-    expect(threadContextIndex).toBeGreaterThan(assistantHistoryIndex);
-    expect(currentInputIndex).toBeGreaterThan(threadContextIndex);
-    expect(secondRequest.messages[threadContextIndex]?.content).toContain('"active_thread_id":null');
+    expect(currentInputIndex).toBeGreaterThan(assistantHistoryIndex);
   });
 
   it("keeps model starts and sends FIFO in one group while another group progresses", async () => {
@@ -606,7 +774,6 @@ describe("SunaRuntime Session queue bridge", () => {
       expect(remoteReceipt).toEqual({ accepted: true, messageId: "remote-9001" });
       expect([...completedSteps]).toEqual([
         "conversation_projection",
-        "memory_enqueue",
         "request_log",
         ...(failingStep === "after_reply" ? ["after_reply:audit"] : [])
       ]);
@@ -766,11 +933,9 @@ describe("SunaRuntime Session queue bridge", () => {
 
   it.each([
     "conversation_projection",
-    "memory_enqueue",
     "request_log"
   ])("deduplicates the real %s side effect when its settle checkpoint fails", async (failingStep) => {
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "durable reply" }));
-    vi.spyOn(harness.runtime, "scheduleMemoryDrain").mockImplementation(() => undefined);
     const completeStep = harness.store.completeOutboxSettleStep.bind(harness.store);
     let injected = false;
     vi.spyOn(harness.store, "completeOutboxSettleStep").mockImplementation((outboxId, workerId, step) => {
@@ -797,7 +962,7 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(harness.gateway.send).toHaveBeenCalledOnce();
     expect(harness.store.listOutbox(conversationId)[0]).toMatchObject({
       status: "sent",
-      completedSettleSteps: ["conversation_projection", "memory_enqueue", "request_log"]
+      completedSettleSteps: ["conversation_projection", "request_log"]
     });
     const assistantMessages = runtimeConversation(harness.runtime, conversationId)?.messages
       .filter((message) => message.role === "assistant" && message.text === "durable reply") ?? [];
@@ -806,17 +971,10 @@ describe("SunaRuntime Session queue bridge", () => {
     const dataStore = applicationDataStore(harness.runtime.config);
     expect(dataStore.readRequestLogs({ query: "", limit: 100 })
       .filter((record) => record.action === "reply.sent")).toHaveLength(1);
-    const scheduler = dataStore.readMemoryScheduler()[conversationId] as {
-      pendingMessages?: Array<{ role?: string; text?: string }>;
-    } | undefined;
-    expect(scheduler?.pendingMessages?.filter((message) => (
-      message.role === "assistant" && message.text === "durable reply"
-    ))).toHaveLength(1);
   });
 
   it("quarantines an after_reply crash before the handler and resumes only after not-applied confirmation", async () => {
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "hook before" }));
-    vi.spyOn(harness.runtime, "scheduleMemoryDrain").mockImplementation(() => undefined);
     let handlerRuns = 0;
     harness.runtime.hooks.register("after_reply", "audit", (payload) => {
       handlerRuns += 1;
@@ -852,7 +1010,6 @@ describe("SunaRuntime Session queue bridge", () => {
 
   it("does not repeat completed after_reply handlers after a later handler becomes uncertain", async () => {
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "hook partial" }));
-    vi.spyOn(harness.runtime, "scheduleMemoryDrain").mockImplementation(() => undefined);
     const runs = new Map<string, number>();
     const register = (id: string, fail = false) => harness.runtime.hooks.register("after_reply", id, (payload) => {
       const key = String(payload.context.idempotencyKey ?? "");
@@ -1049,7 +1206,6 @@ describe("SunaRuntime Session queue bridge", () => {
       }
     });
     const harness = createRuntimeHarness(completeRequestTurn);
-
     for (let index = 0; index < 100; index += 1) {
       const marker = `job-${String(index).padStart(3, "0")}`;
       const groupId = index < groupIds.length
@@ -1079,7 +1235,7 @@ describe("SunaRuntime Session queue bridge", () => {
     const allSent = sentTexts(harness.gateway);
     expect(allSent).toHaveLength(100);
     expect(new Set(allSent).size).toBe(100);
-  });
+  }, 20_000);
 
   it.each([
     { scope: "private", event: privateEvent(21_001, "retry-private"), sessionId: "private:171419991" },
@@ -1322,12 +1478,17 @@ describe("SunaRuntime Session queue bridge", () => {
     const toolStarted = deferred<void>();
     const dispatchPrompts: string[] = [];
     const completionPrompts: string[] = [];
-    const completionThreadContexts: string[] = [];
     const providerStarts: string[] = [];
     const asyncCodexFlags: Array<boolean | undefined> = [];
+    const cronToolFlags: boolean[] = [];
+    const attemptTimeouts: Array<number | undefined> = [];
     const runner: CodexRunner = {
       async run(input, context) {
-        expect(input).toEqual({ task: "perform long analysis", kind: "analysis" });
+        expect(input).toMatchObject({
+          task: "perform long analysis",
+          kind: "analysis",
+          __sunabot_artifact_backend: "native"
+        });
         expect(context.authFile).toBe(path.join(process.cwd(), "workspace/secrets/codex/auth.json"));
         toolStarted.resolve();
         await toolGate.promise;
@@ -1355,12 +1516,11 @@ describe("SunaRuntime Session queue bridge", () => {
     ): Promise<ProviderTurnResult> => {
       const userText = lastUserText(request);
       asyncCodexFlags.push(options.asyncCodex);
+      cronToolFlags.push(Boolean(options.cron));
+      attemptTimeouts.push(options.modelRequestAttemptTimeoutMs);
       if (userText.includes("<tool_result>")) {
         providerStarts.push("tool_completion");
         completionPrompts.push(userText);
-        completionThreadContexts.push(request.messages.find((message) => (
-          message.role === "developer" && message.content.includes("<thread_context>")
-        ))?.content ?? "");
         return { kind: "completed", text: finalReply };
       }
       if (userText.includes("delegate")) {
@@ -1389,20 +1549,6 @@ describe("SunaRuntime Session queue bridge", () => {
       undefined,
       35
     );
-    const dispatchThreadContext = runtimeThreadSnapshot(
-      "群成员正在委托 Agent 执行一项耗时分析任务。",
-      301
-    );
-    const laterThreadContext = runtimeThreadSnapshot(
-      "群成员正在任务执行期间讨论另一条后来消息。",
-      302
-    );
-    const prepareGroupThreadContext = vi.fn(async (incoming: { messageId?: number }) => (
-      incoming.messageId === 301 ? dispatchThreadContext : laterThreadContext
-    ));
-    (harness.runtime as unknown as {
-      prepareGroupThreadContext: typeof prepareGroupThreadContext;
-    }).prepareGroupThreadContext = prepareGroupThreadContext;
     const acknowledgement = "我收到委托，开始检查。";
 
     await handleOneBotEvent(harness.runtime, groupEvent(301, 300, "delegate"), harness.gateway);
@@ -1416,8 +1562,7 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(harness.store.listToolJobs("group:300")[0]?.arguments).not.toHaveProperty("dispatch_message");
     expect(harness.store.listToolJobs("group:300")[0]?.originalRequest).toMatchObject({
       captureSequence: 1,
-      contextThroughSequence: 2,
-      threadContext: dispatchThreadContext
+      contextThroughSequence: 2
     });
     expect(dispatchPrompts).toHaveLength(1);
     expect(dispatchPrompts[0]!.indexOf("delegate"))
@@ -1455,10 +1600,13 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(completionPrompts[0]!.match(/supplemental task details/g)).toHaveLength(1);
     expect(completionPrompts[0]).toContain('"providerCallId": "call-runtime-codex"');
     expect(completionPrompts[0]).toContain(`"status": "${toolStatus}"`);
-    expect(completionThreadContexts[0]).toContain("群成员正在委托 Agent 执行一项耗时分析任务。");
-    expect(completionThreadContexts[0]).not.toContain("后来消息");
-    expect(prepareGroupThreadContext.mock.calls.map(([incoming]) => incoming.messageId)).toEqual([301, 302]);
-    expect(asyncCodexFlags).toEqual([true, true, false]);
+    expect(asyncCodexFlags).toEqual([true, true, true]);
+    expect(cronToolFlags).toEqual([true, true, true]);
+    expect(attemptTimeouts).toEqual([
+      undefined,
+      undefined,
+      AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS
+    ]);
     expect(runtimeConversation(harness.runtime, "group:300")?.messages
       .filter((message) => message.role === "assistant")
       .map((message) => ({
@@ -1482,6 +1630,226 @@ describe("SunaRuntime Session queue bridge", () => {
         toolNames: ["codex"]
       }
     ]);
+  });
+
+  it("keeps a deferred image job independent from a low Codex timeout", async () => {
+    const imageStarted = deferred<void>();
+    const releaseImage = deferred<void>();
+    let imageSignal: AbortSignal | undefined;
+    const completeRequestTurn = vi.fn(async (
+      request: RenderedPromptRequest
+    ): Promise<ProviderTurnResult> => {
+      const userText = lastUserText(request);
+      if (userText.includes("<tool_result>")) {
+        return { kind: "completed", text: "图片完成" };
+      }
+      return {
+        kind: "deferred",
+        acknowledgement: "图片开始生成。",
+        toolCall: {
+          name: "generate_img",
+          callId: "call-low-codex-timeout-image",
+          arguments: {
+            prompt: "画一张夜空",
+            size: null,
+            resolution: null,
+            quality: null,
+            referenceImageUrls: null,
+            referenceImagePaths: null,
+            referenceMediaHandles: null,
+            referenceImageSource: "none"
+          }
+        }
+      };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn, undefined, (config) => {
+      config.bot.tools.codex.timeoutMs = 1;
+    });
+    const provider = (harness.runtime as unknown as {
+      getProvider(): OpenAIProvider;
+    }).getProvider();
+    (provider.generateImage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (
+        _prompt: string,
+        _size: string,
+        _quality: string,
+        _references: string[],
+        _logContext: unknown,
+        signal: AbortSignal
+      ) => {
+        imageSignal = signal;
+        imageStarted.resolve();
+        await releaseImage.promise;
+        return { url: "/generated-images/low-codex-timeout.png" };
+      }
+    );
+
+    await handleOneBotEvent(
+      harness.runtime,
+      privateEvent(30_090, "生成夜空图片"),
+      harness.gateway
+    );
+    await imageStarted.promise;
+    await delay(25);
+
+    expect(imageSignal?.aborted).toBe(false);
+    expect(harness.store.listToolJobs("private:171419991")[0]?.status).toBe("running");
+
+    releaseImage.resolve();
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(harness.store.listToolJobs("private:171419991")[0]?.status).toBe("succeeded");
+    expect(sentTexts(harness.gateway)).toEqual(["图片开始生成。", ""]);
+    const send = harness.gateway.send as unknown as ReturnType<typeof vi.fn>;
+    expect(send.mock.calls[1]?.[0]).toMatchObject({
+      text: "",
+      media: [{ url: "/generated-images/low-codex-timeout.png" }]
+    });
+  });
+
+  it("does not deliver an asynchronous Codex completion owned by another Agent", async () => {
+    const completeRequestTurn = vi.fn(async (): Promise<ProviderTurnResult> => ({
+      kind: "completed",
+      text: "不应发送的阿罗娜结果"
+    }));
+    const harness = createRuntimeHarness(completeRequestTurn);
+    const incoming = parseOneBotInboundMessage(privateEvent(30_101, "阿罗娜任务"))!;
+    incoming.agentId = "arona";
+    incoming.accountId = "primary";
+    const sessionId = conversationRecordId(incoming);
+    const replyGate = harness.runtime.replyGates.capture(incoming.scope, sessionId);
+
+    harness.coordinator.enqueueEvent({
+      sessionId,
+      kind: "tool_completion",
+      dedupeKey: "foreign-agent-tool-completion",
+      payload: toolCompletionEnvelope({
+        type: "tool_result",
+        toolJobId: "foreign-agent-job",
+        providerCallId: "foreign-agent-call",
+        toolName: "codex",
+        originalRequest: {
+          incoming,
+          captureSequence: 1,
+          contextThroughSequence: 1,
+          replyGate,
+          replyQuote: { enabled: true, replyToMessageId: incoming.messageId! }
+        },
+        arguments: { task: "foreign task", kind: "analysis" },
+        outcome: {
+          status: "succeeded",
+          result: { content: "阿罗娜结果" },
+          error: null
+        }
+      }, {
+        conversationId: sessionId,
+        correlationId: "foreign-agent-call",
+        idempotencyKey: "foreign-agent-tool-completion"
+      })
+    });
+
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).not.toHaveBeenCalled();
+    expect(sentTexts(harness.gateway)).toEqual([]);
+    expect(harness.store.listEvents(sessionId)).toEqual([
+      expect.objectContaining({ kind: "tool_completion", status: "completed" })
+    ]);
+  });
+
+  it("queues deferred voice after the acknowledgement and tool job commit without blocking either", async () => {
+    const voiceGate = deferred<void>();
+    const voiceStarted = deferred<void>();
+    const toolGate = deferred<void>();
+    const toolStarted = deferred<void>();
+    const runner: CodexRunner = {
+      async run(_input, context) {
+        toolStarted.resolve();
+        await toolGate.promise;
+        return {
+          ok: true,
+          status: "succeeded",
+          jobId: context.jobId,
+          kind: "analysis",
+          content: "done"
+        };
+      }
+    };
+    const harness = createRuntimeHarness(async (request): Promise<ProviderTurnResult> => {
+      if (lastUserText(request).includes("<tool_result>")) return { kind: "no_reply" };
+      return {
+        kind: "deferred",
+        acknowledgement: "语音稍后跟上，我已经开始处理。",
+        toolCall: {
+          name: "codex",
+          callId: "call-runtime-deferred-voice",
+          arguments: { task: "inspect", kind: "analysis" }
+        },
+        voice: {
+          text: "语音稍后跟上，我已经开始处理。",
+          language: "ja",
+          callId: "call-runtime-deferred-voice-companion",
+          toolName: "send_voice_message"
+        }
+      };
+    }, runner);
+    const voiceFile = path.join(
+      harness.runtime.config.persona.agentWorkspace,
+      "workbench",
+      "exports",
+      "deferred-voice.amr"
+    );
+    fs.mkdirSync(path.dirname(voiceFile), { recursive: true });
+    fs.writeFileSync(voiceFile, Buffer.from("#!AMR\nvoice"));
+    harness.runtime.synthesizeAndQueueVoice = vi.fn(async (voice, context) => {
+      voiceStarted.resolve();
+      await voiceGate.promise;
+      const queued = await harness.runtime.queueConversationAsset({
+        incoming: context.incoming,
+        gateway: context.gateway,
+        input: { path: "exports/deferred-voice.amr", kind: "voice", name: "deferred-voice.amr" },
+        callId: voice.callId,
+        logRunId: context.logRunId,
+        isCurrent: context.isCurrent,
+        delivery: context.delivery,
+        toolName: "send_voice_message"
+      });
+      return { ok: true as const, queued };
+    });
+
+    await handleOneBotEvent(
+      harness.runtime,
+      privateEvent(31_190, "deferred voice"),
+      harness.gateway
+    );
+    await voiceStarted.promise;
+    await toolStarted.promise;
+    await waitUntil(() => sentTexts(harness.gateway).includes("语音稍后跟上，我已经开始处理。"));
+
+    const sessionId = "private:171419991";
+    expect(harness.store.listToolJobs(sessionId)[0]).toMatchObject({
+      status: "running",
+      providerCallId: "call-runtime-deferred-voice"
+    });
+    expect(harness.gateway.sendConversationAsset).not.toHaveBeenCalled();
+    expect(harness.store.listOutbox(sessionId).map((outbox) => outbox.kind)).toEqual(["onebot.reply"]);
+
+    voiceGate.resolve();
+    await waitUntil(() => (harness.gateway.sendConversationAsset as unknown as ReturnType<typeof vi.fn>).mock.calls.length === 1);
+    expect(harness.store.listOutbox(sessionId).map((outbox) => outbox.kind)).toEqual([
+      "onebot.reply",
+      "onebot.conversation_asset"
+    ]);
+    expect(harness.store.listOutbox(sessionId)[1]).toMatchObject({
+      originTurnId: harness.store.listTurns(sessionId)[0]!.id,
+      dedupeKey: expect.stringMatching(/^turn-outbox:[^:]+:1:[a-f0-9]{64}$/u)
+    });
+    expect(harness.gateway.sendConversationAsset).toHaveBeenCalledWith(expect.objectContaining({
+      asset: expect.objectContaining({ kind: "voice", name: "deferred-voice.amr" })
+    }));
+
+    toolGate.resolve();
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
   });
 
   it("persists asynchronous image callbacks with their source tool", async () => {
@@ -1530,6 +1898,52 @@ describe("SunaRuntime Session queue bridge", () => {
     });
   });
 
+  it("returns the persisted asynchronous image failure instead of a generic missing-image message", async () => {
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }));
+    const incoming = parseOneBotInboundMessage(privateEvent(30_002, "生成一张自拍"))!;
+    harness.runtime.recordIncomingMessage(incoming);
+    const rewriteToneText = vi.fn(async (text: string) => text);
+    (harness.runtime as unknown as { rewriteToneText: typeof rewriteToneText }).rewriteToneText = rewriteToneText;
+    const delivery = { outbox: [] } satisfies ReplyDelivery;
+    const conversationId = conversationRecordId(incoming);
+    const payload = {
+      type: "tool_result",
+      toolJobId: "job-selfie-failed",
+      providerCallId: "call-selfie-failed",
+      toolName: "selfie",
+      originalRequest: {
+        incoming,
+        replyGate: harness.runtime.replyGates.capture(incoming.scope, conversationId),
+        replyQuote: { enabled: false, replyToMessageId: null }
+      },
+      arguments: { scene: "图书馆" },
+      outcome: {
+        status: "failed",
+        result: null,
+        error: { name: "TypeError", message: "terminated" }
+      }
+    } satisfies AsyncToolCompletionPayload;
+
+    await harness.runtime.replyToToolCompletion(
+      payload,
+      harness.gateway,
+      new AbortController().signal,
+      delivery
+    );
+
+    expect(rewriteToneText).toHaveBeenCalledWith(
+      "图片生成失败：上游生图连接中断，请稍后重试",
+      expect.objectContaining({ incoming })
+    );
+    expect(delivery.outbox).toHaveLength(1);
+    expect(delivery.outbox[0]?.payload.payload).toMatchObject({
+      text: "图片生成失败：上游生图连接中断，请稍后重试",
+      generatedImages: [],
+      messageOrigin: "async_tool_callback",
+      toolNames: ["selfie"]
+    });
+  });
+
   it("fails closed for a legacy group callback without frozen gate and quote snapshots", async () => {
     let callbackRequest: RenderedPromptRequest | undefined;
     const harness = createRuntimeHarness(async (request) => {
@@ -1538,12 +1952,6 @@ describe("SunaRuntime Session queue bridge", () => {
     });
     const incoming = parseOneBotInboundMessage(groupEvent(30_003, 304, "legacy callback"))!;
     harness.runtime.recordIncomingMessage(incoming);
-    const prepareGroupThreadContext = vi.fn(async () => {
-      throw new Error("legacy callbacks must not rebuild thread context");
-    });
-    (harness.runtime as unknown as {
-      prepareGroupThreadContext: typeof prepareGroupThreadContext;
-    }).prepareGroupThreadContext = prepareGroupThreadContext;
     const delivery = { outbox: [] } satisfies ReplyDelivery;
     const payload = {
       type: "tool_result",
@@ -1566,7 +1974,6 @@ describe("SunaRuntime Session queue bridge", () => {
       delivery
     );
 
-    expect(prepareGroupThreadContext).not.toHaveBeenCalled();
     expect(callbackRequest).toBeUndefined();
     expect(delivery.outbox).toEqual([]);
     expect(delivery.terminalStatus).toBe("no_reply");
@@ -1663,6 +2070,26 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(completeRequestTurn).toHaveBeenCalledOnce();
   });
 
+  it("keeps Codex unavailable for an ordinary group member", async () => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      expect(options.asyncCodex).toBe(false);
+      return { kind: "completed", text: "管理员工具未开放" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+
+    await handleOneBotEvent(
+      harness.runtime,
+      groupEvent(22_006, 605, "ordinary codex request", 998_103),
+      harness.gateway
+    );
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).toHaveBeenCalledOnce();
+  });
+
   it("omits send_file when the current transport has no durable asset bridge", async () => {
     const completeRequestTurn = vi.fn(async (
       _request: RenderedPromptRequest,
@@ -1691,7 +2118,7 @@ describe("SunaRuntime Session queue bridge", () => {
       event: groupEvent(22_005, 604, "ordinary group asset request", 998_102),
       sessionId: "group:604"
     }
-  ])("keeps send_file definitions and forged calls unavailable for an ordinary $label", async ({
+  ])("allows an ordinary $label to return an Agent workbench file", async ({
     event,
     sessionId
   }) => {
@@ -1699,21 +2126,24 @@ describe("SunaRuntime Session queue bridge", () => {
       _request: RenderedPromptRequest,
       options: ProviderCompleteOptions = {}
     ): Promise<ProviderTurnResult> => {
-      expect(options.conversationAssets).toBeUndefined();
+      expect(options.conversationAssets?.enabled).toBe(true);
       const executor = new RegistryProviderToolExecutor();
       const definitions = executor.resolveDefinitions(options, [{ type: "function", function: sendFileTool }]);
-      expect(definitions.map((definition) => definition.name)).not.toContain("send_file");
+      expect(definitions.map((definition) => definition.name)).toContain("send_file");
       const [output] = await executor.execute([{
         type: "function_call",
         name: "send_file",
         call_id: "forged-ordinary-send-file",
         arguments: JSON.stringify({ path: "exports/report.txt", kind: "file", name: null })
       }], options, definitions);
-      expect(JSON.parse(String(output?.output))).toEqual({
-        ok: false,
-        error: "Tool send_file is unavailable."
+      expect(JSON.parse(String(output?.output))).toMatchObject({
+        ok: true,
+        queued: true,
+        kind: "file",
+        name: "report.txt",
+        byteLength: 6
       });
-      return { kind: "completed", text: "asset capability closed" };
+      return { kind: "completed", text: "文件已发送" };
     });
     const harness = createRuntimeHarness(completeRequestTurn);
     const workbench = path.join(harness.runtime.config.persona.agentWorkspace, "workbench", "exports");
@@ -1724,9 +2154,9 @@ describe("SunaRuntime Session queue bridge", () => {
     await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
 
     expect(completeRequestTurn).toHaveBeenCalledOnce();
-    expect(harness.gateway.sendConversationAsset).not.toHaveBeenCalled();
+    expect(harness.gateway.sendConversationAsset).toHaveBeenCalledOnce();
     expect(harness.store.listOutbox(sessionId).some((outbox) => outbox.kind === "onebot.conversation_asset"))
-      .toBe(false);
+      .toBe(true);
   });
 });
 
@@ -1796,7 +2226,6 @@ function createRuntimeHarness(
     prepareIncomingMessage(): Promise<void>;
     patchIncomingMessage(): void;
     scheduleAttachmentCacheRefresh(): void;
-    scheduleMemoryCompression(): void;
     persistConversationRecords(): void;
     renderPromptRequest(
       id: string,
@@ -1825,16 +2254,11 @@ function createRuntimeHarness(
   internals.prepareIncomingMessage = async () => undefined;
   internals.patchIncomingMessage = () => undefined;
   internals.scheduleAttachmentCacheRefresh = () => undefined;
-  internals.scheduleMemoryCompression = () => undefined;
   internals.persistConversationRecords = () => undefined;
   internals.renderPromptRequest = async (id, variables) => ({
     messages: [
       { role: "system", content: "test system" },
       ...((variables["messages_64"] ?? []) as RenderedPromptRequest["messages"]),
-      ...(id === "conversation.group-reply" ? [{
-        role: "developer" as const,
-        content: `<thread_context>${String(variables["conversation.group.thread_context"] ?? "")}</thread_context>`
-      }] : []),
       { role: "user", content: String(variables["user.input"] ?? "") }
     ],
     response_format: { type: "text" }
@@ -1948,31 +2372,6 @@ function memoryEntry(input: Pick<MemoryEntry, "id" | "source" | "sourceTitle" | 
     value: input.text,
     field: "fact",
     ...input
-  };
-}
-
-function runtimeThreadSnapshot(topic: string, processedThroughSequence: number): GroupThreadContextSnapshotV1 {
-  const threadId = "thread:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-  return {
-    schemaVersion: 1,
-    revision: processedThroughSequence,
-    processedThroughSequence,
-    activeThreadId: threadId,
-    threads: [{
-      threadId,
-      topic,
-      status: "active",
-      participantUids: ["171419991"],
-      messageIds: [String(processedThroughSequence)]
-    }],
-    messageAssignments: [{
-      messageId: String(processedThroughSequence),
-      sequence: processedThroughSequence,
-      primaryThreadId: threadId,
-      relatedThreadIds: [],
-      relation: "continue",
-      confidence: 0.95
-    }]
   };
 }
 

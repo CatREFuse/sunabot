@@ -7,6 +7,7 @@ import { buildAgentExtensionComposition } from "../../apps/api/agentExtensionCom
 import { McpSandboxProjectionBuilder } from "../../adapters/mcp/public.js";
 import { mcpStdioCredentialEnvironmentKey } from "../../packages/contracts/extensions/agentExtensions.js";
 import type { RuntimeAgentExtensionsPort } from "../../src/runtime/agentExtensions.js";
+import { makeStoredZip, skillMarkdown } from "./agent-extension-fixtures.js";
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
@@ -22,6 +23,52 @@ afterEach(async () => {
 });
 
 describe("Agent extension composition", () => {
+  it("runs the managed Bash Skill repository lifecycle against the current Agent store", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-bash-skill-composition-"));
+    temporaryPaths.push(workspaceRoot);
+    for (const directory of ["business/agents", "business/agents/agent-a"]) {
+      await fs.mkdir(path.join(workspaceRoot, directory), { recursive: true, mode: 0o700 });
+      await fs.chmod(path.join(workspaceRoot, directory), 0o700);
+    }
+    const composition = buildAgentExtensionComposition({
+      workspaceRoot,
+      agentExists: (agentId) => agentId === "agent-a",
+      oauth: false,
+      mcpClientFactory: { create: vi.fn() }
+    });
+    const refreshed = vi.fn().mockResolvedValue(undefined);
+    composition.setAgentChangedHandler(refreshed);
+    const archive = makeStoredZip([{
+      name: "SKILL.md",
+      content: skillMarkdown("bash-fixture-skill", undefined, "Return the fixture value.")
+    }]);
+
+    const installed = await composition.bashSkillRepository.install({
+      agentId: "agent-a",
+      archive,
+      replace: false
+    });
+    const reviewed = await composition.bashSkillRepository.review({
+      agentId: "agent-a",
+      skillId: installed.skillId
+    });
+    const enabled = await composition.bashSkillRepository.enable({
+      agentId: "agent-a",
+      skillId: installed.skillId
+    });
+    const status = await composition.bashSkillRepository.status({
+      agentId: "agent-a",
+      skillId: installed.skillId
+    });
+
+    expect(installed).toMatchObject({ skillId: "bash-fixture-skill", status: "待审查" });
+    expect(reviewed).toMatchObject({ reviewStatus: "approved", approvalStatus: "approved" });
+    expect(enabled).toMatchObject({ enabled: true, status: "已启用" });
+    expect(status).toEqual(enabled);
+    expect(refreshed).toHaveBeenCalledTimes(3);
+    await composition.close();
+  });
+
   it("reports Skill runtime capability independently from an empty Skill inventory", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-agent-extension-capability-"));
     temporaryPaths.push(workspaceRoot);
@@ -69,22 +116,24 @@ describe("Agent extension composition", () => {
     await composition.close();
   });
 
-  it("reuses one projection builder across concurrent stdio server launches", async () => {
+  it("reuses one Bubblewrap projection builder across concurrent stdio server launches", async () => {
     const builders = new Set<McpSandboxProjectionBuilder>();
     vi.spyOn(McpSandboxProjectionBuilder.prototype, "build").mockImplementation(async function () {
       builders.add(this);
       throw new Error("TEST_PROJECTION_STOP");
     });
+    const previousExecPath = process.execPath;
+    process.execPath = "/usr/bin/node";
     const composition = buildAgentExtensionComposition({
       workspaceRoot: "/tmp/sunabot-agent-extension-composition-projection-test",
       agentExists: () => true,
       oauth: false,
       mcpStdio: {
-        backend: "docker",
-        dockerImage: "sunabot-mcp:local",
-        executableManifestSha256: "a".repeat(64)
+        backend: "bubblewrap",
+        executableManifestPath: "/fixture/mcp-executables.json"
       }
     });
+    process.execPath = previousExecPath;
     const internals = composition.mcpRuntimeService as unknown as {
       host: { pool: { factory: { options: { stdioLauncherFor(input: {
         agentId: string;

@@ -37,7 +37,6 @@ function toolsDraft(): BotToolSettingsDraft {
 function bashDraft() {
   return {
     enabled: false,
-    adminPrivateBackend: "native" as const,
     auditModel: "gpt-5.4-mini",
     strictMode: true,
     allowGroup: false,
@@ -90,8 +89,8 @@ const tools = [
 
 const directRuntimeTools = [
   {
-    name: "workspace_bash",
-    title: "Bash",
+    name: "native_bash",
+    title: "Native Bash",
     summary: "执行 workspace 命令。",
     execution: "inline",
     configuredEnabled: false,
@@ -189,16 +188,20 @@ describe("ToolCatalogSettings", () => {
     expect(wrapper.get('[role="dialog"]').text()).not.toContain("运行环境异常");
     expect(wrapper.get('[role="dialog"]').text()).not.toContain("能力可用");
     await wrapper.get('textarea[maxlength="4000"]').setValue("只在需要实时信息时搜索网页。");
+    const confirm = wrapper.findAll("button").find((button) => button.text().includes("确认"));
+    await confirm!.trigger("click");
     expect(draft.overrides.websearch).toEqual({
       enabled: false,
       description: "只在需要实时信息时搜索网页。"
     });
+    expect(wrapper.emitted("commit")).toHaveLength(2);
     expect(wrapper.get('table[aria-label="工具参数"]').text()).toContain("query");
     expect(wrapper.get('table[aria-label="工具参数"]').text()).toContain("必填");
 
     const reset = wrapper.findAll("button").find((button) => button.text().includes("恢复继承说明"));
     await reset!.trigger("click");
     expect(draft.overrides.websearch).toEqual({ enabled: false });
+    expect(wrapper.emitted("commit")).toHaveLength(3);
     expect((wrapper.get('textarea[maxlength="4000"]').element as HTMLTextAreaElement).value).toBe("Prompt web search.");
 
     await websearchToggle!.find('input[type="checkbox"]').setValue(true);
@@ -209,7 +212,7 @@ describe("ToolCatalogSettings", () => {
     apiRequest.mockResolvedValueOnce({ tools: directRuntimeTools });
     const draft = toolsDraft();
     draft.overrides.codex = { enabled: false, description: "Codex 说明" };
-    draft.overrides.workspace_bash = { enabled: true, description: "Bash 说明" };
+    draft.overrides.native_bash = { enabled: true, description: "Bash 说明" };
     const bash = bashDraft();
     const wrapper = mount(ToolCatalogSettings, {
       props: { modelValue: draft, bash },
@@ -217,14 +220,14 @@ describe("ToolCatalogSettings", () => {
     });
     await flushPromises();
 
-    const bashToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 Bash"));
+    const bashToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 Native Bash"));
     const codexToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 Codex"));
     await bashToggle!.get('input[type="checkbox"]').setValue(true);
     await codexToggle!.get('input[type="checkbox"]').setValue(false);
 
     expect(bash.enabled).toBe(true);
     expect(draft.codex.enabled).toBe(false);
-    expect(draft.overrides.workspace_bash).toEqual({ description: "Bash 说明" });
+    expect(draft.overrides.native_bash).toEqual({ description: "Bash 说明" });
     expect(draft.overrides.codex).toEqual({ description: "Codex 说明" });
   });
 

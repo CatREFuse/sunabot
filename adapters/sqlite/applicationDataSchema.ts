@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { modelCallMeasurement } from "../../src/modelCallStats.js";
+import { modelCallMeasurement } from "../../packages/contracts/model/modelCallStats.js";
 import type { ModelCallStore } from "./modelCallStore.js";
+import { migrateScheduledTaskTables } from "./scheduledTaskStore.js";
+import { migrateDirectorTables } from "./directorStore.js";
+import { migrateDreamTables } from "./dreamStore.js";
 
 type SqlRow = Record<string, unknown>;
 
@@ -20,35 +23,33 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
     CREATE UNIQUE INDEX IF NOT EXISTS memory_records_source_record_id
       ON memory_records(source, record_id) WHERE record_id IS NOT NULL AND record_id <> '';
     CREATE INDEX IF NOT EXISTS memory_records_source_position ON memory_records(source, position);
-    CREATE TABLE IF NOT EXISTS memory_batches (
-      batch_id TEXT PRIMARY KEY,
-      result_json TEXT NOT NULL CHECK (json_valid(result_json)),
-      committed_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS memory_scheduler (
-      conversation_id TEXT PRIMARY KEY,
-      updated_at TEXT NOT NULL,
-      data_json TEXT NOT NULL CHECK (json_valid(data_json))
-    );
-    CREATE INDEX IF NOT EXISTS memory_scheduler_updated_at ON memory_scheduler(updated_at);
+    CREATE TABLE IF NOT EXISTS memory_source_revisions (
+      source TEXT PRIMARY KEY CHECK (source IN ('working', 'long_term', 'user_profile')),
+      revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0)
+    ) STRICT;
+    INSERT OR IGNORE INTO memory_source_revisions (source, revision) VALUES
+      ('working', 0), ('long_term', 0), ('user_profile', 0);
+    CREATE TRIGGER IF NOT EXISTS memory_records_revision_insert
+      AFTER INSERT ON memory_records BEGIN
+        UPDATE memory_source_revisions SET revision = revision + 1 WHERE source = NEW.source;
+      END;
+    CREATE TRIGGER IF NOT EXISTS memory_records_revision_update
+      AFTER UPDATE ON memory_records BEGIN
+        UPDATE memory_source_revisions SET revision = revision + 1 WHERE source = OLD.source;
+        UPDATE memory_source_revisions SET revision = revision + 1 WHERE source = NEW.source AND NEW.source <> OLD.source;
+      END;
+    CREATE TRIGGER IF NOT EXISTS memory_records_revision_delete
+      AFTER DELETE ON memory_records BEGIN
+        UPDATE memory_source_revisions SET revision = revision + 1 WHERE source = OLD.source;
+      END;
+    DROP TABLE IF EXISTS memory_batches;
+    DROP TABLE IF EXISTS memory_scheduler;
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
       last_at TEXT NOT NULL,
       data_json TEXT NOT NULL CHECK (json_valid(data_json))
     );
     CREATE INDEX IF NOT EXISTS conversations_last_at ON conversations(last_at DESC);
-    CREATE TABLE IF NOT EXISTS conversation_thread_states (
-      conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON UPDATE CASCADE ON DELETE CASCADE,
-      state_schema_version INTEGER NOT NULL CHECK (state_schema_version = 1),
-      revision INTEGER NOT NULL CHECK (revision >= 1),
-      processed_through_sequence INTEGER NOT NULL CHECK (processed_through_sequence >= 0),
-      last_run_key TEXT NOT NULL CHECK (length(trim(last_run_key)) > 0),
-      classifier_model TEXT NOT NULL CHECK (length(trim(classifier_model)) > 0),
-      prompt_revision TEXT NOT NULL CHECK (length(trim(prompt_revision)) > 0),
-      state_json TEXT NOT NULL CHECK (json_valid(state_json)),
-      created_at TEXT NOT NULL CHECK (length(trim(created_at)) > 0),
-      updated_at TEXT NOT NULL CHECK (length(trim(updated_at)) > 0)
-    ) STRICT;
     CREATE TABLE IF NOT EXISTS image_history (
       id TEXT PRIMARY KEY,
       url TEXT NOT NULL UNIQUE,
@@ -70,6 +71,18 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
       updated_at TEXT NOT NULL CHECK (length(trim(updated_at)) > 0)
     ) STRICT;
     CREATE INDEX IF NOT EXISTS emojis_updated_at ON emojis(updated_at DESC, emoji_key);
+    CREATE TABLE IF NOT EXISTS emoji_versions (
+      emoji_key TEXT NOT NULL REFERENCES emojis(emoji_key) ON UPDATE CASCADE ON DELETE CASCADE,
+      file_name TEXT NOT NULL CHECK (length(trim(file_name)) BETWEEN 1 AND 160),
+      source TEXT NOT NULL CHECK (source IN ('upload', 'generated')),
+      size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+      width INTEGER NOT NULL CHECK (width > 0),
+      height INTEGER NOT NULL CHECK (height > 0),
+      created_at TEXT NOT NULL CHECK (length(trim(created_at)) > 0),
+      PRIMARY KEY (emoji_key, file_name)
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS emoji_versions_key_created_at
+      ON emoji_versions(emoji_key, created_at DESC, file_name);
     CREATE TABLE IF NOT EXISTS request_logs (
       row_id INTEGER PRIMARY KEY AUTOINCREMENT,
       id TEXT NOT NULL UNIQUE,
@@ -152,6 +165,10 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
     CREATE INDEX IF NOT EXISTS agent_accounts_agent ON agent_accounts(agent_id, created_at, id);
   `);
 
+  migrateScheduledTaskTables(database);
+  migrateDirectorTables(database);
+  migrateDreamTables(database);
+
   const rawVersion = Number(metadata(database, "storage-schema-version") ?? 0);
   const schemaVersion = Number.isSafeInteger(rawVersion) && rawVersion >= 0 ? rawVersion : 0;
   if (schemaVersion < 2) {
@@ -188,8 +205,32 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
   if (schemaVersion < 9) setMetadata(database, "storage-schema-version", "9");
   modelCalls.repairModelAggregatesIfStale();
   const repairedVersion = Number(metadata(database, "storage-schema-version") ?? 0);
-  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 11) {
-    setMetadata(database, "storage-schema-version", "11");
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 12) {
+    transaction(database, () => {
+      database.exec(`
+        INSERT OR IGNORE INTO emoji_versions (
+          emoji_key, file_name, source, size_bytes, width, height, created_at
+        )
+        SELECT emoji_key, file_name, source, size_bytes, width, height, updated_at
+        FROM emojis
+      `);
+      setMetadata(database, "storage-schema-version", "12");
+    });
+  }
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 13) {
+    setMetadata(database, "storage-schema-version", "13");
+  }
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 14) {
+    setMetadata(database, "storage-schema-version", "14");
+  }
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 15) {
+    setMetadata(database, "storage-schema-version", "15");
+  }
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 16) {
+    setMetadata(database, "storage-schema-version", "16");
+  }
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 17) {
+    setMetadata(database, "storage-schema-version", "17");
   }
 }
 

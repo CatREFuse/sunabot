@@ -28,6 +28,12 @@ import type {
   PreparedOutboundConversationAssetV1
 } from "../../packages/contracts/messaging/messages.js";
 import {
+  outboundAssetBubble,
+  sendOutboundBubble
+} from "../../packages/contracts/messaging/messages.js";
+import { archiveConversationImage } from "../../services/media/conversationImageArchive.js";
+import { resolveWorkbenchImageReferenceAddress } from "../../services/media/workbenchImageReference.js";
+import {
   OutboxDisconnectedError,
   type OutboxDeliveryContext
 } from "../../services/sessions/sessionCoordinator.js";
@@ -36,11 +42,12 @@ import {
   type OutboxRecord
 } from "../../services/sessions/sessionStore.js";
 import { resolveProjectPath } from "../config.js";
-import { appendRequestLogStrict } from "../requestLog.js";
+import { appendRequestLogStrict } from "../../adapters/observability/requestLog.js";
 import type { ParsedIncomingMessage } from "../types.js";
 import type { ConversationAssetDeliveryDraft, ReplyDelivery } from "./runtimeContracts.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
-import { isRuntimeIncomingMessage } from "./infrastructure.js";
+import { isRuntimeIncomingMessage, saveConversationRecordsStrict } from "./infrastructure.js";
+import type { ConversationCapabilityContextV1 } from "../../services/conversations/conversationCapability.js";
 
 import type { SunaRuntime } from "../runtime.js";
 
@@ -54,6 +61,8 @@ export interface QueueConversationAssetOptions {
   logRunId: string;
   isCurrent?: () => boolean;
   delivery: ReplyDelivery;
+  toolName?: "send_file" | "send_voice_message";
+  capability?: Readonly<ConversationCapabilityContextV1>;
 }
 
 export class RuntimeConversationAssets {
@@ -64,29 +73,42 @@ export class RuntimeConversationAssets {
     gateway: MessagingPort,
     logRunId: string,
     isCurrent: (() => boolean) | undefined,
-    delivery: ReplyDelivery | undefined
+    delivery: ReplyDelivery | undefined,
+    capability?: Readonly<ConversationCapabilityContextV1>
   ) {
     if (incoming.transport === "web") return undefined;
-    if (!this.host.isAdminUser(incoming.userId)) return undefined;
+    if (!this.host.isReplySenderAllowed(incoming.userId)) return undefined;
     if (!gateway.sendConversationAsset || !delivery?.emitOutbox) return undefined;
     return {
       enabled: true,
       send: (
         input: PrepareOutboundConversationAssetInput,
         context: { callId: string; toolName: "send_file" }
-      ) => this.queue({ incoming, gateway, input, callId: context.callId, logRunId, isCurrent, delivery })
+      ) => this.queue({
+        incoming,
+        gateway,
+        input,
+        callId: context.callId,
+        logRunId,
+        isCurrent,
+        delivery,
+        toolName: context.toolName,
+        capability
+      })
     };
   }
 
   async queue(options: QueueConversationAssetOptions) {
+    const toolName = options.toolName ?? "send_file";
+    const voice = toolName === "send_voice_message";
     if (options.incoming.transport === "web") {
       throw conversationAssetContractError();
     }
-    if (!this.host.isAdminUser(options.incoming.userId)) {
-      throw new Error("send_file is unavailable for the current user.");
-    }
-    if (options.input.kind !== "auto" && options.input.kind !== "file" && options.input.kind !== "image") {
-      throw new Error("send_voice_message is disabled.");
+    if (
+      (voice && options.input.kind !== "voice")
+      || (!voice && options.input.kind !== "auto" && options.input.kind !== "file" && options.input.kind !== "image")
+    ) {
+      throw new Error("Conversation asset tool and kind do not match.");
     }
     if (!options.gateway.sendConversationAsset || !options.delivery.emitOutbox) {
       throw new Error("当前消息传输不支持可靠文件发送。");
@@ -101,7 +123,14 @@ export class RuntimeConversationAssets {
     }
     const target = conversationAssetTarget(options.incoming, expectedAgentId);
     const incomingFingerprint = conversationAssetIncomingFingerprint(options.incoming, target);
-    const { relativePath, prepared, rootIdentity } = await this.prepare(options.input);
+    const agentWorkspace = resolveProjectPath(this.host.config.persona.agentWorkspace);
+    if (!agentWorkspace) throw new Error("当前 Agent 工作区未配置。");
+    const address = voice
+      ? { path: options.input.path }
+      : await resolveWorkbenchImageReferenceAddress(agentWorkspace, options.input.path);
+    const { relativePath, prepared, rootIdentity } = await this.prepare(
+      { ...options.input, path: address.path }
+    );
     if (options.isCurrent && !options.isCurrent()) {
       throw new Error("当前会话回复已关闭，文件未排队。");
     }
@@ -113,7 +142,7 @@ export class RuntimeConversationAssets {
       type: "conversation_asset",
       target,
       incomingFingerprint,
-      toolName: "send_file",
+      toolName,
       asset: {
         path: relativePath,
         kind: prepared.kind,
@@ -148,6 +177,27 @@ export class RuntimeConversationAssets {
     };
   }
 
+  async resolveImageReferences(
+    incoming: ParsedIncomingMessage,
+    paths: readonly string[],
+    isCurrent: () => boolean = () => true,
+    capability?: Readonly<ConversationCapabilityContextV1>
+  ) {
+    void incoming;
+    void capability;
+    const agentWorkspace = resolveProjectPath(this.host.config.persona.agentWorkspace);
+    if (!agentWorkspace) throw new Error("当前 Agent 工作区未配置。");
+    const urls: string[] = [];
+    for (const imagePath of [...new Set(paths.map((item) => String(item ?? "").trim()).filter(Boolean))].slice(0, 4)) {
+      if (!isCurrent()) throw new Error("当前会话回复已关闭，参考图未读取。");
+      const address = await resolveWorkbenchImageReferenceAddress(agentWorkspace, imagePath);
+      const { prepared } = await this.prepare({ path: address.path, kind: "image" });
+      if (!isCurrent()) throw new Error("当前会话回复已关闭，参考图未读取。");
+      urls.push(await archiveConversationImage(this.host.config.persona.defaultAgentId, prepared));
+    }
+    return urls;
+  }
+
   async deliver(outbox: OutboxRecord, delivery: OutboxDeliveryContext | AbortSignal) {
     if (!isOutboxDeliveryContext(delivery)) throw conversationAssetContractError();
     const context = delivery;
@@ -155,15 +205,10 @@ export class RuntimeConversationAssets {
     if (signal.aborted) throw signal.reason ?? new Error("Outbox delivery aborted.");
 
     const payload = decodeConversationAsset(outbox.payload);
-    if (payload.toolName === "send_voice_message" || payload.asset.kind === "voice") {
-      throw new Error("send_voice_message is disabled.");
-    }
+    if ((payload.toolName === "send_voice_message") !== (payload.asset.kind === "voice")) throw conversationAssetContractError();
     const authoritativeIncoming = this.assertOutboxProvenance(outbox, payload);
     if (!isRuntimeIncomingMessage(authoritativeIncoming)) {
       throw new Error(`Outbox 消息格式无效：${outbox.id}`);
-    }
-    if (context.phase !== "settle" && !this.host.isAdminUser(authoritativeIncoming.userId)) {
-      throw new Error("send_file is unavailable for the current user.");
     }
     if (context.phase !== "settle" && !this.host.isReplySenderAllowed(authoritativeIncoming.userId)) {
       return { delivered: false, skipped: "sender_not_allowed" };
@@ -193,7 +238,16 @@ export class RuntimeConversationAssets {
         byteLength: payload.asset.byteLength,
         sha256: payload.asset.sha256
       }, payload.asset.rootIdentity);
-      const sendAsset = () => gateway.sendConversationAsset!(assetTarget(payload, prepared));
+      const conversationImageUrl = prepared.kind === "image"
+        ? await archiveConversationImage(payload.target.agentId, prepared)
+        : undefined;
+      const sendAsset = async () => {
+        const receipt = await sendOutboundBubble(
+          gateway,
+          outboundAssetBubble(assetTarget(payload, prepared))
+        );
+        return conversationImageUrl ? { ...receipt, conversationImageUrl } : receipt;
+      };
       remoteReceipt = await context.sendRemote(sendAsset);
     }
 
@@ -215,6 +269,29 @@ export class RuntimeConversationAssets {
       runId: payload.logRunId,
       stage: "reply"
     };
+    if (payload.asset.kind === "image") {
+      await context.settleStep("conversation_projection", async (idempotencyKey) => {
+        const receipt = context.remoteReceipt ?? remoteReceipt;
+        const imageUrl = conversationImageReceiptUrl(receipt, payload.target.agentId, payload.asset.sha256) ??
+          await this.archiveQueuedImage(payload);
+        const messageId = messagingReceiptMessageId(context.remoteReceipt ?? remoteReceipt) ?? idempotencyKey;
+        this.host.recordAssistantMessage(
+          authoritativeIncoming,
+          "[图片]",
+          [imageUrl],
+          payload.logRunId,
+          undefined,
+          { toolNames: [payload.toolName] },
+          { persist: false, messageId }
+        );
+        saveConversationRecordsStrict(
+          [...this.host.conversationRecords.values()],
+          idempotencyKey,
+          this.host.config,
+          this.host.protectedConversationIds()
+        );
+      });
+    }
     await context.settleStep("request_log", (idempotencyKey) => appendRequestLogStrict({
       category: "runtime.action",
       action: "reply.asset.sent",
@@ -226,6 +303,18 @@ export class RuntimeConversationAssets {
       delivered: true,
       remoteReceipt: context.remoteReceipt ?? remoteReceipt
     };
+  }
+
+  private async archiveQueuedImage(payload: ConversationAssetOutboxPayload) {
+    const { prepared } = await this.prepare({
+      path: payload.asset.path,
+      kind: payload.asset.kind,
+      name: payload.asset.name
+    }, {
+      byteLength: payload.asset.byteLength,
+      sha256: payload.asset.sha256
+    }, payload.asset.rootIdentity);
+    return archiveConversationImage(payload.target.agentId, prepared);
   }
 
   private async prepare(
@@ -246,7 +335,10 @@ export class RuntimeConversationAssets {
       }
       const resolvedFile = await resolveAgentWorkbenchFile(agentWorkspace, input.path);
       const relativePath = safeQueuedConversationAssetPath(rootIdentity.canonicalPath, resolvedFile);
-      const delivery = new OutboundConversationAssetDelivery({ rootDir: workbenchRoot, rootIdentity });
+      const delivery = new OutboundConversationAssetDelivery({
+        rootDir: workbenchRoot,
+        rootIdentity
+      });
       const prepared = await delivery.prepare(input, expected);
       return { relativePath, prepared, rootIdentity };
     } catch (error) {
@@ -355,6 +447,24 @@ export class RuntimeConversationAssets {
     }
     throw conversationAssetContractError();
   }
+}
+
+function messagingReceiptMessageId(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const messageId = (value as { messageId?: unknown }).messageId;
+  return typeof messageId === "string" && messageId.trim() ? messageId.trim() : undefined;
+}
+
+function conversationImageReceiptUrl(value: unknown, agentId: string, sha256: string) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const imageUrl = (value as { conversationImageUrl?: unknown }).conversationImageUrl;
+  if (typeof imageUrl !== "string") return undefined;
+  const prefix = `/generated-images/conversation-assets/agents/${encodeURIComponent(agentId)}/`;
+  if (!imageUrl.startsWith(prefix)) return undefined;
+  const fileName = imageUrl.slice(prefix.length);
+  return fileName.startsWith(`${sha256}.`) && /^[a-f0-9]{64}\.[a-z0-9]+$/i.test(fileName)
+    ? imageUrl
+    : undefined;
 }
 
 function conversationAssetContractError() {

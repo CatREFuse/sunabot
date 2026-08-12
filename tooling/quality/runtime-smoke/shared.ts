@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import type { RuntimeLayout, SmokeContext } from "./types.js";
+import type { RuntimeLayout } from "./types.js";
 
 const redactionValues = new Set<string>();
 
@@ -32,7 +32,7 @@ export function assertNotProductionWorkspace(root: string, workspace: string) {
 export async function loadRuntimeLayout(root: string): Promise<RuntimeLayout> {
   const contractPath = path.join(root, "deploy", "runtime-contract.json");
   const contract = asRecord(await readJson(contractPath), "运行时契约");
-  if (contract.schemaVersion !== 2) throw new Error("运行时契约版本不受支持。");
+  if (contract.schemaVersion !== 3) throw new Error("运行时契约版本不受支持。");
   const paths = asRecord(contract.paths, "运行时契约 paths");
   const config = relativeContractPath(paths.config, "paths.config");
   const secrets = relativeContractPath(paths.secrets, "paths.secrets");
@@ -87,18 +87,6 @@ export function boundedTimeout(name: string, fallback: number, minimum: number, 
     throw new Error(`${name} 必须在 ${minimum}-${maximum} 毫秒之间。`);
   }
   return value;
-}
-
-export function isolateRuntimeEnvironment(context: SmokeContext) {
-  for (const key of context.config.providers.items.map((provider) => provider.apiKeyEnv).filter(Boolean)) {
-    delete process.env[key];
-  }
-  delete process.env[context.config.onebot.accessTokenEnv];
-  delete process.env.SUNABOT_DATABASE_PATH;
-  process.env.SUNABOT_WORKSPACE = context.workspace;
-  process.env.SUNABOT_CONFIG = context.configPath;
-  process.env[context.provider.apiKeyEnv] = context.providerToken;
-  process.env[context.config.onebot.accessTokenEnv] = context.onebotToken;
 }
 
 export function rememberSecret(secret: string) {

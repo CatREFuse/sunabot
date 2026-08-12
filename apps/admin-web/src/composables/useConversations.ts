@@ -2,7 +2,7 @@ import { shallowReadonly, shallowRef } from "vue";
 import { apiRequest } from "./useAdminApi";
 import type { ConversationLogEntry, ConversationMessagePage, ConversationMessageRecord, ConversationRecord, ConversationStatsPayload } from "../types";
 
-type ConversationMutation = "reply" | "orchestrator";
+type ConversationMutation = "reply" | "orchestrator" | "responseTime";
 type ConversationMutationErrors = Partial<Record<ConversationMutation, string>>;
 
 export function useConversations() {
@@ -99,14 +99,22 @@ export function useConversations() {
 
   async function updateReplySettings(
     conversation: ConversationRecord,
-    changes: Pick<ConversationRecord, "replyEnabled" | "orchestratorEnabled">,
+    changes: Pick<
+      ConversationRecord,
+      "replyEnabled"
+      | "orchestratorEnabled"
+      | "orchestratorResponseTimeOverrideEnabled"
+      | "orchestratorResponseTimeMs"
+    >,
     mutation: ConversationMutation
   ) {
     if (mutationBusy.value[conversation.id]) return false;
     const current = conversations.value.find((item) => item.id === conversation.id) ?? conversation;
     const previous = {
       replyEnabled: current.replyEnabled,
-      orchestratorEnabled: current.orchestratorEnabled
+      orchestratorEnabled: current.orchestratorEnabled,
+      orchestratorResponseTimeOverrideEnabled: current.orchestratorResponseTimeOverrideEnabled,
+      orchestratorResponseTimeMs: current.orchestratorResponseTimeMs
     };
     setMutationBusy(conversation.id, mutation);
     setMutationError(conversation.id, mutation, "");
@@ -129,7 +137,11 @@ export function useConversations() {
         ? {
             ...item,
             replyEnabled: payload.conversation.replyEnabled,
-            orchestratorEnabled: payload.conversation.orchestratorEnabled
+            orchestratorEnabled: payload.conversation.orchestratorEnabled,
+            orchestratorResponseTimeOverrideEnabled:
+              payload.conversation.orchestratorResponseTimeOverrideEnabled,
+            orchestratorResponseTimeMs: payload.conversation.orchestratorResponseTimeMs,
+            orchestratorStatus: payload.conversation.orchestratorStatus
           }
         : item);
       setMutationError(conversation.id, mutation, "");
@@ -139,7 +151,16 @@ export function useConversations() {
         ? {
             ...item,
             ...(changes.replyEnabled === undefined ? {} : { replyEnabled: previous.replyEnabled }),
-            ...(changes.orchestratorEnabled === undefined ? {} : { orchestratorEnabled: previous.orchestratorEnabled })
+            ...(changes.orchestratorEnabled === undefined ? {} : { orchestratorEnabled: previous.orchestratorEnabled }),
+            ...(changes.orchestratorResponseTimeOverrideEnabled === undefined
+              ? {}
+              : {
+                  orchestratorResponseTimeOverrideEnabled:
+                    previous.orchestratorResponseTimeOverrideEnabled
+                }),
+            ...(changes.orchestratorResponseTimeMs === undefined
+              ? {}
+              : { orchestratorResponseTimeMs: previous.orchestratorResponseTimeMs })
           }
         : item);
       const message = caught instanceof Error
@@ -163,6 +184,24 @@ export function useConversations() {
 
   async function setOrchestratorEnabled(conversation: ConversationRecord, orchestratorEnabled: boolean) {
     return updateReplySettings(conversation, { orchestratorEnabled }, "orchestrator");
+  }
+
+  async function setOrchestratorResponseTimeOverrideEnabled(
+    conversation: ConversationRecord,
+    orchestratorResponseTimeOverrideEnabled: boolean
+  ) {
+    return updateReplySettings(
+      conversation,
+      { orchestratorResponseTimeOverrideEnabled },
+      "responseTime"
+    );
+  }
+
+  async function setOrchestratorResponseTime(
+    conversation: ConversationRecord,
+    orchestratorResponseTimeMs: number
+  ) {
+    return updateReplySettings(conversation, { orchestratorResponseTimeMs }, "responseTime");
   }
 
   function setMutationBusy(id: string, mutation: ConversationMutation | undefined) {
@@ -219,6 +258,8 @@ export function useConversations() {
     loadStats,
     setReplyEnabled,
     setOrchestratorEnabled,
+    setOrchestratorResponseTimeOverrideEnabled,
+    setOrchestratorResponseTime,
     clearCurrent,
     dispose
   };

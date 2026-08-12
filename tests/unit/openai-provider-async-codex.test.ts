@@ -11,7 +11,7 @@ const runWebsearch = vi.hoisted(() => vi.fn(async () => ({
   results: [{ title: "Weather", url: "https://example.test/weather" }]
 })));
 
-vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
+vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog }));
 vi.mock("../../adapters/model/webSearchTool.js", () => ({
   WEBSEARCH_TOOL_NAME: "websearch",
   websearchTool: {
@@ -69,7 +69,10 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       toolCall: {
         name: "codex",
         callId: "call_codex_ack",
-        arguments: workerArguments
+        arguments: {
+          ...workerArguments,
+          __sunabot_admin_authorized: true
+        }
       }
     });
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -111,7 +114,10 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       toolCall: {
         name: "codex",
         callId: "call_codex_repaired",
-        arguments: workerArguments
+        arguments: {
+          ...workerArguments,
+          __sunabot_admin_authorized: true
+        }
       }
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -159,7 +165,18 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
 
     expect(result).toEqual({ kind: "completed", text: "今天晴，最高 28°C。" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(toolNames(fetchRequestBody(fetchMock, 0))).toEqual(["websearch", "codex"]);
+    expect(toolNames(fetchRequestBody(fetchMock, 0))).toEqual(["websearch", "webfetch", "codex"]);
+    const webfetch = (fetchRequestBody(fetchMock, 0).tools as Array<Record<string, any>>)
+      .find((tool) => tool.name === "webfetch");
+    expect(webfetch).toMatchObject({
+      strict: false,
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["url", "semanticMatch"]
+      }
+    });
+    expect(webfetch?.parameters).not.toHaveProperty("oneOf");
     expect(runWebsearch).toHaveBeenCalledOnce();
     expect(runWebsearch).toHaveBeenCalledWith({
       query: "current weather",
@@ -200,7 +217,7 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     expect(toolNames(fetchRequestBody(fetchMock, 0))).toContain("assistant_text");
   });
 
-  it("rejects deferred completion after assistant_text was accepted in an earlier round", async () => {
+  it("uses one deferred status message when assistant_text appears in the same response", async () => {
     const provider = codexProvider();
     const onAssistantText = vi.fn(async () => undefined);
     const task = { task: "检查多工具响应", kind: "analysis" };
@@ -209,11 +226,7 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       codexSseResponse([
         functionCall("assistant_text", "call_progress", { text: "我先确认一下。" }),
         functionCall("codex", "call_mixed_codex", { ...task, dispatch_message: "我开始检查。" })
-      ]),
-      codexSseResponse([
-        functionCall("codex", "call_single_codex", { ...task, dispatch_message: "我开始检查。" })
-      ]),
-      codexSseResponse([assistantMessage("检查完成。")])
+      ])
     );
 
     const result = await provider.completeTurn("system", [{ role: "user", content: "检查" }], {
@@ -221,12 +234,58 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       onAssistantText
     });
 
-    expect(onAssistantText).toHaveBeenCalledWith("我先确认一下。", "assistant_text");
-    expect(result).toEqual({ kind: "completed", text: "检查完成。" });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    const thirdInput = fetchRequestBody(fetchMock, 2).input as Array<Record<string, unknown>>;
-    const rejected = thirdInput.find((item) => item.type === "function_call_output" && item.call_id === "call_single_codex");
-    expect(JSON.parse(String(rejected?.output)).error).toContain("before assistant text or any other tool");
+    expect(onAssistantText).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "deferred",
+      acknowledgement: "我开始检查。",
+      toolCall: { name: "codex", callId: "call_mixed_codex", arguments: task }
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("exports chat media before dispatching Codex from the same model response", async () => {
+    const provider = codexProvider();
+    const exportMedia = vi.fn(async () => ({
+      ok: true as const,
+      path: "chat-media-test.png",
+      sha256: "a".repeat(64),
+      mimeType: "image/png",
+      extension: "png",
+      byteLength: 128,
+      width: 16,
+      height: 16,
+      deduplicated: false
+    }));
+    const task = { task: "检查导出的图片", kind: "analysis" };
+    const fetchMock = mockCodexToken(provider, codexSseResponse([
+      functionCall("export_chat_media", "call_export_media", {
+        handle: "message:123:image:0"
+      }),
+      functionCall("codex", "call_media_codex", {
+        ...task,
+        dispatch_message: "图片已导出，开始检查。"
+      })
+    ]));
+
+    const result = await provider.completeTurn("system", [{ role: "user", content: "检查这张图片" }], {
+      asyncCodex: true,
+      chatMedia: { export: exportMedia }
+    });
+
+    expect(exportMedia).toHaveBeenCalledWith({ handle: "message:123:image:0" });
+    expect(result).toMatchObject({
+      kind: "deferred",
+      acknowledgement: "图片已导出，开始检查。",
+      toolCall: {
+        name: "codex",
+        callId: "call_media_codex",
+        arguments: {
+          ...task,
+          __sunabot_admin_authorized: true
+        }
+      }
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("returns an image task dispatch before image generation starts", async () => {
@@ -339,6 +398,178 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     expect(runSelfie).not.toHaveBeenCalled();
   });
 
+  it("returns matching visible text and voice as one terminal provider turn", async () => {
+    const provider = codexProvider();
+    const onToolCall = vi.fn();
+    const fetchMock = mockCodexToken(provider, codexSseResponse([
+      assistantMessage("おはよう、先生。"),
+      functionCall("send_voice_message", "call_voice", {
+        text: "おはよう、先生。"
+      })
+    ]));
+
+    const result = await provider.completeTurn("system", [{ role: "user", content: "おはよう" }], {
+      voice: { enabled: true, languages: ["ja"], defaultLanguage: "ja" },
+      onToolCall
+    });
+
+    expect(result).toEqual({
+      kind: "completed",
+      text: "おはよう、先生。",
+      voice: {
+        text: "おはよう、先生。",
+        language: "ja",
+        callId: "call_voice",
+        toolName: "send_voice_message"
+      }
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(onToolCall).toHaveBeenCalledWith("send_voice_message");
+  });
+
+  it("accepts matching voice in the next round after assistant_text was delivered", async () => {
+    const provider = codexProvider();
+    const onAssistantText = vi.fn(async () => undefined);
+    const onToolCall = vi.fn();
+    const text = "老师、こんばんは！こんな時間まで起きてちゃだめです！";
+    const fetchMock = mockCodexToken(
+      provider,
+      codexSseResponse([
+        functionCall("assistant_text", "call_voice_text", { text }),
+      ]),
+      codexSseResponse([
+        functionCall("send_voice_message", "call_voice", {
+          text,
+        }),
+      ]),
+    );
+
+    const result = await provider.completeTurn(
+      "system",
+      [{ role: "user", content: "小春发个语音" }],
+      {
+        voice: { enabled: true, languages: ["ja"], defaultLanguage: "ja" },
+        onAssistantText,
+        onToolCall,
+      },
+    );
+
+    expect(result).toEqual({
+      kind: "completed",
+      text,
+      messageOrigin: "assistant_text",
+      textAlreadyDelivered: true,
+      voice: {
+        text,
+        language: "ja",
+        callId: "call_voice",
+        toolName: "send_voice_message",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onAssistantText).toHaveBeenCalledOnce();
+    expect(onAssistantText).toHaveBeenCalledWith(text, "assistant_text");
+    expect(onToolCall.mock.calls.map(([name]) => name)).toEqual([
+      "assistant_text",
+      "send_voice_message",
+    ]);
+  });
+
+  it("returns matching text and voice after an earlier websearch round", async () => {
+    const provider = codexProvider();
+    const onToolCall = vi.fn();
+    const fetchMock = mockCodexToken(
+      provider,
+      codexSseResponse([
+        functionCall("websearch", "call_voice_search", {
+          query: "current weather",
+          maxResults: 2
+        })
+      ]),
+      codexSseResponse([
+        assistantMessage("今天晴，最高 28°C。"),
+        functionCall("send_voice_message", "call_voice_after_search", {
+          text: "今天晴，最高 28°C。"
+        })
+      ])
+    );
+
+    const result = await provider.completeTurn(
+      "system",
+      [{ role: "user", content: "查天气后用语音告诉我" }],
+      {
+        bot: websearchBotConfig(),
+        voice: { enabled: true, languages: ["ja"], defaultLanguage: "ja" },
+        onToolCall
+      }
+    );
+
+    expect(result).toMatchObject({
+      kind: "completed",
+      text: "今天晴，最高 28°C。",
+      voice: {
+        text: "今天晴，最高 28°C。",
+        callId: "call_voice_after_search"
+      }
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(runWebsearch).toHaveBeenCalledOnce();
+    expect(onToolCall.mock.calls.map(([name]) => name)).toEqual([
+      "websearch",
+      "send_voice_message"
+    ]);
+  });
+
+  it("rejects next-round voice when it differs from delivered assistant_text", async () => {
+    const provider = codexProvider();
+    const onAssistantText = vi.fn(async () => undefined);
+    mockCodexToken(
+      provider,
+      codexSseResponse([
+        functionCall("assistant_text", "call_voice_text", { text: "早安。" }),
+      ]),
+      codexSseResponse([
+        functionCall("send_voice_message", "call_voice", {
+          text: "晚安。",
+        }),
+      ]),
+    );
+
+    await expect(
+      provider.completeTurn("system", [{ role: "user", content: "发个语音" }], {
+        voice: { enabled: true, languages: ["ja"], defaultLanguage: "ja" },
+        onAssistantText,
+      }),
+    ).rejects.toThrow(
+      "send_voice_message text must exactly match the accompanying human-readable assistant text",
+    );
+  });
+
+  it("returns dispatch_message and voice together without starting deferred work inline", async () => {
+    const provider = codexProvider();
+    const fetchMock = mockCodexToken(provider, codexSseResponse([
+      functionCall("codex", "call_codex_voice", {
+        task: "检查发布包",
+        kind: "local",
+        dispatch_message: "我会认真把它检查完。"
+      }),
+      functionCall("send_voice_message", "call_voice", {
+        text: "我会认真把它检查完。"
+      })
+    ]));
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "检查" }], {
+      asyncCodex: true,
+      voice: { enabled: true, languages: ["ja"], defaultLanguage: "ja" }
+    })).resolves.toMatchObject({
+      kind: "deferred",
+      acknowledgement: "我会认真把它检查完。",
+      toolCall: { name: "codex", arguments: { task: "检查发布包", kind: "local" } },
+      voice: { language: "ja", callId: "call_voice" }
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("enforces the configured tool call count instead of a fixed round constant", async () => {
     const provider = codexProvider();
     const config = websearchBotConfig();
@@ -371,7 +602,12 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
           function: {
             name: "websearch",
             description: "由最终提示词定义的搜索说明",
-            parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              properties: { query: { type: "string" } },
+              required: ["query"]
+            },
             strict: true
           }
         }
@@ -443,6 +679,30 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       content: [{ type: "input_text", text: "stable system" }]
     });
   });
+
+  it("preserves deterministic HTTP rejection metadata for outer retry policies", async () => {
+    const provider = codexProvider();
+    const fetchMock = mockCodexToken(provider, new Response(JSON.stringify({
+      error: { message: "Invalid response schema." }
+    }), {
+      status: 400,
+      headers: { "content-type": "application/json" }
+    }));
+
+    await expect(provider.completeRequest({
+      messages: [
+        { role: "system", content: "system" },
+        { role: "user", content: "input" }
+      ],
+      response_format: { type: "text" }
+    })).rejects.toMatchObject({
+      name: "ProviderResponseError",
+      message: "Invalid response schema.",
+      status: 400,
+      retryable: false
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });
 
 function codexProvider(model = "gpt-5.6-terra") {
@@ -450,7 +710,7 @@ function codexProvider(model = "gpt-5.6-terra") {
 }
 
 function mockCodexToken(provider: OpenAIProvider, ...responses: Response[]) {
-  vi.spyOn(provider as never, "getApiKey").mockReturnValue("test-token");
+  vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("test-token");
   return vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
     const response = responses.shift();
     if (!response) throw new Error("Unexpected additional Codex request.");

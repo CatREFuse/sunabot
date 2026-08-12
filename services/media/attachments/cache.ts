@@ -71,10 +71,7 @@ export class CacheStore {
         options.idleTimeoutMs,
         DEFAULT_ATTACHMENT_IDLE_TIMEOUT_MS
       ),
-      allowPrivateNetwork: options.allowPrivateNetwork === true,
-      fetchImpl: options.fetchImpl,
-      lookupImpl: options.lookupImpl,
-      trustedResolvedAddress: options.trustedResolvedAddress
+      fetchImpl: options.fetchImpl
     });
   }
 
@@ -134,30 +131,6 @@ export class CacheStore {
   cleanup() {
     return this.janitor.cleanup();
   }
-}
-
-export function downloadHttpToCache(
-  store: CacheStore,
-  url: string,
-  options: DownloadHttpOptions = {}
-) {
-  return store.downloadHttp(url, options);
-}
-
-export function writeBase64ToCache(
-  store: CacheStore,
-  encoded: string,
-  options: WriteBase64Options = {}
-) {
-  return store.writeBase64(encoded, options);
-}
-
-export function importFileToCache(
-  store: CacheStore,
-  filePath: string,
-  options: ImportFileOptions = {}
-) {
-  return store.importFile(filePath, options);
 }
 
 function positiveInteger(value: number | undefined, fallback: number) {

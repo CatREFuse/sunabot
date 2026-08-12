@@ -45,14 +45,25 @@ function config(adminName: string): AppConfig {
     bot: {
       adminQq: "1",
       adminName,
+      replyModel: "gpt-5.5",
+      replyReasoningEffort: "medium",
+      imageReader: {
+        enabled: true,
+        providerId: "codex",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low"
+      },
       replyDebounceMs: 5_000,
       pokeOnNoReply: false,
       quoteGroupReplies: true,
       quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
-      tone: { enabled: false, providerId: "", model: "gpt-5.4-mini", reasoningEffort: "low", temperature: 0.7, maxOutputTokens: 2400, maxRetries: 2 },
-      memory: { memoryModel: "gpt-5.4-mini", reasoningEffort: "medium", messageThreshold: 48, workingMemoryMaxEntries: 100, workMemoryCompressInPrompt: "in.md", workMemoryCompressOutPrompt: "out.md", userProfilePrompt: "user.md" },
-      orchestrator: { enabled: false, userGroupchatOrchestratorModel: "gpt-5.4-mini", groupThreadModel: "gpt-5.4-mini", reasoningEffort: "medium", promptFile: "orchestrator.md", messageThreshold: 10, recentMessageWindowMs: 60_000 },
+      emojiSendSize: 512,
+      emojiSendSeparately: false,
+      tone: { enabled: false, segmentedReply: false, followMainModel: false, providerId: "", model: "gpt-5.4-mini", reasoningEffort: "low", temperature: 0.7, maxOutputTokens: 2400, maxRetries: 2 },
+      director: { enabled: false },
+      memory: { memoryModel: "gpt-5.4-mini", reasoningEffort: "medium", dreamRecentWindowHours: 24, dreamRecentMemoryLimit: 24, dreamOlderMemoryLimit: 12, workMemoryCompressOutPrompt: "out.md" },
+      orchestrator: { enabled: false, userGroupchatOrchestratorModel: "gpt-5.4-mini", reasoningEffort: "medium", promptFile: "orchestrator.md", messageThreshold: 10, recentMessageWindowMs: 60_000 },
       tools: {
         maxCalls: 20,
         overrides: {},
@@ -62,7 +73,6 @@ function config(adminName: string): AppConfig {
       },
       bash: {
         enabled: true,
-        adminPrivateBackend: "native",
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         allowGroup: false,
@@ -94,21 +104,49 @@ describe("useConfigWorkspace", () => {
 
   afterEach(() => vi.useRealTimers());
 
-  it("auto-saves a section and preserves typing that happens in flight", async () => {
+  it("commits a section explicitly and serializes a second confirmed value", async () => {
     const response = deferred<ConfigPatchResponse>();
-    apiRequest.mockResolvedValueOnce(envelope("r1", "initial")).mockReturnValueOnce(response.promise);
+    apiRequest
+      .mockResolvedValueOnce(envelope("r1", "initial"))
+      .mockReturnValueOnce(response.promise)
+      .mockResolvedValueOnce(patched("r3", "typed while saving"));
     const workspace = useConfigWorkspace();
     await workspace.load();
     workspace.drafts.bot.adminName = "submitted";
 
-    await vi.advanceTimersByTimeAsync(350);
+    const firstCommit = workspace.commit("bot");
     workspace.drafts.bot.adminName = "typed while saving";
+    const secondCommit = workspace.commit("bot");
     response.resolve(patched("r2", "submitted"));
-    await vi.advanceTimersByTimeAsync(350);
+    await Promise.all([firstCommit, secondCommit]);
 
     expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body)).value.adminName).toBe("submitted");
+    expect(JSON.parse(String(apiRequest.mock.calls[2]?.[1]?.body)).value.adminName).toBe("typed while saving");
     expect(workspace.drafts.bot.adminName).toBe("typed while saving");
-    expect(workspace.isDirty("bot")).toBe(true);
+    expect(workspace.isDirty("bot")).toBe(false);
+    workspace.cancel();
+  });
+
+  it("saves a value changed back to the baseline while the previous save is running", async () => {
+    const response = deferred<ConfigPatchResponse>();
+    apiRequest
+      .mockResolvedValueOnce(envelope("r1", "initial"))
+      .mockReturnValueOnce(response.promise)
+      .mockResolvedValueOnce(patched("r3", "initial"));
+    const workspace = useConfigWorkspace();
+    await workspace.load();
+    workspace.drafts.bot.adminName = "submitted";
+
+    const firstCommit = workspace.commit("bot");
+    workspace.drafts.bot.adminName = "initial";
+    const secondCommit = workspace.commit("bot");
+    response.resolve(patched("r2", "submitted"));
+    await Promise.all([firstCommit, secondCommit]);
+
+    expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body)).value.adminName).toBe("submitted");
+    expect(JSON.parse(String(apiRequest.mock.calls[2]?.[1]?.body)).value.adminName).toBe("initial");
+    expect(workspace.drafts.bot.adminName).toBe("initial");
+    expect(workspace.isDirty("bot")).toBe(false);
     workspace.cancel();
   });
 
@@ -117,22 +155,36 @@ describe("useConfigWorkspace", () => {
     apiRequest
       .mockResolvedValueOnce(envelope("r1", "initial"))
       .mockReturnValueOnce(first.promise)
-      .mockResolvedValueOnce(patched("r3", "next", (value) => { value.bot.memory.messageThreshold = 64; }));
+      .mockResolvedValueOnce(patched("r3", "next", (value) => { value.bot.memory.dreamRecentWindowHours = 64; }));
     const workspace = useConfigWorkspace();
     await workspace.load();
     workspace.drafts.bot.adminName = "next";
-    workspace.drafts.memory.messageThreshold = 64;
+    workspace.drafts.memory.dreamRecentWindowHours = 64;
 
-    await vi.advanceTimersByTimeAsync(350);
+    const commits = Promise.all([workspace.commit("bot"), workspace.commit("memory")]);
     expect(apiRequest).toHaveBeenCalledTimes(2);
     first.resolve(patched("r2", "next"));
-    await vi.runAllTimersAsync();
-    await Promise.resolve();
+    await commits;
 
     expect(apiRequest).toHaveBeenCalledTimes(3);
     expect(JSON.parse(String(apiRequest.mock.calls[2]?.[1]?.body)).revision).toBe("r2");
     expect(workspace.isDirty("bot")).toBe(false);
     expect(workspace.isDirty("memory")).toBe(false);
+    workspace.cancel();
+  });
+
+  it("starts work queued while an empty drain is settling", async () => {
+    apiRequest
+      .mockResolvedValueOnce(envelope("r1", "initial"))
+      .mockResolvedValueOnce(patched("r2", "initial", (value) => { value.bot.bash.enabled = false; }));
+    const workspace = useConfigWorkspace();
+    await workspace.load();
+    workspace.drafts.bash.enabled = false;
+
+    await Promise.all([workspace.commit("tools"), workspace.commit("bash")]);
+
+    expect(apiRequest).toHaveBeenNthCalledWith(2, "/api/config/bash?agentId=plana", expect.objectContaining({ method: "PATCH" }));
+    expect(workspace.isDirty("bash")).toBe(false);
     workspace.cancel();
   });
 
@@ -146,7 +198,7 @@ describe("useConfigWorkspace", () => {
     await workspace.load();
     workspace.drafts.bot.adminName = "local value";
 
-    await vi.advanceTimersByTimeAsync(350);
+    await workspace.commit("bot");
 
     expect(apiRequest).toHaveBeenCalledTimes(4);
     expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body)).revision).toBe("r1");
@@ -169,7 +221,7 @@ describe("useConfigWorkspace", () => {
     await workspace.load();
     workspace.drafts.bot.adminName = "keep me";
 
-    await vi.advanceTimersByTimeAsync(350);
+    await workspace.commit("bot");
 
     expect(apiRequest).toHaveBeenCalledTimes(4);
     expect(workspace.state.bot.kind).toBe("conflict");
@@ -186,15 +238,16 @@ describe("useConfigWorkspace", () => {
     await workspace.load();
     workspace.drafts.bot.adminQq = "invalid";
 
-    await vi.advanceTimersByTimeAsync(350);
+    await workspace.commit("bot");
 
     expect(workspace.state.bot).toMatchObject({ kind: "error", field: "bot.adminQq" });
     expect(workspace.drafts.bot.adminQq).toBe("invalid");
     expect(await workspace.flush()).toBe(false);
+    expect(apiRequest).toHaveBeenCalledTimes(2);
     workspace.cancel();
   });
 
-  it("auto-saves linked group reply fields atomically", async () => {
+  it("commits linked group reply fields atomically", async () => {
     apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
     const workspace = useConfigWorkspace();
     await workspace.load();
@@ -206,7 +259,7 @@ describe("useConfigWorkspace", () => {
     });
     apiRequest.mockResolvedValueOnce(saved);
 
-    await vi.advanceTimersByTimeAsync(350);
+    await workspace.commit("orchestrator");
 
     expect(apiRequest).toHaveBeenNthCalledWith(2, "/api/config/group-reply?agentId=plana", expect.objectContaining({ method: "PATCH" }));
     expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body))).toMatchObject({
@@ -234,7 +287,7 @@ describe("useConfigWorkspace", () => {
     workspace.cancel();
   });
 
-  it("cancels queued writes before loading another Agent context", async () => {
+  it("does not save an unconfirmed value before loading another Agent context", async () => {
     apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
     const workspace = useConfigWorkspace();
     await workspace.load();
@@ -243,7 +296,6 @@ describe("useConfigWorkspace", () => {
     apiRequest.mockResolvedValueOnce(envelope("arona-r1", "arona"));
 
     await workspace.load();
-    await vi.runAllTimersAsync();
 
     expect(apiRequest).toHaveBeenCalledTimes(2);
     expect(apiRequest.mock.calls[1]?.[0]).toBe("/api/config?agentId=arona");
@@ -251,21 +303,58 @@ describe("useConfigWorkspace", () => {
     workspace.cancel();
   });
 
-  it("normalizes legacy defaults without creating auto-save work", async () => {
+  it("keeps a delayed save alive until an Agent switch flush completes", async () => {
+    const delayedSave = deferred<ConfigPatchResponse>();
+    apiRequest
+      .mockResolvedValueOnce(envelope("r1", "initial"))
+      .mockReturnValueOnce(delayedSave.promise)
+      .mockResolvedValueOnce(envelope("arona-r1", "arona"));
+    const workspace = useConfigWorkspace();
+    await workspace.load();
+    workspace.drafts.bot.adminName = "saved before switch";
+
+    const flushed = workspace.flush();
+    const saveSignal = apiRequest.mock.calls[1]?.[1]?.signal as AbortSignal;
+    expect(saveSignal.aborted).toBe(false);
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+
+    delayedSave.resolve(patched("r2", "saved before switch"));
+    await expect(flushed).resolves.toBe(true);
+    expect(saveSignal.aborted).toBe(false);
+
+    await workspace.load({ agentId: "arona" });
+    expect(apiRequest.mock.calls[2]?.[0]).toBe("/api/config?agentId=arona");
+    expect(workspace.drafts.bot.adminName).toBe("arona");
+    workspace.cancel();
+  });
+
+  it("normalizes legacy defaults without creating save work", async () => {
     const legacy = envelope("r1", "initial");
     delete (legacy.config as Partial<AppConfig>).normalReply;
+    delete (legacy.config.bot as Partial<AppConfig["bot"]>).replyModel;
+    delete (legacy.config.bot as Partial<AppConfig["bot"]>).replyReasoningEffort;
+    delete (legacy.config.bot as Partial<AppConfig["bot"]>).imageReader;
     delete (legacy.config.bot as Partial<AppConfig["bot"]>).replyDebounceMs;
-    delete (legacy.config.bot as Partial<AppConfig["bot"]>).tone;
+    delete (legacy.config.bot as Partial<AppConfig["bot"]>).contextMessageLimit;
+    delete (legacy.config.bot.tone as Partial<AppConfig["bot"]["tone"]>).segmentedReply;
     delete (legacy.config.bot.tools as Partial<AppConfig["bot"]["tools"]>).overrides;
     apiRequest.mockResolvedValueOnce(legacy);
     const workspace = useConfigWorkspace();
 
     await workspace.load();
-    await vi.runAllTimersAsync();
 
     expect(workspace.drafts.normalReply).toEqual({ maxRetries: 3 });
+    expect(workspace.drafts.bot.replyModel).toBe("gpt-5.5");
+    expect(workspace.drafts.bot.replyReasoningEffort).toBe("medium");
+    expect(workspace.drafts.bot.imageReader).toEqual({
+      enabled: true,
+      providerId: "codex",
+      model: "gpt-5.5",
+      reasoningEffort: "low"
+    });
     expect(workspace.drafts.bot.replyDebounceMs).toBe(5_000);
-    expect(workspace.drafts.tone).toMatchObject({ enabled: false, providerId: "", maxRetries: 2 });
+    expect(workspace.drafts.bot.contextMessageLimit).toBe(32);
+    expect(workspace.drafts.tone).toMatchObject({ enabled: false, segmentedReply: false, providerId: "", maxRetries: 2 });
     expect(workspace.drafts.tools.overrides).toEqual({});
     expect(apiRequest).toHaveBeenCalledTimes(1);
     workspace.cancel();

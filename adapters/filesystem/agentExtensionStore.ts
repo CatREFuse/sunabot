@@ -63,13 +63,13 @@ export interface AgentExtensionStoreOptions {
 
 export class AgentExtensionStore implements AgentExtensionRepository {
   private readonly now: () => Date;
+  private readonly runLayoutCheck = createLayoutCheckCoordinator();
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly pathGuard: AgentExtensionPathGuard;
   private readonly copyLifecycle: AgentExtensionCopyLifecycle;
   private readonly mcpStore: AgentMcpServerStore;
   private readonly skillMutations: AgentSkillMutationStore;
   private readonly extensionTransactions = new AgentExtensionTransactionCoordinator();
-
   constructor(private readonly options: AgentExtensionStoreOptions) {
     this.now = options.now ?? (() => new Date());
     this.pathGuard = new AgentExtensionPathGuard(options.workspaceRoot, options);
@@ -95,8 +95,11 @@ export class AgentExtensionStore implements AgentExtensionRepository {
       fault: (step) => this.fault(step)
     });
   }
-
   async ensureLayout(agentId: string) {
+    return this.runLayoutCheck(agentId, this.extensionTransactions.owns(agentId), () => this.ensureLayoutOnce(agentId));
+  }
+
+  private async ensureLayoutOnce(agentId: string) {
     const paths = await this.pathGuard.paths(agentId);
     await this.pathGuard.guard(paths, "ensure-layout-probe");
     const layoutReady = this.pathGuard.isPinned(paths, paths.skills) &&
@@ -126,22 +129,25 @@ export class AgentExtensionStore implements AgentExtensionRepository {
         allowCreated: this.pathGuard.controlledPaths(paths),
         allowChanged: [paths.skills, paths.mcp]
       });
-      const extensions = path.dirname(paths.skills);
-      const extensionsExisted = this.pathGuard.isPinned(paths, extensions);
+      const workbench = path.dirname(paths.skills);
+      const extensions = path.dirname(paths.mcp);
+      const workbenchExisted = this.pathGuard.isPinned(paths, workbench);
       const skillsExisted = this.pathGuard.isPinned(paths, paths.skills);
       await this.pathGuard.guard(paths, "ensure-layout");
       await mkdirChain(paths.workspace, path.relative(paths.workspace, paths.skills));
       await this.pathGuard.refresh(paths, {
-        allowCreated: [extensions, paths.skills],
-        allowChanged: extensionsExisted && !skillsExisted ? [extensions] : [],
-        allowAgentChange: !extensionsExisted
+        allowCreated: [workbench, paths.skills],
+        allowChanged: workbenchExisted && !skillsExisted ? [workbench] : [],
+        allowAgentChange: !workbenchExisted
       });
+      const extensionsExisted = this.pathGuard.isPinned(paths, extensions);
       const mcpExisted = this.pathGuard.isPinned(paths, paths.mcp);
       await this.pathGuard.guard(paths, "ensure-layout");
       await mkdirChain(paths.workspace, path.relative(paths.workspace, paths.mcp));
       await this.pathGuard.refresh(paths, {
-        allowCreated: [paths.mcp],
-        allowChanged: mcpExisted ? [] : [extensions]
+        allowCreated: [extensions, paths.mcp],
+        allowChanged: mcpExisted ? [] : [extensions],
+        allowAgentChange: !extensionsExisted
       });
       await this.pathGuard.guard(paths, "ensure-layout-config");
       await writeJsonIfMissing(
@@ -525,9 +531,7 @@ export class AgentExtensionStore implements AgentExtensionRepository {
     });
   }
 
-  private async fault(step: string) {
-    await this.options.faultInjector?.(step);
-  }
+  private async fault(step: string) { await this.options.faultInjector?.(step); }
 
   private async recoverCopyTransactions(agentId: string) {
     if (this.extensionTransactions.owns(agentId)) return;
@@ -555,6 +559,20 @@ export class AgentExtensionStore implements AgentExtensionRepository {
       beforeRecoveryMutation: () => this.fault("before-skill-recovery-mutation")
     };
   }
+}
+
+function createLayoutCheckCoordinator() {
+  const checks = new Map<string, Promise<void>>();
+  return (key: string, bypass: boolean, operation: () => Promise<void>) => {
+    if (bypass) return operation();
+    const existing = checks.get(key);
+    if (existing) return existing;
+    const current = operation().finally(() => {
+      if (checks.get(key) === current) checks.delete(key);
+    });
+    checks.set(key, current);
+    return current;
+  };
 }
 
 function skillDoublyApproved(record: AgentSkillRecord) {

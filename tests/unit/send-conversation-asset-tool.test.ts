@@ -4,6 +4,7 @@ import { RegistryProviderToolExecutor } from "../../adapters/model/provider/tool
 import type { ProviderCompleteOptions } from "../../adapters/model/openaiProvider.js";
 import { normalizeOutboundConversationAssetError } from "../../services/delivery/public.js";
 import {
+  createSendVoiceMessageTool,
   readSendFileInput,
   readSendVoiceMessageInput,
   sendFileTool,
@@ -12,8 +13,8 @@ import {
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("../../src/requestLog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../src/requestLog.js")>()),
+vi.mock("../../adapters/observability/requestLog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../adapters/observability/requestLog.js")>()),
   appendRequestLog
 }));
 
@@ -36,9 +37,11 @@ describe("conversation asset tool definitions", () => {
       strict: true,
       parameters: {
         additionalProperties: false,
-        required: ["path"]
+        required: ["text"]
       }
     });
+    expect(createSendVoiceMessageTool(["ja"], "ja").parameters.properties)
+      .toEqual(sendVoiceMessageTool.parameters.properties);
   });
 
   it("normalizes file and voice inputs and rejects invalid kinds", () => {
@@ -51,9 +54,8 @@ describe("conversation asset tool definitions", () => {
       kind: "image",
       name: "结果图.png"
     });
-    expect(readSendVoiceMessageInput({ path: "audio/reply.amr" })).toEqual({
-      path: "audio/reply.amr",
-      kind: "voice"
+    expect(readSendVoiceMessageInput({ text: " おはよう、先生。 " })).toEqual({
+      text: "おはよう、先生。"
     });
     expect(() => readSendFileInput({ path: "x", kind: "voice", name: null })).toThrow(
       "auto, file, or image"
@@ -72,6 +74,12 @@ describe("conversation asset tool definitions", () => {
       name: null,
       accountId: "primary"
     } as never)).toThrow("unsupported fields");
+    expect(() => readSendVoiceMessageInput({ text: "おはよう", language: "ja" } as never))
+      .toThrow("only text");
+    expect(() => readSendVoiceMessageInput({ text: "おはよう", path: "x.wav" } as never))
+      .toThrow("only text");
+    expect(() => readSendVoiceMessageInput({ text: "x".repeat(301) }))
+      .toThrow("300 characters");
   });
 
   it.each([

@@ -107,6 +107,70 @@ describe("AttachmentService integration", () => {
     );
   }, 120_000);
 
+  it("keeps an acquired PDF blob available when PDF parsing fails", async () => {
+    const bytes = Buffer.from("%PDF-1.7\nbroken\n", "utf8");
+    const { service, cacheRoot } = createAttachmentService("parse-failed-pdf-cache");
+
+    const [attachment] = await service.processIncoming([
+      incomingAttachment({
+        id: "parse-failed-pdf",
+        name: "待人工核对.pdf",
+        fileId: "parse-failed-pdf"
+      })
+    ], base64Port(bytes), "", "private:2002/1001");
+
+    expect(attachment).toMatchObject({
+      status: "failed",
+      parseStatus: "parse_failed",
+      format: "pdf",
+      mimeType: "application/pdf",
+      errorCode: "parse_failed",
+      acquisition: {
+        status: "acquired",
+        blob: {
+          schemaVersion: 1,
+          cacheKey: "f8a5a41c52832585568ca3d6738ef21c83c629d2c3088bfdf0644f8daa7efadf",
+          sha256: "f8a5a41c52832585568ca3d6738ef21c83c629d2c3088bfdf0644f8daa7efadf",
+          sizeBytes: 16,
+          detectedMimeType: "application/pdf"
+        }
+      }
+    });
+    await expect(readFile(path.join(
+      cacheRoot,
+      attachment!.acquisition!.status === "acquired"
+        ? attachment!.acquisition.blob.cacheKey
+        : "missing",
+      "original"
+    ))).resolves.toEqual(bytes);
+    expect((await service.cache.getEntry(attachment!.cacheKey!))).toMatchObject({
+      parseStatus: "failed",
+      activeReferences: ["private:2002/1001/parse-failed-pdf"]
+    });
+  }, 30_000);
+
+  it("does not invent an acquired blob when attachment source resolution fails", async () => {
+    const { service } = createAttachmentService("acquisition-failed-cache");
+
+    const [attachment] = await service.processIncoming([
+      incomingAttachment({
+        id: "missing-file",
+        name: "missing.pdf",
+        fileId: "missing-file"
+      })
+    ], new FakeAttachmentSourcePort(new Error("file not found")));
+
+    expect(attachment).toMatchObject({
+      status: "failed",
+      parseStatus: "not_started",
+      acquisition: {
+        status: "failed"
+      }
+    });
+    expect(attachment).not.toHaveProperty("cacheKey");
+    expect(attachment).not.toHaveProperty("sha256");
+  });
+
   it("single-flights the same local PDF fixture delivered by URL and NapCat Base64", async () => {
     const pdf = createTextPdf(["Shared content-addressed fixture"]);
     const filePath = await writeFixture("shared-report.pdf", pdf);
@@ -220,7 +284,7 @@ describe("AttachmentService integration", () => {
     expect(wrongSecond!.status).toBe("unsupported");
   }, 30_000);
 
-  it("falls back to adapter-provided file content when a resolved download URL is unsafe", async () => {
+  it("falls back to adapter-provided file content when a remote download fails", async () => {
     const body = Buffer.from("Fallback content from NapCat Base64", "utf8");
     const gateway = new FakeAttachmentSourcePort(undefined, {
       kind: "base64",
@@ -228,13 +292,12 @@ describe("AttachmentService integration", () => {
       via: "file_content"
     });
     const fetchMock = vi.fn(async () => {
-      throw new Error("Unsafe URL must be rejected before fetch.");
+      throw new Error("Remote download failed.");
     });
     const fetchImpl = fetchMock as unknown as typeof fetch;
     const cacheRoot = path.join(temporaryDirectory, "unsafe-url-fallback-cache");
     const cacheStore = new CacheStore(cacheRoot, {
       fetchImpl,
-      lookupImpl: async () => [{ address: "127.0.0.1", family: 4 }],
       minimumFreeBytes: 0
     });
     const service = new AttachmentService(temporaryDirectory, { cacheRoot, cacheStore });
@@ -249,8 +312,8 @@ describe("AttachmentService integration", () => {
 
     expect(attachment).toMatchObject({ status: "ready", format: "txt" });
     expect(context.text).toContain("Fallback content from NapCat Base64");
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(gateway.fallbackCalls).toEqual([{ fileId: "fallback-file-id", file: "fallback.txt" }]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(gateway.fallbackCalls).toEqual([{ fileId: "fallback-file-id", file: undefined }]);
   }, 30_000);
 
   it("reports cache_unavailable after a persisted text chunk index disappears", async () => {
@@ -506,7 +569,6 @@ function officeExtractCalls(workerRun: { mock: { calls: Array<readonly unknown[]
 function createAttachmentService(cacheName: string) {
   const cacheRoot = path.join(temporaryDirectory, cacheName);
   const cacheStore = new CacheStore(cacheRoot, {
-    allowPrivateNetwork: true,
     minimumFreeBytes: 0
   });
   return {

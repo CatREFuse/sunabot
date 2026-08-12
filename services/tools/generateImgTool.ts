@@ -1,4 +1,5 @@
-import { ImageResult, BotConfig, ImageQuality } from "../../src/types.js";
+import type { BotConfig, ImageQuality } from "../../packages/contracts/admin/public.js";
+import type { ImageResult } from "../../packages/contracts/media/media.js";
 import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 
 export const GENERATE_IMG_TOOL_NAME = "generate_img";
@@ -26,6 +27,7 @@ export interface GenerateImgInput {
   resolution?: unknown;
   quality?: unknown;
   referenceImageUrls?: unknown;
+  referenceImagePaths?: unknown;
   referenceMediaHandles?: unknown;
   referenceImageSource?: unknown;
 }
@@ -35,26 +37,38 @@ export type GenerateImageRunner = (
   size: string,
   quality: ImageQuality,
   referenceImageUrls?: string[],
-  logContext?: ProviderLogContext
+  logContext?: ProviderLogContext,
+  signal?: AbortSignal
 ) => Promise<ImageResult>;
 
 export interface GenerateImgRunOptions {
   referenceImageUrls?: string[];
   imageReferences?: GenerateImgReferenceContext;
+  resolveWorkbenchImagePaths?: WorkbenchImagePathResolver;
   logContext?: ProviderLogContext;
+  signal?: AbortSignal;
 }
+
+export type WorkbenchImagePathResolver = (
+  paths: readonly string[],
+  signal?: AbortSignal
+) => Promise<string[]>;
 
 export interface ResolvedGenerateImgReferences {
   referenceImageSource: GenerateImgReferenceSource;
+  referenceImagePaths: string[];
+  resolvedWorkbenchImageUrls: string[];
   referenceMediaHandles: string[];
   resolvedHandleImageUrls: string[];
   referenceImageUrls: string[];
 }
 
+export const LEGACY_GENERATE_IMG_TOOL_DESCRIPTION = "Generate or edit an image from a prompt. The model must decide every image parameter and whether reference media is needed. It can pass current-workbench images directly through referenceImagePaths, using either a relative path or the exact authorized absolute path returned by Bash. For a Markdown image link returned by knowledge_search, resolve the link from its source document, prefix knowledge/ exactly once, and verify that exact Workbench path before use. An explicit Workbench-relative path must be used unchanged. Host absolute paths must remain inside the current Agent workbench; sandbox absolute paths start at /workbench. Prefer exact historical media handles shown in conversation history when the user identifies a sent or received chat image; use referenceImageSource as a fallback when no exact handle is suitable. Use previous_output for edits or retries of the last generated image, history for earlier same-user media, current for current or quoted media, current_and_history to combine them, and none for a fresh image. Resolved historical media handles have highest priority, followed by resolved workbench paths. Default clarity is 1K. Use resolution 2K or 4K only when the user asks for higher resolution, clearer output, wallpaper, poster, print, or explicitly says 2K/4K. Returns the saved image metadata. The system sends generated images separately; do not print local file paths or CQ codes.";
+
 export const generateImgTool = {
   type: "function",
   name: GENERATE_IMG_TOOL_NAME,
-  description: "Generate or edit an image from a prompt. The model must decide every image parameter and whether reference media is needed. Prefer exact historical media handles shown in conversation history; use referenceImageSource as a fallback when no exact handle is suitable. Use previous_output for edits or retries of the last generated image, history for earlier same-user media, current for current or quoted media, current_and_history to combine them, and none for a fresh image. Resolved historical media handles have highest priority. Default clarity is 1K. Use resolution 2K or 4K only when the user asks for higher resolution, clearer output, wallpaper, poster, print, or explicitly says 2K/4K. Returns the saved image metadata. The system sends generated images separately; do not print local file paths or CQ codes.",
+  description: "Generate or edit an image from a prompt. The model must decide every image parameter and whether reference media is needed. When the requested image must contain a particular person, film or anime character, or non-public object whose appearance is not already established by current or historical media, first use webfetch or knowledge_search to find an actual reference image, use Bash to save it under the authorized workbench when needed, and pass that exact image through referenceImageUrls or referenceImagePaths. A reference image is mandatory in that situation; never generate an unknown appearance from text alone. It can pass current-workbench images directly through referenceImagePaths, including portable knowledge/... paths, using either a relative path or the exact authorized absolute path returned by Bash. For a Markdown image link returned by knowledge_search, resolve the link from its source document, prefix knowledge/ exactly once, and verify that exact Workbench path before use. An explicit Workbench-relative path must be used unchanged. Host absolute paths must remain inside the current Agent workbench; sandbox absolute paths start at /workbench. Prefer exact historical media handles shown in conversation history when the user identifies a sent or received chat image; use referenceImageSource as a fallback when no exact handle is suitable. Use previous_output for edits or retries of the last generated image, history for earlier same-user media, current for current or quoted media, current_and_history to combine them, and none for a fresh image. Resolved historical media handles have highest priority, followed by resolved workbench paths. Default clarity is 1K. Use resolution 2K or 4K only when the user asks for higher resolution, clearer output, wallpaper, poster, print, or explicitly says 2K/4K. Returns the saved image metadata. The system sends generated images separately; do not print local file paths or CQ codes.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -92,7 +106,13 @@ export const generateImgTool = {
         type: ["array", "null"],
         items: { type: "string" },
         maxItems: 4,
-        description: "Exact reference image URLs explicitly present in the request. Use null when selecting conversation media through referenceMediaHandles or referenceImageSource. Do not invent URLs."
+        description: "Exact reference image URLs explicitly present in the request. Use null when selecting current-workbench images, conversation media, or automatic history. Do not invent URLs."
+      },
+      referenceImagePaths: {
+        type: ["array", "null"],
+        items: { type: "string" },
+        maxItems: 4,
+        description: "Paths of existing images in the current authorized workbench, including portable knowledge/... paths. Pass either a path relative to the Workbench root or the exact absolute path returned by Bash. For a Markdown image link returned by knowledge_search, resolve the link from its source document, prefix knowledge/ exactly once, and verify that exact Workbench path before use. An explicit Workbench-relative path must be used unchanged. Host absolute paths must remain under the current Agent workbench; sandbox absolute paths start at /workbench. Never pass a URL, media handle, Base64 value, guessed path, or a path outside those roots. Use null when no workbench image is needed."
       },
       referenceMediaHandles: {
         type: ["array", "null"],
@@ -112,6 +132,7 @@ export const generateImgTool = {
       "resolution",
       "quality",
       "referenceImageUrls",
+      "referenceImagePaths",
       "referenceMediaHandles",
       "referenceImageSource"
     ]
@@ -131,6 +152,7 @@ export async function runGenerateImg(
   if (!generateImage) {
     return { ok: false, error: "Image generation is not configured." };
   }
+  options.signal?.throwIfAborted();
 
   const prompt = normalizePrompt(input.prompt);
   if (!prompt) {
@@ -140,8 +162,30 @@ export async function runGenerateImg(
   const resolution = normalizeImageResolution(input.resolution, botConfig.tools.generateImg.resolution);
   const size = normalizeImageSize(input.size, botConfig.tools.generateImg.size, resolution);
   const quality = normalizeImageQuality(input.quality, botConfig.tools.generateImg.quality);
-  const references = resolveGenerateImgReferences(input, options);
-  const image = await generateImage(prompt, size, quality, references.referenceImageUrls, options.logContext);
+  const references = await resolveGenerateImgReferencesForRun(input, options);
+  options.signal?.throwIfAborted();
+  const unresolvedReferenceMediaHandles = references.referenceMediaHandles.filter((handle) => (
+    normalizeReferenceImageUrls([options.imageReferences?.mediaByHandle?.[handle]]).length === 0
+  ));
+  const resolvedReferenceMediaHandleCount =
+    references.referenceMediaHandles.length - unresolvedReferenceMediaHandles.length;
+  if (unresolvedReferenceMediaHandles.length) {
+    return {
+      ok: false,
+      error: "One or more reference media handles are unavailable.",
+      referenceMediaHandleCount: references.referenceMediaHandles.length,
+      resolvedReferenceMediaHandleCount
+    };
+  }
+  const image = await generateImage(
+    prompt,
+    size,
+    quality,
+    references.referenceImageUrls,
+    options.logContext,
+    options.signal
+  );
+  options.signal?.throwIfAborted();
   return {
     ok: true,
     provider: "codex-image-gen",
@@ -150,8 +194,10 @@ export async function runGenerateImg(
     resolution,
     quality,
     referenceImageSource: references.referenceImageSource,
+    referenceImagePathCount: references.referenceImagePaths.length,
+    resolvedReferenceImagePathCount: references.resolvedWorkbenchImageUrls.length,
     referenceMediaHandleCount: references.referenceMediaHandles.length,
-    resolvedReferenceMediaHandleCount: references.resolvedHandleImageUrls.length,
+    resolvedReferenceMediaHandleCount,
     referenceImageCount: references.referenceImageUrls.length,
     image
   };
@@ -179,12 +225,40 @@ export function resolveGenerateImgReferences(
   );
   return {
     referenceImageSource,
+    referenceImagePaths: [],
+    resolvedWorkbenchImageUrls: [],
     referenceMediaHandles,
     resolvedHandleImageUrls,
     referenceImageUrls: normalizeReferenceImageUrls([
       ...resolvedHandleImageUrls,
       ...explicitReferenceImageUrls,
       ...automaticReferenceImageUrls
+    ])
+  };
+}
+
+export async function resolveGenerateImgReferencesForRun(
+  input: Pick<GenerateImgInput, "referenceImageUrls" | "referenceImagePaths" | "referenceMediaHandles" | "referenceImageSource">,
+  options: GenerateImgRunOptions = {}
+): Promise<ResolvedGenerateImgReferences> {
+  const references = resolveGenerateImgReferences(input, options);
+  const referenceImagePaths = normalizeReferenceImagePaths(input.referenceImagePaths);
+  options.signal?.throwIfAborted();
+  const resolvedWorkbenchImageUrls = options.resolveWorkbenchImagePaths && referenceImagePaths.length
+    ? normalizeReferenceImageUrls(await options.resolveWorkbenchImagePaths(
+        referenceImagePaths,
+        options.signal
+      ))
+    : [];
+  options.signal?.throwIfAborted();
+  return {
+    ...references,
+    referenceImagePaths,
+    resolvedWorkbenchImageUrls,
+    referenceImageUrls: normalizeReferenceImageUrls([
+      ...references.resolvedHandleImageUrls,
+      ...resolvedWorkbenchImageUrls,
+      ...references.referenceImageUrls
     ])
   };
 }
@@ -244,6 +318,14 @@ function normalizeReferenceImageUrls(value: unknown) {
 }
 
 function normalizeReferenceMediaHandles(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean))]
+    .slice(0, 4);
+}
+
+function normalizeReferenceImagePaths(value: unknown) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value
     .map((item) => String(item ?? "").trim())

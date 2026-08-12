@@ -1,13 +1,23 @@
 import type { RenderedPromptRequest } from "../../../services/agent/promptSystem.js";
-import type { ChatMessage } from "../../../src/types.js";
+import type { ChatMessage } from "../../../packages/contracts/model/modelGateway.js";
 import type { ProviderAdapterContext, ProviderCompleteOptions, ProviderTurnResult, ResponseFunctionCallItem, TurnToolState } from "./contracts.js";
-import { toChatCompletionMessage } from "./imageInput.js";
+import { parseDataImage, toChatCompletionMessage } from "./imageInput.js";
 import { withLogContext } from "./logger.js";
-import { readToolName } from "./promptMapping.js";
-import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
+import { readToolName, toAnthropicTool } from "./promptMapping.js";
+import {
+  claimBusinessToolCalls,
+  resolveMaxToolCalls,
+  resolveToolRoundLimit,
+  toolCallLimitError
+} from "./toolLoopLimits.js";
 import { fetchTextWithTransportRetry, normalizeAnthropicBaseUrl, resolveModelRequestMaxAttempts } from "./transport.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
-import { preflightProviderToolResponse } from "./toolResponsePreflight.js";
+import { processProviderToolRound } from "./toolRound.js";
+import { assertMappedProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
+import {
+  anthropicMemoryToolChoice,
+  assertMemoryToolDecisionsResolved
+} from "./memoryToolDecisions.js";
 
 export async function completeAnthropicMessages(
   context: ProviderAdapterContext,
@@ -24,22 +34,25 @@ export async function completeAnthropicMessages(
   const messages = await Promise.all(request.messages
     .filter((message) => message.role !== "system" && message.role !== "developer")
     .map(toAnthropicMessage));
-  const definitions = context.toolExecutor.resolveDefinitions(options, request.tools);
-  const tools = definitions.map((tool) => ({
-    name: String(tool.name ?? ""),
-    description: String(tool.description ?? ""),
-    input_schema: isRecord(tool.parameters) ? tool.parameters : { type: "object", properties: {} }
-  }));
+  const definitions = context.toolExecutor.resolveDefinitions(
+    options,
+    request.tools,
+    "anthropic-messages"
+  );
+  const tools = definitions.map(toAnthropicTool);
+  assertMappedProviderToolDefinitions(tools, "anthropic-messages");
   const maxToolCalls = resolveMaxToolCalls(options);
+  const toolRoundLimit = resolveToolRoundLimit(options, maxToolCalls);
 
-  for (let round = 0; round <= maxToolCalls; round += 1) {
+  for (let round = 0; round <= toolRoundLimit; round += 1) {
     const requestBody = {
       model: context.provider.model,
       system: system || undefined,
       messages,
       temperature: Math.min(context.provider.temperature, 1),
       max_tokens: context.provider.maxOutputTokens,
-      tools: tools.length ? tools : undefined
+      tools: tools.length ? tools : undefined,
+      tool_choice: anthropicMemoryToolChoice(options)
     };
     const metadata = withLogContext({ round, toolCallCount: state.toolCallCount, maxToolCalls, toolNames: tools.map(readToolName) }, options.logContext);
     let responseMetadata = metadata;
@@ -82,27 +95,29 @@ export async function completeAnthropicMessages(
     const calls: ResponseFunctionCallItem[] = blocks.flatMap((block) => block.type === "tool_use" && block.id && block.name
       ? [{ type: "function_call", call_id: String(block.id), name: String(block.name), arguments: JSON.stringify(isRecord(block.input) ? block.input : {}) }]
       : []);
-    state.toolCallCount = claimToolCalls(state.toolCallCount, calls.length, maxToolCalls);
+    state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, calls, maxToolCalls);
     if (!calls.length) {
+      assertMemoryToolDecisionsResolved(options);
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };
     }
 
-    const preflight = preflightProviderToolResponse(calls, text, options, state);
-    if (!preflight.rejected) {
-      const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);
-      if (deferred) return deferred;
-      const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
-      if (noReply) return noReply;
-      if (text && options.onAssistantText && preflight.emitAssistantText) {
-        await options.onAssistantText(text, "text");
+    const toolRound = await processProviderToolRound({
+      calls,
+      siblingText: text,
+      options,
+      definitions,
+      state,
+      executor: context.toolExecutor,
+      emitAssistantText: async () => {
+        if (text && options.onAssistantText) await options.onAssistantText(text, "text");
       }
-    }
+    });
+    if (toolRound.terminal) return toolRound.terminal;
     messages.push({ role: "assistant", content: blocks });
-    const outputs = preflight.rejected ?? await context.toolExecutor.execute(calls, options, definitions, state);
     messages.push({
       role: "user",
-      content: outputs.map((output) => ({ type: "tool_result", tool_use_id: output.call_id, content: String(output.output ?? "") }))
+      content: toolRound.outputs.map((output) => ({ type: "tool_result", tool_use_id: output.call_id, content: String(output.output ?? "") }))
     });
   }
   throw toolCallLimitError(maxToolCalls);
@@ -121,11 +136,6 @@ async function toAnthropicMessage(message: ChatMessage) {
       return data ? [{ type: "image", source: { type: "base64", media_type: data.mediaType, data: data.data } }] : [];
     })
   };
-}
-
-function parseDataImage(value: string) {
-  const match = value.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is);
-  return match ? { mediaType: match[1]!, data: match[2]! } : undefined;
 }
 
 function anthropicError(payload: unknown, status: number) {

@@ -107,9 +107,15 @@ function scopeLabel() {
               :conversation="settings.conversation.value"
               :reply-enabled="settings.replyEnabled.value"
               :orchestrator-enabled="settings.orchestratorEnabled.value"
+              :orchestrator-response-time-override-enabled="settings.orchestratorResponseTimeOverrideEnabled.value"
+              :orchestrator-response-time-seconds="settings.orchestratorResponseTimeSeconds.value"
+              :director-events-enabled="settings.directorEventsEnabled.value"
               :busy="settings.loading.value"
               @update-reply-enabled="settings.setReplyEnabled"
               @update-orchestrator-enabled="settings.setOrchestratorEnabled"
+              @update-orchestrator-response-time-override-enabled="settings.setOrchestratorResponseTimeOverrideEnabled"
+              @update-orchestrator-response-time-seconds="settings.setOrchestratorResponseTimeSeconds"
+              @update-director-events-enabled="settings.setDirectorEventsEnabled"
             />
             <SettingsAutoSaveStatus
               :kind="settings.behaviorState.value.kind"

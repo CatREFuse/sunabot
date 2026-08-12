@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderConfig, ProviderKind } from "../../src/types.js";
+import type { BotConfig, ProviderConfig, ProviderKind } from "../../src/types.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
+vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog }));
 
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
+import { normalizeChatBaseUrl } from "../../adapters/model/provider/transport.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 
 beforeEach(() => {
   appendRequestLog.mockReset();
@@ -38,7 +40,8 @@ describe("provider protocols", () => {
       ],
       response_format: { type: "text" }
     }, {
-      logContext: { stage: "reply", promptFamily: "conversation.reply" }
+      logContext: { stage: "reply", promptFamily: "conversation.reply" },
+      bot: webfetchBotConfig()
     })).resolves.toBe("OK");
 
     const body = create.mock.calls[0]?.[0] as Record<string, any>;
@@ -49,6 +52,7 @@ describe("provider protocols", () => {
       prompt_cache_breakpoint: { mode: "explicit" }
     });
     expect(body.input[2].content[0]).toEqual({ type: "input_text", text: "ping" });
+    expectProviderSafeWebFetch(body.tools.find((tool: Record<string, unknown>) => tool.name === "webfetch"));
   });
 
   it("logs every visible SDK retry and disables hidden client retries", async () => {
@@ -127,12 +131,19 @@ describe("provider protocols", () => {
     }));
     vi.spyOn(provider as never, "createChatClient").mockReturnValue({ chat: { completions: { create } } });
 
-    await expect(provider.complete("system", [{ role: "user", content: "ping" }], { asyncCodex: true })).resolves.toBe("OK");
-    const baseUrl = (provider as unknown as { normalizeChatBaseUrl(): string }).normalizeChatBaseUrl();
+    await expect(provider.complete("system", [{ role: "user", content: "ping" }], {
+      asyncCodex: true,
+      bot: webfetchBotConfig()
+    })).resolves.toBe("OK");
+    const baseUrl = normalizeChatBaseUrl(provider.configuration());
     expect(`${baseUrl}/chat/completions`).toBe("https://compatible.example/v1/chat/completions");
     expect(create.mock.calls[0]?.[0]).toMatchObject({ model: "compatible-model", messages: [{ role: "system" }, { role: "user" }] });
-    const chatCodex = (create.mock.calls[0]?.[0] as Record<string, any>).tools[0].function;
+    const chatTools = (create.mock.calls[0]?.[0] as Record<string, any>).tools;
+    const chatCodex = chatTools.find((tool: Record<string, any>) => tool.function.name === "codex").function;
     expect(chatCodex.parameters.required).toContain("dispatch_message");
+    expectProviderSafeWebFetch(
+      chatTools.find((tool: Record<string, any>) => tool.function.name === "webfetch").function
+    );
   });
 
   it("does not start or log an SDK attempt after cancellation", async () => {
@@ -200,7 +211,7 @@ describe("provider protocols", () => {
       role: "user",
       content: "看图",
       imageUrls: ["data:image/png;base64,AAAA"]
-    }], { onAssistantText: delivered, asyncCodex: true })).resolves.toBe("完成");
+    }], { onAssistantText: delivered, asyncCodex: true, bot: webfetchBotConfig() })).resolves.toBe("完成");
     expect(delivered.mock.calls).toEqual([
       ["处理中", "text"],
       ["处理中", "assistant_text"]
@@ -213,6 +224,8 @@ describe("provider protocols", () => {
     ]));
     const anthropicCodex = firstBody.tools.find((tool: Record<string, unknown>) => tool.name === "codex");
     expect(anthropicCodex.input_schema.required).toContain("dispatch_message");
+    const anthropicWebFetch = firstBody.tools.find((tool: Record<string, unknown>) => tool.name === "webfetch");
+    expectProviderSafeWebFetch({ parameters: anthropicWebFetch.input_schema, strict: false });
     const secondBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
     expect(secondBody.messages.at(-1).content[0]).toMatchObject({ type: "tool_result", tool_use_id: "tool-1" });
   });
@@ -229,7 +242,7 @@ describe("provider protocols", () => {
       role: "user",
       content: "看图",
       imageUrls: ["data:image/png;base64,AAAA"]
-    }], { asyncCodex: true })).resolves.toBe("OK");
+    }], { asyncCodex: true, bot: webfetchBotConfig() })).resolves.toBe("OK");
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent");
     expect(new Headers((fetchMock.mock.calls[0]?.[1] as RequestInit).headers).get("x-goog-api-key")).toBe("gemini-key");
     const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
@@ -237,7 +250,13 @@ describe("provider protocols", () => {
       expect.objectContaining({ inlineData: { mimeType: "image/png", data: "AAAA" } })
     ]));
     const geminiCodex = body.tools[0].functionDeclarations.find((tool: Record<string, unknown>) => tool.name === "codex");
-    expect(geminiCodex.parameters.required).toContain("dispatch_message");
+    expect(geminiCodex.parametersJsonSchema.required).toContain("dispatch_message");
+    expectProviderSafeWebFetch({
+      parameters: body.tools[0].functionDeclarations
+        .find((tool: Record<string, unknown>) => tool.name === "webfetch")
+        .parametersJsonSchema,
+      strict: false
+    });
   });
 
   it.each([
@@ -251,7 +270,11 @@ describe("provider protocols", () => {
     ["codex-responses" as const, "codex.complete", () => codexTextResponse("OK")]
   ])("retries an interrupted %s response body", async (kind, action, successfulResponse) => {
     const provider = new OpenAIProvider(providerConfig(kind));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    if (kind === "codex-responses") {
+      vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("provider-key");
+    } else {
+      vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    }
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(interruptedBodyResponse())
       .mockResolvedValueOnce(successfulResponse());
@@ -287,7 +310,11 @@ describe("provider protocols", () => {
   ])("uses the configured normal reply retry limit for %s HTTP requests", async (kind, successfulResponse) => {
     vi.useFakeTimers();
     const provider = new OpenAIProvider(providerConfig(kind));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    if (kind === "codex-responses") {
+      vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("provider-key");
+    } else {
+      vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    }
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new TypeError("network 1"))
       .mockRejectedValueOnce(new TypeError("network 2"))
@@ -303,10 +330,80 @@ describe("provider protocols", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it("retries a retryable Codex error carried by an HTTP 200 response", async () => {
+    vi.useFakeTimers();
+    const provider = new OpenAIProvider(providerConfig("codex-responses"));
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("provider-key");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(codexErrorResponse({
+        type: "service_unavailable_error",
+        code: "server_is_overloaded",
+        message: "Our servers are currently overloaded. Please try again later."
+      }))
+      .mockResolvedValueOnce(codexTextResponse("OK"));
+
+    const completion = provider.complete("system", [{ role: "user", content: "ping" }], {
+      modelRequestMaxRetries: 1
+    });
+    const assertion = expect(completion).resolves.toBe("OK");
+    await vi.runAllTimersAsync();
+
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(appendRequestLog.mock.calls
+      .map(([entry]) => entry as Record<string, any>)
+      .filter((entry) => entry.category === "model.response" && entry.action === "codex.complete"))
+      .toEqual([
+        expect.objectContaining({
+          response: expect.objectContaining({
+            ok: false,
+            status: 200,
+            error: "Our servers are currently overloaded. Please try again later.",
+            willRetry: true
+          }),
+          metadata: expect.objectContaining({ transportAttempt: 1, maxTransportAttempts: 2 })
+        }),
+        expect.objectContaining({
+          response: expect.objectContaining({ ok: true }),
+          metadata: expect.objectContaining({ transportAttempt: 2, maxTransportAttempts: 2 })
+        })
+      ]);
+  });
+
+  it("surfaces a non-retryable Codex HTTP 200 response error verbatim", async () => {
+    const provider = new OpenAIProvider(providerConfig("codex-responses"));
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("provider-key");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(codexErrorResponse({
+      type: "invalid_request_error",
+      code: "invalid_json_schema",
+      message: "The response schema is invalid."
+    }));
+
+    await expect(provider.complete("system", [{ role: "user", content: "ping" }], {
+      modelRequestMaxRetries: 3
+    })).rejects.toThrow("The response schema is invalid.");
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(appendRequestLog.mock.calls
+      .map(([entry]) => entry as Record<string, any>)
+      .filter((entry) => entry.category === "model.response" && entry.action === "codex.complete"))
+      .toEqual([
+        expect.objectContaining({
+          response: expect.objectContaining({
+            ok: false,
+            status: 200,
+            error: "The response schema is invalid.",
+            willRetry: false
+          }),
+          metadata: expect.objectContaining({ transportAttempt: 1, maxTransportAttempts: 4 })
+        })
+      ]);
+  });
+
   it("honors a per-request transport timeout for Codex Responses", async () => {
     vi.useFakeTimers();
     const provider = new OpenAIProvider(providerConfig("codex-responses"));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("provider-key");
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockImplementation(() => new Promise<Response>(() => undefined));
 
@@ -338,6 +435,212 @@ describe("provider protocols", () => {
     const provider = new OpenAIProvider(providerConfig("openai-compatible"));
     await expect(provider.generateImage("portrait", "1024x1024", "high")).rejects.toThrow(/不支持 Responses 图像生成/);
   });
+
+  it("gives a model-backed Provider health probe the shared 10-minute budget", async () => {
+    const provider = new OpenAIProvider(providerConfig("openai-compatible"));
+    const complete = vi.spyOn(provider, "complete").mockResolvedValue("OK");
+
+    await expect(provider.test()).resolves.toMatchObject({ ok: true });
+
+    expect(complete).toHaveBeenCalledWith(
+      "只返回 OK。",
+      [{ role: "user", content: "ping" }],
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        modelRequestAttemptTimeoutMs: AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS
+      })
+    );
+  });
+
+  it("passes the shared image deadline to the OpenAI SDK request", async () => {
+    const provider = new OpenAIProvider(providerConfig("openai-official"));
+    const create = vi.fn(async (
+      _body: unknown,
+      _options?: { signal?: AbortSignal }
+    ) => ({ output: [] }));
+    const createClient = vi.spyOn(provider as never, "createClient")
+      .mockReturnValue({ responses: { create } });
+    const image = { url: "/generated-images/openai-sdk.png" };
+    const imageWriter = (provider as unknown as {
+      imageWriter: { write: (...args: unknown[]) => typeof image };
+    }).imageWriter;
+    vi.spyOn(imageWriter, "write").mockReturnValue(image);
+    const caller = new AbortController();
+
+    await expect(provider.generateImage(
+      "portrait",
+      "1024x1024",
+      "high",
+      [],
+      undefined,
+      caller.signal
+    )).resolves.toEqual(image);
+
+    expect(createClient).toHaveBeenCalledWith({ maxRetries: 0 });
+    const requestSignal = create.mock.calls[0]?.[1]?.signal as AbortSignal;
+    expect(requestSignal.aborted).toBe(false);
+    caller.abort(new DOMException("cancelled", "AbortError"));
+    expect(requestSignal.aborted).toBe(true);
+  });
+
+  it("stops before the Provider when a required reference image cannot become input_image", async () => {
+    const provider = new OpenAIProvider(providerConfig("codex-responses"));
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    await expect(provider.generateImage(
+      "follow the required reference",
+      "1024x1024",
+      "high",
+      ["/generated-images/conversation-assets/agents/arona/missing.png"]
+    )).rejects.toThrow("必需参考图不可用");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not create an OpenAI client when a required reference image is unavailable", async () => {
+    const provider = new OpenAIProvider(providerConfig("openai-official"));
+    const createClient = vi.spyOn(provider as never, "createClient");
+
+    await expect(provider.generateImage(
+      "follow the required reference",
+      "1024x1024",
+      "high",
+      ["/generated-images/conversation-assets/agents/arona/missing.png"]
+    )).rejects.toThrow("必需参考图不可用");
+
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it("retries Codex image generation when the response body stream terminates", async () => {
+    const provider = new OpenAIProvider({
+      ...providerConfig("codex-responses"),
+      baseUrl: "https://chatgpt.com/backend-api/codex"
+    }, {
+      imageRetrySleep: async () => undefined
+    });
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("test-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(interruptedBodyResponse())
+      .mockResolvedValueOnce(interruptedBodyResponse("data: partial"))
+      .mockResolvedValueOnce(interruptedBodyResponse("data: response.output_item.done"));
+
+    await expect(provider.generateImage("portrait", "1024x1024", "high"))
+      .rejects.toThrow("Image generation transport failed before the response completed.");
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(appendRequestLog.mock.calls
+      .map(([entry]) => entry as Record<string, any>)
+      .filter((entry) => entry.category === "model.response" && entry.action === "codex.image.generate")
+      .map((entry) => ({
+        error: entry.response.error,
+        willRetry: entry.response.willRetry,
+        attempt: entry.metadata.attempt,
+        maxAttempts: entry.metadata.maxAttempts
+      })))
+      .toEqual([
+        {
+          error: "Image generation transport failed before the response completed.",
+          willRetry: true,
+          attempt: 1,
+          maxAttempts: 3
+        },
+        {
+          error: "Image generation transport failed before the response completed.",
+          willRetry: true,
+          attempt: 2,
+          maxAttempts: 3
+        },
+        {
+          error: "Image generation transport failed before the response completed.",
+          willRetry: false,
+          attempt: 3,
+          maxAttempts: 3
+        }
+      ]);
+  });
+
+  it("recovers from a terminated Codex image response without duplicating the image", async () => {
+    const provider = new OpenAIProvider({
+      ...providerConfig("codex-responses"),
+      baseUrl: "https://chatgpt.com/backend-api/codex"
+    }, {
+      imageRetrySleep: async () => undefined
+    });
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("test-token");
+    const image = { url: "/generated-images/recovered.png" };
+    const imageWriter = (provider as unknown as {
+      imageWriter: { write: (...args: unknown[]) => typeof image };
+    }).imageWriter;
+    const writeImage = vi.spyOn(imageWriter, "write").mockReturnValue(image);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(interruptedBodyResponse("data: partial"))
+      .mockResolvedValueOnce(codexImageResponse());
+
+    await expect(provider.generateImage("portrait", "1024x1024", "high")).resolves.toEqual(image);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const signals = fetchMock.mock.calls.map((call) => call[1]?.signal);
+    expect(signals[0]).toBe(signals[1]);
+    expect(writeImage).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry cancellation while reading a Codex image response", async () => {
+    const provider = new OpenAIProvider({
+      ...providerConfig("codex-responses"),
+      baseUrl: "https://chatgpt.com/backend-api/codex"
+    }, {
+      imageRetrySleep: async () => undefined
+    });
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("test-token");
+    const abort = new Error("cancelled");
+    abort.name = "AbortError";
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(interruptedBodyResponse("", abort));
+
+    await expect(provider.generateImage("portrait", "1024x1024", "high"))
+      .rejects.toBe(abort);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("shares one 10-minute deadline across Codex image attempts", async () => {
+    const timeoutController = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const provider = new OpenAIProvider({
+      ...providerConfig("codex-responses"),
+      baseUrl: "https://chatgpt.com/backend-api/codex"
+    }, {
+      imageRetrySleep: async () => undefined
+    });
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("test-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_input, init) => new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) return;
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      })
+    );
+    let settled = false;
+
+    const pending = provider.generateImage("portrait", "1024x1024", "high");
+    void pending.then(
+      () => { settled = true; },
+      () => { settled = true; }
+    );
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    expect(settled).toBe(false);
+    expect(timeout).toHaveBeenCalledWith(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS);
+
+    const rejected = expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+    timeoutController.abort(new DOMException("timed out", "TimeoutError"));
+    await rejected;
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });
 
 function providerConfig(kind: ProviderKind): ProviderConfig {
@@ -358,17 +661,53 @@ function providerConfig(kind: ProviderKind): ProviderConfig {
   };
 }
 
+function webfetchBotConfig() {
+  return { tools: { maxCalls: 20 } } as unknown as BotConfig;
+}
+
+function expectProviderSafeWebFetch(tool: Record<string, any>) {
+  expect(tool).toMatchObject({
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["url", "semanticMatch"]
+    },
+    strict: false
+  });
+  expect(tool.parameters).not.toHaveProperty("oneOf");
+}
+
 function jsonResponse(payload: unknown) {
   return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-function interruptedBodyResponse() {
-  return {
-    ok: true,
+function interruptedBodyResponse(prefix = "", error: Error = new TypeError("terminated")) {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (prefix) controller.enqueue(new TextEncoder().encode(prefix));
+      controller.error(error);
+    }
+  });
+  return new Response(body, {
     status: 200,
-    headers: new Headers(),
-    text: vi.fn(async () => { throw new TypeError("terminated"); })
-  } as unknown as Response;
+    headers: { "content-type": "text/event-stream" }
+  });
+}
+
+function codexImageResponse() {
+  const item = {
+    type: "image_generation_call",
+    status: "completed",
+    result: "ZmFrZQ=="
+  };
+  const events = [
+    { type: "response.output_item.done", output_index: 0, item },
+    { type: "response.completed", response: { status: "completed", output: [item] } }
+  ];
+  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+    status: 200,
+    headers: { "content-type": "text/event-stream" }
+  });
 }
 
 function codexTextResponse(text: string) {
@@ -381,4 +720,11 @@ function codexTextResponse(text: string) {
     `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: message })}`,
     `data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", output: [message] } })}`
   ].join("\n\n"), { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+function codexErrorResponse(error: { type: string; code: string; message: string }) {
+  return new Response(`data: ${JSON.stringify({ type: "error", error })}`, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" }
+  });
 }

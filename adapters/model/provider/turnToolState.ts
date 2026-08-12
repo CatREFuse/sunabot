@@ -8,6 +8,7 @@ export function createTurnToolState(): TurnToolState {
   return {
     toolCallCount: 0,
     assistantTextSent: false,
+    assistantTextDeliveryCount: 0,
     acceptedToolNames: []
   };
 }
@@ -23,20 +24,15 @@ export function withTurnToolState(
     onAssistantText: async (text: string, source?: ProviderAssistantTextSource) => {
       await deliver(text, source);
       state.assistantTextSent = true;
+      state.assistantTextDeliveryCount += 1;
+      state.deliveredAssistantText = {
+        text,
+        source: source ?? "text"
+      };
     }
   };
 }
 
-export function hasAcceptedTurnActivity(state: TurnToolState) {
-  return state.assistantTextSent || state.acceptedToolNames.length > 0 || state.terminal !== undefined;
-}
-
 export function markAcceptedTool(state: TurnToolState, name: string) {
   state.acceptedToolNames.push(name);
-}
-
-export function toolOrderingError(name: string) {
-  return name === "no_reply"
-    ? "no_reply must be called before assistant text or any other tool."
-    : `Deferred tool ${name} must be called before assistant text or any other tool.`;
 }

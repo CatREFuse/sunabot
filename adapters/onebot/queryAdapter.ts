@@ -11,7 +11,7 @@ import {
 import type { ConversationDirectorySnapshotV1 } from "../../packages/contracts/messaging/messages.js";
 
 interface OneBotActionClient {
-  sendAction(action: string, params: Record<string, unknown>): Promise<unknown>;
+  sendAction(action: string, params: Record<string, unknown>, accountId?: string): Promise<unknown>;
 }
 
 export async function loadOneBotConversationDirectory(
@@ -56,7 +56,15 @@ export async function resolveOneBotAttachment(
   if (fileId && input.groupId != null) {
     const params: Record<string, unknown> = { group_id: input.groupId, file_id: fileId };
     if (input.busId != null) params.busid = input.busId;
-    const source = await tryAction(client, "get_group_file_url", "group_file_url", params, options, attempts);
+    const source = await tryAction(
+      client,
+      "get_group_file_url",
+      "group_file_url",
+      params,
+      input.accountId,
+      options,
+      attempts
+    );
     if (source?.kind === "url") return { ...source, via: "group_file_url" };
   } else if (fileId) {
     const source = await tryAction(
@@ -64,6 +72,7 @@ export async function resolveOneBotAttachment(
       "get_private_file_url",
       "private_file_url",
       { file_id: fileId },
+      input.accountId,
       options,
       attempts
     );
@@ -77,6 +86,7 @@ export async function resolveOneBotAttachment(
       "get_file",
       "file_content",
       fileId ? { file_id: fileId } : { file: file! },
+      input.accountId,
       options,
       attempts
     );
@@ -87,14 +97,18 @@ export async function resolveOneBotAttachment(
 
 export async function resolveOneBotAttachmentFallback(
   client: OneBotActionClient,
-  input: Pick<AttachmentResolutionInput, "fileId" | "file">,
+  input: Pick<AttachmentResolutionInput, "accountId" | "fileId" | "file">,
   options: AttachmentResolverOptions = {}
 ): Promise<ResolvedAttachmentSource | undefined> {
   const fileId = nonEmptyString(input.fileId);
   const file = nonEmptyString(input.file);
   if (!fileId && !file) return undefined;
   try {
-    const payload = await client.sendAction("get_file", fileId ? { file_id: fileId } : { file: file! });
+    const payload = await client.sendAction(
+      "get_file",
+      fileId ? { file_id: fileId } : { file: file! },
+      input.accountId
+    );
     const source = extractOneBotAttachmentSource(payload, options);
     return source ? { ...source, via: "file_content" } as ResolvedAttachmentSource : undefined;
   } catch {
@@ -137,11 +151,15 @@ async function tryAction(
   action: string,
   strategy: AttachmentResolutionStrategy,
   params: Record<string, unknown>,
+  accountId: string | undefined,
   options: AttachmentResolverOptions,
   attempts: AttachmentResolutionAttempt[]
 ) {
   try {
-    const source = extractOneBotAttachmentSource(await client.sendAction(action, params), options);
+    const source = extractOneBotAttachmentSource(
+      await client.sendAction(action, params, accountId),
+      options
+    );
     if (source) return source;
     attempts.push({ strategy, outcome: "empty" });
   } catch {

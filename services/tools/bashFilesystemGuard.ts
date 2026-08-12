@@ -27,10 +27,26 @@ export interface FrozenRestrictedPath {
   expectedMissing: boolean;
 }
 
+export type FrozenWorkbenchIdentities = readonly [FrozenFilesystemIdentity, FrozenFilesystemIdentity];
+
 export async function captureWorkbenchIdentity(workbenchRoot: string) {
   const frozen = await captureFilesystemIdentity(workbenchRoot, "directory");
   if (frozen.path !== workbenchRoot) throw new Error("workbench path is not canonical");
   return frozen;
+}
+
+export async function captureWorkbenchIdentities(
+  primaryRoot: string,
+  addressableRoot: string
+): Promise<FrozenWorkbenchIdentities> {
+  return Promise.all([
+    captureWorkbenchIdentity(primaryRoot),
+    captureWorkbenchIdentity(addressableRoot)
+  ]);
+}
+
+export async function verifyWorkbenchIdentities(identities: FrozenWorkbenchIdentities) {
+  await Promise.all(identities.map((identity) => verifyFrozenFilesystemIdentity(identity, "directory")));
 }
 
 export async function prepareRestrictedPaths(

@@ -4,8 +4,7 @@ import {
   reactive,
   readonly,
   shallowRef,
-  toRaw,
-  watch
+  toRaw
 } from "vue";
 import { activeAgentId } from "./agentScope";
 import { ApiRequestError, apiRequest, apiRequestUnscoped } from "./useAdminApi";
@@ -24,13 +23,12 @@ interface SectionState { kind: StateKind; message: string; field?: string }
 interface RequestContext { generation: number; agentId: string; signal: AbortSignal }
 export type ConfigWorkspaceScope = "agent" | "system";
 
-const AUTO_SAVE_DELAY_MS = 350;
-
 const emptyConfig: AppConfig = {
   schemaVersion: 1,
   server: { host: "127.0.0.1", port: 8787 },
   persona: {
     defaultAgentId: "plana",
+    name: "",
     agentWorkspace: "",
     systemPromptWorkspace: "workspace/business/prompts",
     systemPromptOverride: false
@@ -47,13 +45,25 @@ const emptyConfig: AppConfig = {
   bot: {
     adminQq: "",
     adminName: "",
+    replyModel: "gpt-5.5",
+    replyReasoningEffort: "medium",
+    imageReader: {
+      enabled: true,
+      providerId: "",
+      model: "gpt-5.5",
+      reasoningEffort: "low"
+    },
     replyDebounceMs: 5_000,
     pokeOnNoReply: false,
     quoteGroupReplies: true,
     quoteGroupReplyExcludedUserIds: [],
-    contextMessageLimit: 48,
+    contextMessageLimit: 32,
+    emojiSendSize: 512,
+    emojiSendSeparately: false,
     tone: {
       enabled: false,
+      segmentedReply: false,
+      followMainModel: false,
       providerId: "",
       model: "gpt-5.4-mini",
       reasoningEffort: "low",
@@ -61,19 +71,18 @@ const emptyConfig: AppConfig = {
       maxOutputTokens: 2400,
       maxRetries: 2
     },
+    director: { enabled: false },
     memory: {
       memoryModel: "gpt-5.4-mini",
       reasoningEffort: "medium",
-      messageThreshold: 48,
-      workingMemoryMaxEntries: 100,
-      workMemoryCompressInPrompt: "work_memory_compress_in.json",
-      workMemoryCompressOutPrompt: "work_memory_compress_out.json",
-      userProfilePrompt: "user_profile_prompt.json"
+      dreamRecentWindowHours: 24,
+      dreamRecentMemoryLimit: 24,
+      dreamOlderMemoryLimit: 12,
+      workMemoryCompressOutPrompt: "work_memory_compress_out.json"
     },
     orchestrator: {
       enabled: false,
       userGroupchatOrchestratorModel: "gpt-5.4-mini",
-      groupThreadModel: "gpt-5.4-mini",
       reasoningEffort: "medium",
       promptFile: "user_groupchat_orchestrator.json",
       messageThreshold: 10,
@@ -100,7 +109,6 @@ const emptyConfig: AppConfig = {
     },
     bash: {
       enabled: false,
-      adminPrivateBackend: "native",
       auditModel: "gpt-5.4-mini",
       strictMode: true,
       allowGroup: false,
@@ -130,6 +138,7 @@ export const sectionKeys: ConfigSectionKey[] = [
   "bot",
   "tone",
   "memory",
+  "director",
   "orchestrator",
   "tools",
   "bash",
@@ -141,36 +150,23 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
   const loading = shallowRef(false);
   const state = reactive<Record<ConfigSectionKey, SectionState>>({
     server: idle(), persona: idle(), providers: idle(), normalReply: idle(), bot: idle(), tone: idle(), memory: idle(),
-    broadcastStorm: idle(), orchestrator: idle(), tools: idle(), bash: idle(), onebot: idle()
+    director: idle(), broadcastStorm: idle(), orchestrator: idle(), tools: idle(), bash: idle(), onebot: idle()
   });
   const drafts = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
   const baselines = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
   const pendingTargets = new Set<SaveTarget>();
   let loaded = false;
-  let suppressWatch = false;
   let generation = 0;
   let contextAgentId = scope === "agent" ? activeAgentId() : "";
   let contextController = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let drainPromise: Promise<void> | undefined;
-
-  for (const key of sectionKeys) {
-    watch(
-      () => drafts[key],
-      () => {
-        if (!loaded || suppressWatch) return;
-        scheduleForSection(key);
-      },
-      { deep: true, flush: "sync" }
-    );
-  }
 
   if (getCurrentScope()) onScopeDispose(cancel);
 
-  async function load(options: { preserveDirty?: boolean } = {}) {
+  async function load(options: { preserveDirty?: boolean; agentId?: string } = {}) {
     const dirtyBefore = new Map(sectionKeys.map((key) => [key, isDirty(key)]));
     const savedDrafts = new Map(sectionKeys.map((key) => [key, clone(drafts[key])]));
-    beginContext();
+    beginContext(options.agentId);
     const context = currentContext();
     loading.value = true;
     try {
@@ -187,6 +183,12 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     }
   }
 
+  function commit(key: ConfigSectionKey) {
+    if (!loaded) return Promise.resolve();
+    scheduleForSection(key);
+    return startDrain();
+  }
+
   function scheduleForSection(key: ConfigSectionKey) {
     if (key === "orchestrator") {
       schedule("groupReply");
@@ -201,15 +203,10 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
   }
 
   function schedule(target: SaveTarget) {
-    if (!targetDirty(target)) return;
-    pendingTargets.add(target);
     const key = stateKey(target);
-    if (state[key].kind !== "saving") state[key] = { kind: "waiting", message: "等待同步" };
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = undefined;
-      void startDrain();
-    }, AUTO_SAVE_DELAY_MS);
+    if (!targetDirty(target) && state[key].kind !== "saving") return;
+    pendingTargets.add(target);
+    if (state[key].kind !== "saving") state[key] = { kind: "waiting", message: "等待保存" };
   }
 
   function scheduleAllDirty() {
@@ -219,8 +216,10 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
   function startDrain() {
     if (drainPromise) return drainPromise;
     const context = currentContext();
-    const running = drain(context).finally(() => {
-      if (drainPromise === running) drainPromise = undefined;
+    const running = drain(context).finally(async () => {
+      if (drainPromise !== running) return;
+      drainPromise = undefined;
+      if (isCurrent(context) && pendingTargets.size > 0) await startDrain();
     });
     drainPromise = running;
     return running;
@@ -250,7 +249,7 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
         }
       : submittedSection(target);
     const key = stateKey(target);
-    state[key] = { kind: "saving", message: "正在同步" };
+    state[key] = { kind: "saving", message: "保存中" };
     try {
       let result: ConfigPatchResponse;
       try {
@@ -266,10 +265,10 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     } catch (caught) {
       if (isAbort(caught) || !isCurrent(context)) return;
       state[key] = caught instanceof ApiRequestError && caught.status === 409
-        ? { kind: "conflict", message: "同步冲突，请修改后重试" }
+        ? { kind: "conflict", message: "保存冲突，请修改后重试" }
         : {
             kind: "error",
-            message: caught instanceof Error ? caught.message : "同步失败",
+            message: caught instanceof Error ? caught.message : "保存失败",
             ...(caught instanceof ApiRequestError && caught.field ? { field: caught.field } : {})
           };
     }
@@ -306,17 +305,12 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     resetState = true
   ) {
     const values = valuesFromConfig(result.config);
-    suppressWatch = true;
-    try {
-      envelope.value = result;
-      for (const key of sectionKeys) {
-        setSection(baselines, key, values[key]);
-        if (dirtyBefore?.get(key)) setSection(drafts, key, savedDrafts.get(key) as SectionDrafts[typeof key]);
-        else setSection(drafts, key, values[key]);
-        if (resetState) state[key] = idle();
-      }
-    } finally {
-      suppressWatch = false;
+    envelope.value = result;
+    for (const key of sectionKeys) {
+      setSection(baselines, key, values[key]);
+      if (dirtyBefore?.get(key)) setSection(drafts, key, savedDrafts.get(key) as SectionDrafts[typeof key]);
+      else setSection(drafts, key, values[key]);
+      if (resetState) state[key] = idle();
     }
   }
 
@@ -324,55 +318,49 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     const dirtyBefore = new Map(sectionKeys.map((key) => [key, isDirty(key)]));
     const savedDrafts = new Map(sectionKeys.map((key) => [key, clone(drafts[key])]));
     const values = valuesFromConfig(result.config);
-    suppressWatch = true;
-    try {
-      envelope.value = result;
-      for (const section of sectionKeys) {
-        setSection(baselines, section, values[section]);
-        if (target === "groupReply" && section === "orchestrator") {
-          const currentDraft = savedDrafts.get(section) as SectionDrafts["orchestrator"];
-          const submittedDraft = (submitted as { orchestrator: SectionDrafts["orchestrator"] }).orchestrator;
-          setSection(drafts, section, same(currentDraft, submittedDraft) ? values[section] : currentDraft);
-        } else if (target === "groupReply" && section === "onebot") {
-          const currentDraft = savedDrafts.get(section) as SectionDrafts["onebot"];
-          const nextDraft = clone(currentDraft);
-          if (currentDraft.autoReplyUserGroup === (submitted as { enabled: boolean }).enabled) {
-            nextDraft.autoReplyUserGroup = values.onebot.autoReplyUserGroup;
-          }
-          setSection(drafts, section, nextDraft);
-        } else if (target !== "groupReply" && section === target) {
-          const currentDraft = savedDrafts.get(section) as SectionDrafts[typeof section];
-          setSection(drafts, section, same(currentDraft, submitted) ? values[section] : currentDraft);
-        } else if (dirtyBefore.get(section)) {
-          setSection(drafts, section, savedDrafts.get(section) as SectionDrafts[typeof section]);
-        } else {
-          setSection(drafts, section, values[section]);
+    envelope.value = result;
+    for (const section of sectionKeys) {
+      setSection(baselines, section, values[section]);
+      if (target === "groupReply" && section === "orchestrator") {
+        const currentDraft = savedDrafts.get(section) as SectionDrafts["orchestrator"];
+        const submittedDraft = (submitted as { orchestrator: SectionDrafts["orchestrator"] }).orchestrator;
+        setSection(drafts, section, same(currentDraft, submittedDraft) ? values[section] : currentDraft);
+      } else if (target === "groupReply" && section === "onebot") {
+        const currentDraft = savedDrafts.get(section) as SectionDrafts["onebot"];
+        const nextDraft = clone(currentDraft);
+        if (currentDraft.autoReplyUserGroup === (submitted as { enabled: boolean }).enabled) {
+          nextDraft.autoReplyUserGroup = values.onebot.autoReplyUserGroup;
         }
+        setSection(drafts, section, nextDraft);
+      } else if (target !== "groupReply" && section === target) {
+        const currentDraft = savedDrafts.get(section) as SectionDrafts[typeof section];
+        setSection(drafts, section, same(currentDraft, submitted) ? values[section] : currentDraft);
+      } else if (dirtyBefore.get(section)) {
+        setSection(drafts, section, savedDrafts.get(section) as SectionDrafts[typeof section]);
+      } else {
+        setSection(drafts, section, values[section]);
       }
-    } finally {
-      suppressWatch = false;
     }
     const key = stateKey(target);
     const hasNewEdits = targetDirty(target);
     const restart = result.applyMode === "restart" || Boolean(result.restartRequiredFields?.length);
     state[key] = restart
-      ? { kind: "restart", message: hasNewEdits ? "已同步，重启后生效；正在同步后续修改" : "已同步，重启后生效" }
+      ? { kind: "restart", message: hasNewEdits ? "重启后生效；还有修改待保存" : "重启后生效" }
       : hasNewEdits
-        ? { kind: "waiting", message: "正在同步后续修改" }
-        : { kind: "saved", message: "已同步" };
+        ? { kind: "waiting", message: "还有修改待保存" }
+        : { kind: "saved", message: "" };
   }
 
   async function flush() {
     if (!loaded) return true;
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
+    if (drainPromise) await drainPromise;
+    if (sectionKeys.some((key) => isDirty(key) && (state[key].kind === "error" || state[key].kind === "conflict"))) {
+      return false;
+    }
+    if (isGroupReplyDirty() && (state.orchestrator.kind === "error" || state.orchestrator.kind === "conflict")) {
+      return false;
     }
     scheduleAllDirty();
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
     await startDrain();
     return !sectionKeys.some((key) => isDirty(key));
   }
@@ -381,16 +369,14 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     generation += 1;
     loaded = false;
     pendingTargets.clear();
-    if (timer) clearTimeout(timer);
-    timer = undefined;
     contextController.abort();
     contextController = new AbortController();
     drainPromise = undefined;
   }
 
-  function beginContext() {
+  function beginContext(agentId?: string) {
     cancel();
-    contextAgentId = scope === "agent" ? activeAgentId() : "";
+    contextAgentId = scope === "agent" ? (agentId?.trim() || activeAgentId()) : "";
   }
 
   function currentContext(): RequestContext {
@@ -459,6 +445,7 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     state,
     loading: readonly(loading),
     load,
+    commit,
     flush,
     cancel,
     isDirty,
@@ -466,7 +453,8 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     isOneBotSettingsDirty,
     isReplyBehaviorDirty,
     isNoReplyPokeDirty,
-    isOneBotConnectionDirty
+    isOneBotConnectionDirty,
+    agentId: () => contextAgentId
   };
 }
 
@@ -480,18 +468,27 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
     bot: {
       adminQq: config.bot.adminQq,
       adminName: config.bot.adminName,
+      replyModel: config.bot.replyModel ?? emptyConfig.bot.replyModel,
+      replyReasoningEffort: config.bot.replyReasoningEffort ?? emptyConfig.bot.replyReasoningEffort,
+      imageReader: clone(config.bot.imageReader ?? {
+        ...emptyConfig.bot.imageReader,
+        providerId: config.providers.defaultProviderId
+      }),
       replyDebounceMs: config.bot.replyDebounceMs ?? emptyConfig.bot.replyDebounceMs,
       pokeOnNoReply: config.bot.pokeOnNoReply,
       quoteGroupReplies: config.bot.quoteGroupReplies,
       quoteGroupReplyExcludedUserIds: [...(config.bot.quoteGroupReplyExcludedUserIds ?? [])],
-      contextMessageLimit: config.bot.contextMessageLimit
+      contextMessageLimit: config.bot.contextMessageLimit ?? emptyConfig.bot.contextMessageLimit,
+      emojiSendSize: config.bot.emojiSendSize ?? emptyConfig.bot.emojiSendSize,
+      emojiSendSeparately: config.bot.emojiSendSeparately === true
     },
-    tone: clone(config.bot.tone ?? emptyConfig.bot.tone),
+    tone: {
+      ...clone(emptyConfig.bot.tone),
+      ...clone(config.bot.tone ?? {})
+    },
     memory: clone(config.bot.memory),
-    orchestrator: {
-      ...clone(config.bot.orchestrator),
-      groupThreadModel: config.bot.orchestrator.groupThreadModel?.trim() || emptyConfig.bot.orchestrator.groupThreadModel
-    },
+    director: clone(config.bot.director ?? emptyConfig.bot.director),
+    orchestrator: clone(config.bot.orchestrator),
     tools: {
       ...clone(config.bot.tools),
       overrides: clone(config.bot.tools.overrides ?? {}),

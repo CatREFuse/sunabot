@@ -29,8 +29,8 @@ describe("useToolCatalog", () => {
         unavailabilityKind: "runtime",
         accessLabel: "管理员 QQ 私聊可用",
         accessDescription: "其他会话不可用。",
-        executionBackend: "docker",
-        runtimeReasonCode: "BASH_DOCKER_ISOLATION_UNAVAILABLE",
+        executionBackend: "native",
+        runtimeReasonCode: "BASH_NATIVE_ISOLATION_UNAVAILABLE",
         defaultDescription: "Default search description.",
         promptDescription: "Prompt search description.",
         description: "Prompt search description.",
@@ -55,8 +55,8 @@ describe("useToolCatalog", () => {
       unavailabilityKind: "runtime",
       accessLabel: "管理员 QQ 私聊可用",
       accessDescription: "其他会话不可用。",
-      executionBackend: "docker",
-      runtimeReasonCode: "BASH_DOCKER_ISOLATION_UNAVAILABLE"
+      executionBackend: "native",
+      runtimeReasonCode: "BASH_NATIVE_ISOLATION_UNAVAILABLE"
     });
     await catalog.load();
     expect(apiRequest).toHaveBeenCalledTimes(1);
@@ -83,7 +83,7 @@ describe("useToolCatalog", () => {
   it("drops invalid availability and backend enums", async () => {
     apiRequest.mockResolvedValueOnce({
       tools: [{
-        name: "workspace_bash",
+        name: "native_bash",
         title: "Bash",
         description: "执行命令",
         enabled: true,
@@ -98,6 +98,27 @@ describe("useToolCatalog", () => {
 
     expect(catalog.tools.value[0]).not.toHaveProperty("unavailabilityKind");
     expect(catalog.tools.value[0]).not.toHaveProperty("executionBackend");
+  });
+
+  it("normalizes Native Bash environment status", async () => {
+    apiRequest.mockResolvedValueOnce({
+      tools: [{
+        name: "native_bash",
+        title: "Bash",
+        description: "执行命令",
+        enabled: true,
+        bashEnvironments: {
+          native: { available: true }
+        }
+      }]
+    });
+    const catalog = useToolCatalog();
+
+    await catalog.load();
+
+    expect(catalog.tools.value[0]?.bashEnvironments).toEqual({
+      native: { available: true }
+    });
   });
 
   it("keeps the newest forced refresh result", async () => {

@@ -27,39 +27,13 @@ const usedNames = computed(() => usedPromptVariableNames(content.value, props.fi
 const usageCounts = computed(() => promptVariableUsageCounts(content.value, props.file?.variables ?? []));
 const workspaceStyle = computed(() => ({ "--variable-panel-width": `${variablePanelWidth.value}px` }));
 const promptTextField = useTemplateRef<InstanceType<typeof PromptTextField>>("promptTextField");
-const finalWorkspace = useTemplateRef<HTMLElement>("finalWorkspace");
-const lastFinalTextarea = shallowRef<HTMLTextAreaElement | null>(null);
+const finalPromptForm = useTemplateRef<InstanceType<typeof FinalPromptForm>>("finalPromptForm");
 watch(() => props.file?.id, () => { variableDrawerOpen.value = false; });
 
 function insertVariable(name: string) {
-  if (props.file?.kind === "final") insertFinalVariable(name);
+  if (props.file?.kind === "final") finalPromptForm.value?.insertVariable(name);
   else promptTextField.value?.insertVariable(name);
   variableDrawerOpen.value = false;
-}
-
-function rememberFinalTextarea(event: FocusEvent) {
-  if (event.target instanceof HTMLTextAreaElement) lastFinalTextarea.value = event.target;
-}
-
-function insertFinalVariable(name: string) {
-  const target = lastFinalTextarea.value;
-  if (!target || !finalWorkspace.value?.contains(target)) return;
-  const token = variableToken(name);
-  const scrollTop = target.scrollTop;
-  const scrollLeft = target.scrollLeft;
-  target.setRangeText(token, target.selectionStart, target.selectionEnd, "end");
-  target.dispatchEvent(new Event("input", { bubbles: true }));
-  target.focus({ preventScroll: true });
-  target.scrollTop = scrollTop;
-  target.scrollLeft = scrollLeft;
-}
-
-function variableToken(name: string) {
-  const token = `@{${name}}`;
-  if (!semanticXml.value) return token;
-  const normalized = name.replace(/[^A-Za-z0-9_-]+/g, "_");
-  const tag = /^[A-Za-z_]/.test(normalized) ? normalized : `variable_${normalized}`;
-  return `<${tag}>${token}</${tag}>`;
 }
 
 function resizeVariablePanel(clientX: number, target: HTMLElement) {
@@ -126,8 +100,8 @@ function resetVariablePanelWidth() {
     </div>
     <div v-else class="flex min-h-0 flex-1 flex-col p-3 md:p-6">
       <div class="prompt-editor__workspace min-h-0 flex-1" :style="workspaceStyle">
-        <div v-if="file.kind === 'final'" ref="finalWorkspace" class="min-h-0 overflow-hidden" @focusin="rememberFinalTextarea">
-          <FinalPromptForm v-model="content" :variables="file.variables ?? []" :semantic-xml="semanticXml" :show-variables="false" />
+        <div v-if="file.kind === 'final'" class="min-h-0 overflow-hidden">
+          <FinalPromptForm ref="finalPromptForm" v-model="content" :variables="file.variables ?? []" :semantic-xml="semanticXml" :show-variables="false" />
         </div>
         <PromptTextField
           v-else
@@ -217,10 +191,30 @@ function resetVariablePanelWidth() {
 .prompt-editor__variables { display: none; }
 .prompt-editor__splitter { display: none; }
 
+@container (min-width: 640px) {
+  .prompt-editor .prompt-editor__workspace {
+    grid-template-rows: minmax(0, 1fr) minmax(144px, 28%);
+    gap: 12px;
+    overflow: hidden;
+  }
+
+  .prompt-editor .prompt-editor__variables {
+    display: flex;
+    min-height: 0;
+    overflow: hidden;
+    border: 1px solid rgb(var(--color-visible));
+    border-radius: 8px;
+  }
+
+  .prompt-editor .variable-drawer-trigger { display: none; }
+}
+
 @container (min-width: 960px) {
   .prompt-editor .prompt-editor__workspace {
     grid-template-areas: "editor splitter variables";
     grid-template-columns: minmax(0, 1fr) 16px var(--variable-panel-width);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
     overflow: hidden;
     background: transparent;
   }
@@ -230,8 +224,6 @@ function resetVariablePanelWidth() {
     grid-area: variables;
     display: flex;
     overflow: hidden;
-    border: 1px solid rgb(var(--color-visible));
-    border-radius: 4px;
   }
   .prompt-editor .prompt-editor__splitter {
     z-index: 5;
@@ -276,6 +268,5 @@ function resetVariablePanelWidth() {
   .prompt-editor .prompt-editor__splitter:focus-visible {
     outline: 0;
   }
-  .prompt-editor .variable-drawer-trigger { display: none; }
 }
 </style>

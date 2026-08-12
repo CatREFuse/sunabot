@@ -4,7 +4,7 @@ import type { AgentAvatarInput } from "../../types";
 import AgentAvatarCropDialog from "./AgentAvatarCropDialog.vue";
 
 const SUPPORTED_AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
-const props = withDefaults(defineProps<{ label?: string; disabled?: boolean }>(), {
+withDefaults(defineProps<{ label?: string; disabled?: boolean }>(), {
   label: "选择头像",
   disabled: false
 });

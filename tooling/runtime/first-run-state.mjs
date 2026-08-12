@@ -8,29 +8,47 @@ import {
   sha256Json,
   validateMultiAgentWorkspacePath
 } from "../../packages/platform/multiAgentMigrationGate.mjs";
+import { readAdminCredentialRecord } from "../admin/admin-credentials-core.mjs";
 
 export const FIRST_RUN_JOURNAL = "runtime/first-run-bootstrap.json";
 const FIRST_RUN_SIGNING_KEY = "secrets/first-run-bootstrap.key";
 const COMPLETED_REPORT = "runtime/first-run-bootstrap.completed.json";
+const ADMIN_CREDENTIALS = "secrets/admin-credentials.json";
 const BOUNDARIES = ["marker", "main", "queue", "manifest", "registration", "account-runtime"];
-const MAIN_SCHEMA_VERSION = 11;
+const COMPLETION_READINESS_KEYS = [
+  "coreListening",
+  "onebotListening",
+  "accountRuntimeReady",
+  "napcatReady",
+  "runtimeReady",
+  "stable"
+];
+const MAIN_SCHEMA_VERSION = 17;
 const QUEUE_SCHEMA_VERSION = 5;
 const MAIN_TABLES = [
   "admin_sessions",
   "agent_accounts",
   "agents",
   "app_metadata",
-  "conversation_thread_states",
   "conversations",
+  "director_daily_schedule_revisions",
+  "director_daily_schedules",
+  "director_schedule_task_links",
+  "dream_memory_archive",
+  "dream_runs",
   "emojis",
+  "emoji_versions",
   "image_history",
-  "memory_batches",
+  "memory_recall_receipts",
+  "memory_recall_stats",
   "memory_records",
-  "memory_scheduler",
+  "memory_source_revisions",
   "model_call_aggregates",
   "model_call_model_aggregates",
   "outbox_local_effects",
-  "request_logs"
+  "request_logs",
+  "scheduled_task_runs",
+  "scheduled_tasks"
 ];
 const QUEUE_TABLES = ["outbox", "schema_migrations", "session_events", "sessions", "tool_jobs", "turns"];
 
@@ -75,7 +93,7 @@ export async function inspectFirstRunBootstrap(workspaceInput) {
   return { state: "active", workspace, journal };
 }
 
-export async function completeFirstRunBootstrap(workspaceInput, now = new Date()) {
+export async function inspectFirstRunBootstrapCompletion(workspaceInput) {
   const active = await inspectFirstRunBootstrap(workspaceInput);
   if (active.state !== "active") return active;
   const missing = await missingBoundaries(active.workspace);
@@ -89,20 +107,30 @@ export async function completeFirstRunBootstrap(workspaceInput, now = new Date()
   if (gate.state !== "trusted" || gate.marker?.markerSha256 !== active.journal.markerSha256) {
     throw firstRunError("FIRST_RUN_BOUNDARY_INVALID", "首次运行完整状态未通过多 Agent 门禁。");
   }
-  const signingKey = await readSigningKey(active.workspace);
+  return { ...active, state: "ready" };
+}
+
+export async function completeFirstRunBootstrap(workspaceInput, options = {}) {
+  const ready = await inspectFirstRunBootstrapCompletion(workspaceInput);
+  if (ready.state !== "ready") return ready;
+  const readiness = validateCompletionReadiness(options.readiness);
+  const completedAt = validDate(options.now ?? new Date()).toISOString();
+  const signingKey = await readSigningKey(ready.workspace);
+  await validateAdminCredentials(ready.workspace);
   const reportPayload = {
-    ...active.journal,
+    ...ready.journal,
     state: "completed",
-    completedAt: validDate(now).toISOString()
+    completedAt,
+    readiness: { ...readiness, adminAuthReadable: true }
   };
   const report = {
     ...reportPayload,
     completionHmacSha256: hmacJson(reportPayload, signingKey)
   };
-  await atomicJson(path.join(active.workspace, COMPLETED_REPORT), report);
-  await fs.rm(path.join(active.workspace, FIRST_RUN_JOURNAL));
-  await syncDirectory(path.join(active.workspace, "runtime"));
-  return { state: "completed", workspace: active.workspace, report };
+  await atomicJson(path.join(ready.workspace, COMPLETED_REPORT), report);
+  await fs.rm(path.join(ready.workspace, FIRST_RUN_JOURNAL));
+  await syncDirectory(path.join(ready.workspace, "runtime"));
+  return { state: "completed", workspace: ready.workspace, report };
 }
 
 export async function rollbackFirstRunBootstrap(workspaceInput, now = new Date()) {
@@ -202,6 +230,9 @@ async function validateExistingBoundaries(workspace) {
   }
 
   if (mainPresent) validateRegistration(path.join(workspace, "business/data/sunabot.sqlite"));
+  if (await safePathExists(workspace, ADMIN_CREDENTIALS, "file")) {
+    await validateAdminCredentials(workspace);
+  }
 }
 
 async function missingBoundaries(workspace) {
@@ -210,6 +241,7 @@ async function missingBoundaries(workspace) {
     ["main", "business/data/sunabot.sqlite", "file"],
     ["queue", "business/data/session-queue.sqlite", "file"],
     ["manifest", "business/agents/plana/agent.json", "file"],
+    ["admin-credentials", ADMIN_CREDENTIALS, "file"],
     ["account-runtime", "runtime/napcat/accounts/primary/config-full", "directory"],
     ["account-runtime", "runtime/napcat/accounts/primary/qq", "directory"],
     ["account-runtime", "runtime/napcat/accounts/primary/plugins", "directory"]
@@ -229,6 +261,27 @@ async function missingBoundaries(workspace) {
     missing.push("registration");
   }
   return [...new Set(missing)];
+}
+
+async function validateAdminCredentials(workspace) {
+  try {
+    await readAdminCredentialRecord(path.join(workspace, ADMIN_CREDENTIALS));
+  } catch (error) {
+    throw firstRunError(
+      "FIRST_RUN_BOUNDARY_INVALID",
+      `首次运行的管理员凭据无效：${safeMessage(error)}。`
+    );
+  }
+}
+
+function validateCompletionReadiness(value) {
+  if (!plainObject(value) || COMPLETION_READINESS_KEYS.some((key) => value[key] !== true)) {
+    throw firstRunError(
+      "FIRST_RUN_RUNTIME_NOT_READY",
+      "首次运行的 Core、OneBot、账号运行时或 NapCat 尚未通过完整启动检查。"
+    );
+  }
+  return Object.fromEntries(COMPLETION_READINESS_KEYS.map((key) => [key, true]));
 }
 
 function validateSqlite(filePath, requiredTables, boundary) {
@@ -264,15 +317,28 @@ function validateMainSchema(database) {
   requireColumns(database, "agent_accounts", [
     "id", "agent_id", "label", "qq_id", "enabled", "webui_port", "created_at", "updated_at"
   ]);
-  requireColumns(database, "conversation_thread_states", [
-    "conversation_id", "state_schema_version", "revision", "processed_through_sequence",
-    "last_run_key", "classifier_model", "prompt_revision", "state_json", "created_at", "updated_at"
-  ]);
   requireColumns(database, "emojis", [
     "emoji_key", "file_name", "source", "size_bytes", "width", "height", "created_at", "updated_at"
   ]);
+  requireColumns(database, "emoji_versions", [
+    "emoji_key", "file_name", "source", "size_bytes", "width", "height", "created_at"
+  ]);
+  requireColumns(database, "scheduled_tasks", [
+    "id", "revision", "name", "enabled", "permanent_retention", "schedule_kind",
+    "cron_expression", "timezone", "run_at",
+    "context_text", "targets_json", "next_run_at", "last_scheduled_at", "created_at", "updated_at"
+  ]);
+  requireColumns(database, "scheduled_task_runs", [
+    "id", "task_id", "task_revision", "scheduled_for", "status", "snapshot_json", "result_text",
+    "error_text", "attempts", "worker_id", "lease_until", "created_at", "updated_at",
+    "generated_at", "completed_at", "delivery_attempts", "last_delivery_error", "next_delivery_at"
+  ]);
+  requireColumns(database, "memory_source_revisions", ["source", "revision"]);
   requireIndexes(database, "agent_accounts", ["agent_accounts_agent", "agent_accounts_webui_port"]);
   requireIndexes(database, "emojis", ["emojis_updated_at"]);
+  requireIndexes(database, "emoji_versions", ["emoji_versions_key_created_at"]);
+  requireIndexes(database, "scheduled_tasks", ["scheduled_tasks_due", "scheduled_tasks_archive"]);
+  requireIndexes(database, "scheduled_task_runs", ["scheduled_task_runs_status", "scheduled_task_runs_task"]);
   const foreignKeys = database.prepare("PRAGMA foreign_key_list(agent_accounts)").all();
   if (!foreignKeys.some((row) => (
     row.table === "agents"
@@ -283,15 +349,15 @@ function validateMainSchema(database) {
   ))) {
     throw new Error("agent_accounts foreign key is invalid");
   }
-  const threadForeignKeys = database.prepare("PRAGMA foreign_key_list(conversation_thread_states)").all();
-  if (!threadForeignKeys.some((row) => (
-    row.table === "conversations"
-    && row.from === "conversation_id"
-    && row.to === "id"
+  const emojiVersionForeignKeys = database.prepare("PRAGMA foreign_key_list(emoji_versions)").all();
+  if (!emojiVersionForeignKeys.some((row) => (
+    row.table === "emojis"
+    && row.from === "emoji_key"
+    && row.to === "emoji_key"
     && row.on_update === "CASCADE"
     && row.on_delete === "CASCADE"
   ))) {
-    throw new Error("conversation_thread_states foreign key is invalid");
+    throw new Error("emoji_versions foreign key is invalid");
   }
   requireSchemaSql(database, "agents", ["check (enabled in (0, 1))", "workspace text not null unique"]);
   requireSchemaSql(database, "agent_accounts", [
@@ -299,19 +365,46 @@ function validateMainSchema(database) {
     "check (webui_port between 1 and 65535)",
     "unique (webui_port)"
   ]);
-  requireSchemaSql(database, "conversation_thread_states", [
-    "strict",
-    "check (state_schema_version = 1)",
-    "check (revision >= 1)",
-    "check (processed_through_sequence >= 0)",
-    "check (json_valid(state_json))"
-  ]);
   requireSchemaSql(database, "emojis", [
     "strict",
     "source in ('upload', 'generated')",
     "check (size_bytes > 0)",
     "check (width > 0)",
     "check (height > 0)"
+  ]);
+  requireSchemaSql(database, "emoji_versions", [
+    "strict",
+    "source in ('upload', 'generated')",
+    "check (size_bytes > 0)",
+    "check (width > 0)",
+    "check (height > 0)",
+    "primary key (emoji_key, file_name)"
+  ]);
+  requireSchemaSql(database, "scheduled_tasks", [
+    "strict",
+    "check (enabled in (0, 1))",
+    "check (permanent_retention in (0, 1))",
+    "schedule_kind in ('cron', 'once')",
+    "check (json_valid(targets_json))",
+    "schedule_kind = 'cron' and cron_expression is not null and timezone is not null and run_at is null",
+    "schedule_kind = 'once' and cron_expression is null and timezone is null and run_at is not null"
+  ]);
+  requireSchemaSql(database, "scheduled_task_runs", [
+    "strict",
+    "status in ('pending', 'running', 'generated', 'completed', 'failed')",
+    "check (json_valid(snapshot_json))",
+    "check (attempts >= 0)",
+    "unique (task_id, scheduled_for)"
+  ]);
+  requireSchemaSql(database, "memory_source_revisions", [
+    "strict",
+    "source in ('working', 'long_term', 'user_profile')",
+    "check (revision >= 0)"
+  ]);
+  requireTriggers(database, [
+    "memory_records_revision_insert",
+    "memory_records_revision_update",
+    "memory_records_revision_delete"
   ]);
 }
 
@@ -363,6 +456,14 @@ function requireIndexes(database, table, expected) {
   const indexes = new Set(database.prepare(`PRAGMA index_list(${table})`).all().map((row) => String(row.name)));
   const missing = expected.filter((index) => !indexes.has(index));
   if (missing.length > 0) throw new Error(`${table} missing indexes: ${missing.join(", ")}`);
+}
+
+function requireTriggers(database, expected) {
+  const triggers = new Set(database.prepare(
+    "SELECT name FROM sqlite_schema WHERE type = 'trigger'"
+  ).all().map((row) => String(row.name)));
+  const missing = expected.filter((trigger) => !triggers.has(trigger));
+  if (missing.length > 0) throw new Error(`missing triggers: ${missing.join(", ")}`);
 }
 
 function requireIndexSql(database, index, fragments) {

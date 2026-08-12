@@ -17,7 +17,8 @@ jobs:
           cache: npm
       - run: node --version
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - name: Install Chromium for Playwright UI tests only
+        run: npx playwright install --with-deps chromium
       - run: npm run verify
       - if: failure()
         uses: actions/upload-artifact@v4

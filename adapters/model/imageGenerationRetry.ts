@@ -20,11 +20,12 @@ export interface ImageGenerationFailureContext extends ImageGenerationAttemptCon
 export interface ImageGenerationRetryOptions {
   sleep?: (delayMs: number) => Promise<void>;
   onAttemptFailure?: (error: unknown, context: ImageGenerationFailureContext) => void | Promise<void>;
+  signal?: AbortSignal;
 }
 
 export class ImageGenerationTransportError extends Error {
   constructor(cause: unknown) {
-    super("Image generation request failed before receiving an HTTP response.", { cause });
+    super("Image generation transport failed before the response completed.", { cause });
     this.name = "ImageGenerationTransportError";
   }
 }
@@ -47,6 +48,7 @@ export async function runImageGenerationWithRetry<T>(
   const sleep = options.sleep ?? defaultSleep;
   for (let attempt = 1; attempt <= IMAGE_GENERATION_MAX_ATTEMPTS; attempt += 1) {
     try {
+      options.signal?.throwIfAborted();
       const value = await operation({ attempt, maxAttempts: IMAGE_GENERATION_MAX_ATTEMPTS });
       return { value, attempt, maxAttempts: IMAGE_GENERATION_MAX_ATTEMPTS };
     } catch (error) {
@@ -59,7 +61,7 @@ export async function runImageGenerationWithRetry<T>(
         retryDelayMs
       });
       if (!willRetry) throw error;
-      await sleep(retryDelayMs);
+      await retrySleep(sleep, retryDelayMs, options.signal);
     }
   }
   throw new Error("Image generation retry loop ended unexpectedly.");
@@ -75,7 +77,7 @@ export function isRetryableImageGenerationError(error: unknown) {
 
 export function isImageGenerationCancellation(error: unknown) {
   return error instanceof APIUserAbortError ||
-    (error instanceof Error && error.name === "AbortError");
+    (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError"));
 }
 
 export function imageGenerationErrorStatus(error: unknown) {
@@ -105,4 +107,29 @@ function errorCode(error: unknown) {
 
 function defaultSleep(delayMs: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function retrySleep(
+  sleep: (delayMs: number) => Promise<void>,
+  delayMs: number,
+  signal?: AbortSignal
+) {
+  if (!signal) return sleep(delayMs);
+  signal.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason ?? new Error("aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    void Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return sleep(delayMs);
+    }).then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", onAbort));
+  });
 }

@@ -5,7 +5,6 @@ import path from "node:path";
 import { WebSocket } from "ws";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  assertNonEmptyProviderReply,
   buildNapCatSmokeConfig,
   loadSmokeContext,
   main,
@@ -38,12 +37,6 @@ afterEach(async () => {
 });
 
 describe("runtime smoke safety helpers", () => {
-  it("requires a real non-empty provider reply", () => {
-    expect(assertNonEmptyProviderReply("  已连接  ")).toBe("已连接");
-    expect(() => assertNonEmptyProviderReply("   \n")).toThrow("模型返回内容为空");
-    expect(() => assertNonEmptyProviderReply({ text: "not a string" })).toThrow("模型返回内容为空");
-  });
-
   it("redacts known credentials without exposing their value", () => {
     const secret = "secret-provider-token-123";
     const result = scrubSecrets(`fetch failed authorization: Bearer ${secret} api_key=${secret}`, [secret]);

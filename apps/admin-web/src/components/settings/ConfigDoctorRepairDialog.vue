@@ -28,7 +28,7 @@ function actionLabel(action: ConfigDoctorProposal["changes"][number]["action"]) 
     @close="close"
   >
     <section v-if="proposal" class="w-full max-w-xl rounded border border-visible bg-panel p-6">
-      <h2 id="config-doctor-repair-title" class="text-xl font-medium text-display">应用这些修复？</h2>
+      <h2 id="config-doctor-repair-title" class="text-xl font-medium text-display">修复全部配置？</h2>
       <p class="mt-3 text-sm leading-6 text-mute">将先备份当前配置，再应用下列修改。</p>
 
       <div class="mt-6 max-h-[40vh] overflow-y-auto divide-y divide-line border-y border-line">
@@ -46,7 +46,7 @@ function actionLabel(action: ConfigDoctorProposal["changes"][number]["action"]) 
       <div class="mt-8 flex flex-wrap justify-end gap-2">
         <button class="btn btn-ghost" type="button" :disabled="applying" @click="close">取消</button>
         <button class="btn btn-primary" type="button" :disabled="applying" @click="emit('confirm')">
-          <i class="bx bx-first-aid" aria-hidden="true"></i>{{ applying ? "修复中" : "应用修复" }}
+          <i class="bx bx-first-aid" aria-hidden="true"></i>{{ applying ? "修复中" : "确认修复" }}
         </button>
       </div>
     </section>

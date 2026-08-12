@@ -4,8 +4,7 @@ import type { McpRequestOptions } from "./mcpCatalogSnapshot.js";
 import {
   McpHostServerPool,
   mcpHostServerKey,
-  type McpRuntimeClientFactory,
-  type McpRuntimeClientPort
+  type McpRuntimeClientFactory
 } from "./mcpHostServerPool.js";
 import { assertBoundedMcpToolArguments } from "./mcpJsonLimits.js";
 import { assertCanonicalMcpResourceUri } from "./mcpResourceUri.js";

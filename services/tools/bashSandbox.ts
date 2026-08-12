@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,36 +11,20 @@ import {
 export const WORKSPACE_BASH_ISOLATION_ERROR = "BASH_ISOLATION_UNAVAILABLE";
 export const WORKSPACE_BASH_SANDBOX_EXECUTABLE = "/usr/bin/bwrap";
 export const WORKSPACE_BASH_RESOURCE_LIMITER = "/usr/bin/prlimit";
-export const WORKSPACE_BASH_DOCKER_IMAGE = "sunabot-bash:local";
+export const WORKSPACE_BASH_NATIVE_HOST_EXECUTABLE = "/bin/bash";
 export const WORKSPACE_BASH_VIRTUAL_ROOT = "/workbench";
-const WORKSPACE_BASH_DOCKER_ENV_EXECUTABLE = "/usr/bin/env";
-const WORKSPACE_BASH_DOCKER_TEST_EXECUTABLE = "/usr/bin/test";
+export const WORKSPACE_BASH_SKILLS_ROOT = "/skills";
+export const WORKSPACE_BASH_MCP_ROOT = "/mcp";
 const WORKSPACE_BASH_TARGET_PATH = "/usr/local/bin:/usr/bin:/bin";
-const WORKSPACE_BASH_TARGET_ENVIRONMENT = [
-  "HOME=/workbench",
-  "PWD=/workbench",
-  `PATH=${WORKSPACE_BASH_TARGET_PATH}`,
-  "LANG=C.UTF-8",
-  "LC_ALL=C.UTF-8",
-  "TMPDIR=/tmp",
-  "TMP=/tmp",
-  "TEMP=/tmp",
-  "SHELL=/bin/bash",
-  "USER=sunabot"
-] as const;
-const WORKSPACE_BASH_PROXY_VARIABLES = [
-  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "FTP_PROXY", "NO_PROXY",
-  "http_proxy", "https_proxy", "all_proxy", "ftp_proxy", "no_proxy"
-] as const;
+const WORKSPACE_BASH_NATIVE_HOST_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
-export type WorkspaceBashSandboxKind = "bubblewrap" | "docker";
+export type WorkspaceBashSandboxKind = "bubblewrap" | "host";
 
 export interface WorkspaceBashSandbox {
   kind: WorkspaceBashSandboxKind;
   executable: string;
   resourceLimiter?: string;
-  image?: string;
-  launcherEnvironment?: Record<string, string>;
+  networkAccess?: boolean;
 }
 
 export type WorkspaceBashExecution =
@@ -52,24 +35,39 @@ export interface WorkspaceBashInvocation {
   file: string;
   args: string[];
   env?: Record<string, string>;
-  cleanup?: {
-    file: string;
-    args: string[];
-    env?: Record<string, string>;
-  };
 }
 
 export interface WorkspaceBashSandboxOptions {
   platform?: NodeJS.Platform;
-  runtimeMode?: string;
   executable?: string;
   resourceLimiter?: string;
-  dockerExecutable?: string;
-  dockerImage?: string;
-  dockerEnvironment?: Readonly<NodeJS.ProcessEnv>;
+  nativeHostExecutable?: string;
   effectiveUid?: number;
   access?: (filePath: string, mode: number) => Promise<void>;
   probe?: (file: string, args: string[], options?: { env?: Record<string, string> }) => Promise<void>;
+  readOnlyMounts?: WorkspaceBashReadOnlyMounts;
+}
+
+export interface WorkspaceBashReadOnlyMounts {
+  skills: string;
+  mcp: string;
+}
+
+export function buildWorkspaceBashEnvironment(): Record<string, string> {
+  return {
+    PATH: WORKSPACE_BASH_TARGET_PATH,
+    HOME: WORKSPACE_BASH_VIRTUAL_ROOT,
+    PWD: WORKSPACE_BASH_VIRTUAL_ROOT,
+    TMPDIR: "/tmp/",
+    TMP: "/tmp",
+    TEMP: "/tmp",
+    LANG: process.env.LANG || "C.UTF-8",
+    LC_ALL: process.env.LC_ALL || "",
+    SHELL: "/bin/bash",
+    USER: "sunabot",
+    SUNABOT_SKILLS: WORKSPACE_BASH_SKILLS_ROOT,
+    SUNABOT_MCP_CONFIG: WORKSPACE_BASH_MCP_ROOT
+  };
 }
 
 export class WorkspaceBashIsolationError extends Error {
@@ -81,6 +79,22 @@ export class WorkspaceBashIsolationError extends Error {
   }
 }
 
+export function resolveWorkspaceBashSandboxExecutable(
+  environment: Readonly<Record<string, string | undefined>> = process.env
+): string {
+  const configured = environment.SUNABOT_BWRAP_EXECUTABLE?.trim();
+  if (!configured) {
+    if (environment.SUNABOT_PACKAGED_RELEASE === "1") {
+      throw new WorkspaceBashIsolationError("Packaged Bubblewrap executable was not injected by the runtime launcher.");
+    }
+    return WORKSPACE_BASH_SANDBOX_EXECUTABLE;
+  }
+  if (!validAbsoluteLinuxExecutable(configured)) {
+    throw new WorkspaceBashIsolationError("Bubblewrap executable path is invalid.");
+  }
+  return configured;
+}
+
 export async function ensureWorkspaceBashIsolation(
   backend: BashExecutionBackend,
   workbenchRoot: string,
@@ -88,15 +102,15 @@ export async function ensureWorkspaceBashIsolation(
   options: WorkspaceBashSandboxOptions = {}
 ): Promise<WorkspaceBashSandbox> {
   const platform = options.platform ?? process.platform;
-  const runtimeMode = options.runtimeMode ?? process.env.SUNABOT_RUNTIME_MODE ?? "native";
-  if (backend === "docker" && runtimeMode !== "docker") {
-    return ensureDockerSandbox(options);
+  validateReadOnlyMounts(options.readOnlyMounts, workbenchRoot);
+  if (backend === "native" && platform === "darwin") {
+    return ensureNativeHostBash(options);
   }
   if (platform === "linux") {
-    return ensureBubblewrapSandbox(workbenchRoot, environment, options);
+    return ensureBubblewrapSandbox(workbenchRoot, environment, options, true);
   }
   throw new WorkspaceBashIsolationError(
-    `No strong ${backend} Bash isolation is available for ${platform}/${runtimeMode}. Use the Docker backend.`
+    `No strong Native Bash isolation is available for ${platform}.`
   );
 }
 
@@ -105,16 +119,17 @@ export function buildWorkspaceBashInvocation(
   workbenchRoot: string,
   environment: Readonly<Record<string, string>>,
   sandbox: WorkspaceBashSandbox,
-  approvedOutsideAccesses: BashPathAccess[] = []
+  approvedOutsideAccesses: BashPathAccess[] = [],
+  readOnlyMounts?: WorkspaceBashReadOnlyMounts
 ): WorkspaceBashInvocation {
-  if (sandbox.kind === "docker") {
-    return buildDockerInvocation(
+  if (sandbox.kind === "host") {
+    return buildHostNativeInvocation(
       execution,
       workbenchRoot,
+      environment,
       sandbox.executable,
-      sandbox.image ?? WORKSPACE_BASH_DOCKER_IMAGE,
-      undefined,
-      sandbox.launcherEnvironment
+      approvedOutsideAccesses,
+      readOnlyMounts
     );
   }
   if (!sandbox.resourceLimiter) {
@@ -126,8 +141,50 @@ export function buildWorkspaceBashInvocation(
     environment,
     sandbox.executable,
     approvedOutsideAccesses,
-    sandbox.resourceLimiter
+    sandbox.resourceLimiter,
+    readOnlyMounts,
+    sandbox.networkAccess === true
   );
+}
+
+export function buildHostNativeInvocation(
+  execution: WorkspaceBashExecution,
+  workbenchRoot: string,
+  environment: Readonly<Record<string, string>>,
+  executable = WORKSPACE_BASH_NATIVE_HOST_EXECUTABLE,
+  approvedOutsideAccesses: BashPathAccess[] = [],
+  readOnlyMounts?: WorkspaceBashReadOnlyMounts
+): WorkspaceBashInvocation {
+  if (!path.isAbsolute(workbenchRoot) || /[\u0000\r\n]/.test(workbenchRoot)) {
+    throw new WorkspaceBashIsolationError("Native Bash workbench path is invalid.");
+  }
+  if (!path.isAbsolute(executable) || /[\u0000\r\n]/.test(executable)) {
+    throw new WorkspaceBashIsolationError("Native Bash executable path is invalid.");
+  }
+  validateReadOnlyMounts(readOnlyMounts, workbenchRoot);
+  for (const access of approvedOutsideAccesses) {
+    if (access.access !== "read") {
+      throw new WorkspaceBashIsolationError("Approved Native host accesses are read-only.");
+    }
+    validateOutsideBindPath(access.path, workbenchRoot);
+  }
+  const hostEnvironment = {
+    ...environment,
+    PATH: WORKSPACE_BASH_NATIVE_HOST_PATH,
+    HOME: workbenchRoot,
+    PWD: workbenchRoot,
+    ...(readOnlyMounts ? {
+      SUNABOT_SKILLS: readOnlyMounts.skills,
+      SUNABOT_MCP_CONFIG: readOnlyMounts.mcp
+    } : {})
+  };
+  return execution.kind === "argv"
+    ? { file: execution.executable, args: execution.args, env: hostEnvironment }
+    : {
+        file: executable,
+        args: ["--noprofile", "--norc", "-lc", execution.command],
+        env: hostEnvironment
+      };
 }
 
 export function buildBubblewrapInvocation(
@@ -136,7 +193,9 @@ export function buildBubblewrapInvocation(
   environment: Readonly<Record<string, string>>,
   executable = WORKSPACE_BASH_SANDBOX_EXECUTABLE,
   approvedOutsideAccesses: BashPathAccess[] = [],
-  resourceLimiter = WORKSPACE_BASH_RESOURCE_LIMITER
+  resourceLimiter = WORKSPACE_BASH_RESOURCE_LIMITER,
+  readOnlyMounts?: WorkspaceBashReadOnlyMounts,
+  networkAccess = false
 ): WorkspaceBashInvocation {
   const args = [
     executable,
@@ -146,7 +205,6 @@ export function buildBubblewrapInvocation(
     "--unshare-pid",
     "--unshare-uts",
     "--unshare-ipc",
-    "--unshare-net",
     "--unshare-cgroup",
     "--uid", "0",
     "--gid", "0",
@@ -156,8 +214,11 @@ export function buildBubblewrapInvocation(
     "--dev", "/dev",
     "--dir", "/tmp",
     "--dir", "/etc",
-    "--dir", WORKSPACE_BASH_VIRTUAL_ROOT
+    "--dir", WORKSPACE_BASH_VIRTUAL_ROOT,
+    "--dir", WORKSPACE_BASH_SKILLS_ROOT,
+    "--dir", WORKSPACE_BASH_MCP_ROOT
   ];
+  if (!networkAccess) args.splice(args.indexOf("--unshare-cgroup"), 0, "--unshare-net");
   for (const directory of ["/usr", "/bin", "/sbin", "/lib", "/lib64"]) {
     args.push("--dir", directory, "--ro-bind-try", directory, directory);
   }
@@ -172,6 +233,7 @@ export function buildBubblewrapInvocation(
     args.push("--ro-bind-try", file, file);
   }
   args.push("--bind", workbenchRoot, WORKSPACE_BASH_VIRTUAL_ROOT);
+  addReadOnlySharedBinds(args, readOnlyMounts);
   for (const access of approvedOutsideAccesses) {
     if (access.access !== "read") {
       throw new WorkspaceBashIsolationError("Approved outside binds are read-only.");
@@ -197,73 +259,19 @@ export function buildBubblewrapInvocation(
   };
 }
 
-export function buildDockerInvocation(
-  execution: WorkspaceBashExecution,
-  workbenchRoot: string,
-  executable = "docker",
-  image = WORKSPACE_BASH_DOCKER_IMAGE,
-  containerName = createBashContainerName(),
-  launcherEnvironment = buildDockerCliEnvironment()
-): WorkspaceBashInvocation {
-  if (!path.isAbsolute(workbenchRoot) || /[\u0000\r\n,]/.test(workbenchRoot)) {
-    throw new WorkspaceBashIsolationError("Docker Bash workbench mount source is invalid.");
-  }
-  validateDockerImage(image);
-  if (!/^sunabot-bash-[a-f0-9]{32}$/.test(containerName)) {
-    throw new WorkspaceBashIsolationError("Docker Bash container name is invalid.");
-  }
-  const uid = typeof process.getuid === "function" ? process.getuid() : 65_534;
-  const gid = typeof process.getgid === "function" ? process.getgid() : 65_534;
-  const [entrypoint, ...entrypointArgs] = executionArguments(execution);
-  const args = [
-    "run", "--rm", "--init", "--pull", "never",
-    "--name", containerName,
-    "--user", `${uid}:${gid}`,
-    "--network", "none",
-    "--read-only",
-    "--cap-drop", "ALL",
-    "--security-opt", "no-new-privileges:true",
-    "--pids-limit", "64",
-    "--memory", "256m",
-    "--cpus", "1",
-    "--ulimit", "fsize=268435456:268435456",
-    "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m,mode=1777",
-    "--mount", `type=bind,src=${workbenchRoot},dst=/workbench,rw`,
-    "--workdir", "/workbench"
-  ];
-  addClearedDockerProxyEnvironment(args);
-  args.push(
-    "--entrypoint", WORKSPACE_BASH_DOCKER_ENV_EXECUTABLE,
-    image,
-    "-i",
-    ...WORKSPACE_BASH_TARGET_ENVIRONMENT,
-    entrypoint!,
-    ...entrypointArgs
-  );
-  return {
-    file: executable,
-    args,
-    env: launcherEnvironment,
-    cleanup: { file: executable, args: ["rm", "-f", containerName], env: launcherEnvironment }
-  };
-}
-
-function createBashContainerName() {
-  return `sunabot-bash-${randomBytes(16).toString("hex")}`;
-}
-
 async function ensureBubblewrapSandbox(
   workbenchRoot: string,
   environment: Readonly<Record<string, string>>,
-  options: WorkspaceBashSandboxOptions
+  options: WorkspaceBashSandboxOptions,
+  networkAccess: boolean
 ) {
   const effectiveUid = options.effectiveUid ?? (typeof process.getuid === "function" ? process.getuid() : -1);
   if (effectiveUid <= 0) {
     throw new WorkspaceBashIsolationError("bubblewrap resource isolation requires a non-root runtime user.");
   }
-  const executable = options.executable ?? WORKSPACE_BASH_SANDBOX_EXECUTABLE;
+  const executable = options.executable ?? resolveWorkspaceBashSandboxExecutable();
   const resourceLimiter = options.resourceLimiter ?? WORKSPACE_BASH_RESOURCE_LIMITER;
-  if (!path.posix.isAbsolute(executable) || !path.posix.isAbsolute(resourceLimiter)) {
+  if (!validAbsoluteLinuxExecutable(executable) || !validAbsoluteLinuxExecutable(resourceLimiter)) {
     throw new WorkspaceBashIsolationError("bubblewrap and resource limiter must use absolute Linux paths.");
   }
   try {
@@ -285,86 +293,41 @@ async function ensureBubblewrapSandbox(
     environment,
     executable,
     [],
-    resourceLimiter
+    resourceLimiter,
+    options.readOnlyMounts,
+    networkAccess
   );
   await executeSandboxProbe(probe.file, probe.args, options, "bubblewrap resource and kernel isolation probe failed");
-  return { kind: "bubblewrap", executable, resourceLimiter } as const;
+  return { kind: "bubblewrap", executable, resourceLimiter, networkAccess } as const;
 }
 
-async function ensureDockerSandbox(options: WorkspaceBashSandboxOptions) {
+function validAbsoluteLinuxExecutable(value: string) {
+  return path.posix.isAbsolute(value)
+    && !/[\u0000\r\n]/u.test(value)
+    && path.posix.resolve(value) === value;
+}
+
+async function ensureNativeHostBash(options: WorkspaceBashSandboxOptions) {
   const effectiveUid = options.effectiveUid ?? (typeof process.getuid === "function" ? process.getuid() : -1);
   if (effectiveUid <= 0) {
-    throw new WorkspaceBashIsolationError("Docker Bash isolation requires a non-root runtime user.");
+    throw new WorkspaceBashIsolationError("Native host Bash requires a non-root runtime user.");
   }
-  const executable = options.dockerExecutable ?? "docker";
-  const image = options.dockerImage ?? (process.env.SUNABOT_BASH_IMAGE?.trim() || WORKSPACE_BASH_DOCKER_IMAGE);
-  const launcherEnvironment = buildDockerCliEnvironment(options.dockerEnvironment ?? process.env);
-  validateDockerImage(image);
+  const executable = options.nativeHostExecutable ?? WORKSPACE_BASH_NATIVE_HOST_EXECUTABLE;
+  if (!path.isAbsolute(executable) || /[\u0000\r\n]/.test(executable)) {
+    throw new WorkspaceBashIsolationError("Native host Bash executable path is invalid.");
+  }
   try {
-    if (path.isAbsolute(executable)) await (options.access ?? fs.access)(executable, fsConstants.X_OK);
-    const probeName = createBashProbeContainerName();
-    const effectiveGid = typeof process.getgid === "function" ? process.getgid() : effectiveUid;
-    const args = [
-      "run", "--rm", "--name", probeName, "--pull", "never",
-      "--user", `${effectiveUid}:${effectiveGid}`,
-      "--network", "none", "--read-only", "--cap-drop", "ALL",
-      "--security-opt", "no-new-privileges:true", "--pids-limit", "16",
-      "--memory", "64m", "--cpus", "0.25"
-    ];
-    addClearedDockerProxyEnvironment(args);
-    args.push(
-      "--entrypoint", WORKSPACE_BASH_DOCKER_ENV_EXECUTABLE,
-      image,
-      "-i", `PATH=${WORKSPACE_BASH_TARGET_PATH}`,
-      WORKSPACE_BASH_ADMIN_EXECUTABLE,
-      "--noprofile", "--norc", "-ec",
-      buildDockerCapabilityProbeScript()
-    );
-    if (options.probe) await options.probe(executable, args, { env: launcherEnvironment });
-    else await executeDockerCapabilityProbe(executable, args, probeName, launcherEnvironment);
+    await (options.access ?? fs.access)(executable, fsConstants.X_OK);
   } catch (error) {
-    throw new WorkspaceBashIsolationError(`Docker Bash image is unavailable: ${errorMessage(error)}`);
+    throw new WorkspaceBashIsolationError(`Native host Bash is not executable: ${errorMessage(error)}`);
   }
-  return { kind: "docker", executable, image, launcherEnvironment } as const;
-}
-
-function buildDockerCapabilityProbeScript() {
-  const dependencies = [...new Set([
-    WORKSPACE_BASH_DOCKER_ENV_EXECUTABLE,
-    WORKSPACE_BASH_DOCKER_TEST_EXECUTABLE,
-    WORKSPACE_BASH_ADMIN_EXECUTABLE,
-    ...WORKSPACE_BASH_RESTRICTED_EXECUTABLES
-  ])];
-  if (dependencies.some((dependency) => !/^\/[A-Za-z0-9_./+-]+$/.test(dependency))) {
-    throw new WorkspaceBashIsolationError("Docker Bash dependency path is invalid.");
-  }
-  return `for executable in ${dependencies.join(" ")}; do ${WORKSPACE_BASH_DOCKER_TEST_EXECUTABLE} -x "$executable" || exit 1; done`;
-}
-
-function createBashProbeContainerName() {
-  return `sunabot-bash-probe-${randomBytes(16).toString("hex")}`;
-}
-
-function addClearedDockerProxyEnvironment(args: string[]) {
-  for (const variable of WORKSPACE_BASH_PROXY_VARIABLES) args.push("--env", `${variable}=`);
-}
-
-async function executeDockerCapabilityProbe(
-  executable: string,
-  args: string[],
-  containerName: string,
-  environment: Record<string, string>
-) {
-  try {
-    await executeProbe(executable, args, environment);
-  } catch (error) {
-    try {
-      await executeProbe(executable, ["rm", "-f", containerName], environment);
-    } catch {
-      throw new WorkspaceBashIsolationError("Docker Bash capability probe cleanup could not be verified.");
-    }
-    throw error;
-  }
+  await executeSandboxProbe(
+    executable,
+    ["--noprofile", "--norc", "-lc", ":"],
+    options,
+    "Native host Bash probe failed"
+  );
+  return { kind: "host", executable } as const;
 }
 
 async function executeSandboxProbe(
@@ -383,31 +346,35 @@ async function executeSandboxProbe(
 
 function executeProbe(file: string, args: string[], env?: Record<string, string>) {
   return new Promise<void>((resolve, reject) => {
-    execFile(file, args, {
-      env,
-      timeout: 5_000,
-      maxBuffer: 64 * 1_024,
-      killSignal: "SIGKILL"
-    }, (error) => error ? reject(error) : resolve());
+    let child: { kill(signal?: NodeJS.Signals | number): boolean } | undefined;
+    let completed = false;
+    const finish = (error?: Error | null) => {
+      if (completed) return;
+      completed = true;
+      clearTimeout(watchdog);
+      if (error) reject(error);
+      else resolve();
+    };
+    const watchdog = setTimeout(() => {
+      try {
+        child?.kill("SIGKILL");
+      } catch {
+        // The hard deadline remains authoritative if launcher termination throws.
+      }
+      finish(new Error("Bash isolation probe timed out."));
+    }, 2_000);
+    watchdog.unref();
+    try {
+      child = execFile(file, args, {
+        env,
+        timeout: 2_000,
+        maxBuffer: 64 * 1_024,
+        killSignal: "SIGKILL"
+      }, (error) => finish(error));
+    } catch (error) {
+      finish(error as Error);
+    }
   });
-}
-
-function buildDockerCliEnvironment(source: Readonly<NodeJS.ProcessEnv> = process.env) {
-  const environment: Record<string, string> = {};
-  for (const key of [
-    "PATH",
-    "HOME",
-    "DOCKER_HOST",
-    "DOCKER_CONTEXT",
-    "DOCKER_CONFIG",
-    "DOCKER_TLS_VERIFY",
-    "DOCKER_CERT_PATH",
-    "DOCKER_API_VERSION"
-  ]) {
-    const value = source[key];
-    if (typeof value === "string" && value) environment[key] = value;
-  }
-  return environment;
 }
 
 function executionArguments(execution: WorkspaceBashExecution) {
@@ -428,9 +395,27 @@ function validateOutsideBindPath(candidate: string, workbenchRoot: string) {
   return resolved;
 }
 
-function validateDockerImage(image: string) {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,255}$/.test(image) || image.includes("..") || image.includes("//")) {
-    throw new WorkspaceBashIsolationError("Docker Bash image reference is invalid.");
+function addReadOnlySharedBinds(args: string[], mounts: WorkspaceBashReadOnlyMounts | undefined) {
+  if (!mounts) return;
+  validateReadOnlyMounts(mounts);
+  args.push(
+    "--ro-bind", mounts.skills, WORKSPACE_BASH_SKILLS_ROOT,
+    "--ro-bind", mounts.mcp, WORKSPACE_BASH_MCP_ROOT
+  );
+}
+
+function validateReadOnlyMounts(mounts: WorkspaceBashReadOnlyMounts | undefined, workbenchRoot?: string) {
+  if (!mounts) return;
+  for (const source of [mounts.skills, mounts.mcp]) {
+    if (!path.isAbsolute(source) || /[\u0000\r\n,]/.test(source)) {
+      throw new WorkspaceBashIsolationError("Bash shared configuration mount source is invalid.");
+    }
+    if (workbenchRoot && isWithin(source, workbenchRoot) && path.resolve(source) !== path.resolve(mounts.skills)) {
+      throw new WorkspaceBashIsolationError("Bash shared configuration mounts must not overlap the workbench.");
+    }
+  }
+  if (path.resolve(mounts.skills) === path.resolve(mounts.mcp)) {
+    throw new WorkspaceBashIsolationError("Bash Skill and MCP mounts must be distinct.");
   }
 }
 

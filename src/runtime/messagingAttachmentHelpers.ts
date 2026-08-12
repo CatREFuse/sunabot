@@ -1,116 +1,33 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { nanoid } from "nanoid";
-import {
-  AppConfig,
-  ChatMessage,
-  ConversationMessageQuote,
-  ConversationRecord,
-  ImageResult,
-  ParsedIncomingMessage,
-  ReasoningEffort
-} from "../types.js";
-import { resolveModelReasoningEffort } from "../admin/models.js";
-import { AttachmentService } from "../../services/media/attachments/service.js";
-import type {
-  AttachmentExtractionContext,
-  ParsedAttachment
-} from "../../services/media/attachments/types.js";
-import { CommandRouter, type CommandMatch } from "../../services/messaging/commandRouter.js";
-import { isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
-import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
-import {
-  assistantReplyEnvelope,
-  decodeAssistantReply,
-  decodeIncomingReply,
-  decodeToolCompletion,
-  incomingReplyEnvelope,
-  type AssistantReplyOutboxEnvelope,
-  type AssistantReplyOutboxPayload,
-  type AsyncToolCompletionPayload,
-  type RuntimeIncomingReplyEventPayload
-} from "../../packages/contracts/session/runtimeMessages.js";
-import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
-import { configureMemoryPersistence } from "../../services/memory/persistence.js";
-import {
-  ReplyGateEpochs,
-  isOrchestratorReplyRateLimited,
-  resolveUserGroupReplyRoute,
-  type ReplyGateSnapshot
-} from "../../services/orchestration/groupReplyPolicy.js";
-import { HookBus } from "../../services/messaging/hookBus.js";
-import {
-  applyMemoryBatchTransaction,
-  ensureAgentTextFile,
-  formatMemoryMatchesForPrompt,
-  isMemoryBatchCommitted,
-  mergeUserProfileMemory,
-  normalizeEventMemorySchema,
-  readAgentTextFile,
-  readMemorySourceEntries,
-  readUserProfileForUser,
-  readWorkingMemorySnapshot,
-  recallMemory,
-  recoverMemoryTransactions,
-  replaceWorkingMemoryFacts,
-  resolveUserAddressName,
-  type MemoryEntry,
-  type MemoryFactInput
-} from "../../services/memory/memoryService.js";
-import {
-  MemorySchedulerStore,
-  type MemoryClaim,
-  type MemoryQueuedMessage
-} from "../../services/memory/memoryScheduler.js";
-import {
-  OpenAIProvider,
-  type ProviderBashOptions,
-  type ProviderCompleteOptions,
-  type ProviderDeferredTurn
-} from "../../adapters/model/openaiProvider.js";
-import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
-import {
-  inboundImageUrls,
-  replaceInboundImageUrls,
-  type MessageDetailsV1,
-  type MessagingPort,
-  type OutboundMessageV1
-} from "../../packages/contracts/messaging/messages.js";
-import {
-  inboundConversationIdV1,
-  inboundMessageIdentityV1
-} from "../../packages/contracts/messaging/incomingIdentity.js";
 import {
   generatedImageMediaAsset,
   imageMediaAsset,
   type AttachmentSourcePort
 } from "../../packages/contracts/media/media.js";
-import { loadPersona, AgentPersona } from "../../services/agent/persona.js";
-import { appendRequestLog } from "../requestLog.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
-import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
-import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
-import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
-import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
 import {
-  OutboxDisconnectedError,
-  SessionCoordinator,
-  type SessionHandleResult
-} from "../../services/sessions/sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
-import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
-import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
+  inboundConversationIdV1,
+  inboundMessageIdentityV1
+} from "../../packages/contracts/messaging/incomingIdentity.js";
 import {
-  parseFinalPromptTemplate,
-  renderFinalPromptTemplate,
-  type PromptVariableValue,
-  type RenderedPromptRequest
-} from "../../services/agent/promptSystem.js";
-import { buildConversationPromptVariables } from "../../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
+  type MessageDetailsV1,
+  type MessagingPort,
+  type OutboundMessageV1
+} from "../../packages/contracts/messaging/messages.js";
+import type {
+  ParsedAttachment
+} from "../../services/media/attachments/types.js";
+import {
+  type MemoryEntry
+} from "../../services/memory/memoryService.js";
+import { generateImgMediaHandle } from "../../services/tools/generateImgTool.js";
+import {
+  ConversationMessageQuote,
+  ConversationRecord,
+  ImageResult,
+  ParsedIncomingMessage
+} from "../types.js";
+import { ConversationReplyUpdateInput, HYDRATE_MESSAGE_WINDOW_MS } from "./runtimeContracts.js";
 
 export function restoredGroupIncoming(
   record: ConversationRecord,
@@ -142,7 +59,7 @@ export function restoredConversationIncoming(
       ...(message.senderName ? { displayName: message.senderName } : {})
     },
     text: message.text,
-    media: (message.imageUrls ?? []).map(imageMediaAsset),
+    media: (message.imageUrls ?? []).map((url) => imageMediaAsset(url)),
     attachments: message.attachments ?? [],
     replyMessageIds: message.replyMessageIds ?? [],
     quoteReferences: message.quoteReferences ?? [],
@@ -159,7 +76,8 @@ export function outboundForIncoming(
   text: string,
   images: ImageResult[] = [],
   replyToMessageId?: number,
-  contentSegments?: OutboundMessageV1["contentSegments"]
+  contentSegments?: OutboundMessageV1["contentSegments"],
+  mentionUserIds?: readonly number[]
 ): OutboundMessageV1 {
   return {
     schemaVersion: 1,
@@ -173,7 +91,8 @@ export function outboundForIncoming(
     text,
     media: images.map(generatedImageMediaAsset).filter((asset): asset is NonNullable<typeof asset> => Boolean(asset)),
     ...(contentSegments?.length ? { contentSegments: contentSegments.map((segment) => ({ ...segment })) } : {}),
-    ...(replyToMessageId ? { replyToMessageId } : {})
+    ...(replyToMessageId ? { replyToMessageId } : {}),
+    ...(mentionUserIds?.length ? { mentionUserIds: [...mentionUserIds] } : {})
   };
 }
 export function outboundForRecord(record: ConversationRecord, text: string): OutboundMessageV1 {
@@ -190,12 +109,25 @@ export function outboundForRecord(record: ConversationRecord, text: string): Out
     media: []
   };
 }
-export function attachmentSourcePort(port: MessagingPort) {
+export function attachmentSourcePort(port: MessagingPort, accountId?: string) {
   const candidate = port as MessagingPort & Partial<AttachmentSourcePort>;
   if (typeof candidate.resolveAttachment !== "function" || typeof candidate.resolveAttachmentFallback !== "function") {
     throw new Error("Messaging adapter does not support attachment resolution.");
   }
-  return candidate as MessagingPort & AttachmentSourcePort;
+  const sourcePort = candidate as MessagingPort & AttachmentSourcePort;
+  const normalizedAccountId = accountId?.trim();
+  if (!normalizedAccountId) return sourcePort;
+  return {
+    resolveAttachment(input, options) {
+      return sourcePort.resolveAttachment({ ...input, accountId: normalizedAccountId }, options);
+    },
+    resolveAttachmentFallback(input, options) {
+      return sourcePort.resolveAttachmentFallback(
+        { ...input, accountId: normalizedAccountId },
+        options
+      );
+    }
+  } satisfies AttachmentSourcePort;
 }
 export function persistentIncomingKey(incoming: ParsedIncomingMessage) {
   return `${incoming.selfId ?? ""}:${conversationRecordId(incoming)}:${inboundMessageIdentityV1(incoming)}`;
@@ -210,13 +142,13 @@ export function queueIncomingSnapshot(incoming: ParsedIncomingMessage): ParsedIn
     ...incoming,
     sender: { ...incoming.sender },
     media: incoming.media.map((asset) => ({ ...asset })),
-    attachments: incoming.attachments.map((attachment) => ({ ...attachment })),
+    attachments: incoming.attachments.map(cloneRuntimeAttachment),
     replyMessageIds: [...incoming.replyMessageIds],
     quoteReferences: incoming.quoteReferences.map((quote) => ({
       ...quote,
       media: quote.media?.map((asset) => ({ ...asset })),
       imageUrls: quote.imageUrls ? [...quote.imageUrls] : undefined,
-      attachments: quote.attachments?.map((attachment) => ({ ...attachment }))
+      attachments: quote.attachments?.map(cloneRuntimeAttachment)
     }))
   };
 }
@@ -231,6 +163,29 @@ export function conversationReplyEnabled(record: Pick<ConversationRecord, "reply
 }
 export function conversationOrchestratorEnabled(record: Pick<ConversationRecord, "orchestratorEnabled"> | undefined) {
   return record?.orchestratorEnabled !== false;
+}
+export function normalizeConversationOrchestratorResponseTimeMs(value: unknown) {
+  return Number.isInteger(value) && Number(value) >= 1_000 && Number(value) <= 3_600_000
+    ? Number(value)
+    : undefined;
+}
+export function conversationOrchestratorResponseTimeMs(
+  record: Pick<
+    ConversationRecord,
+    "orchestratorResponseTimeOverrideEnabled" | "orchestratorResponseTimeMs"
+  > | undefined,
+  defaultResponseTimeMs: number
+) {
+  if (record?.orchestratorResponseTimeOverrideEnabled === true) {
+    const override = normalizeConversationOrchestratorResponseTimeMs(record.orchestratorResponseTimeMs);
+    if (override !== undefined) return override;
+  }
+  return defaultResponseTimeMs;
+}
+export function conversationDirectorEventsEnabled(
+  record: Pick<ConversationRecord, "directorEventsEnabled"> | undefined
+) {
+  return record?.directorEventsEnabled === true;
 }
 export function normalizeConversationId(value: unknown) {
   const text = String(value ?? "").trim();
@@ -400,10 +355,17 @@ export function formatQuoteReferencesForContext(references: ConversationMessageQ
   return references.map((reference) => {
     const sender = reference.senderName ? `${reference.senderName} ` : "";
     const text = reference.text || (reference.imageUrls?.length ? "[图片]" : reference.attachments?.length ? "[文件]" : "[消息]");
-    const files = reference.attachments?.length
-      ? ` 文件：${formatAttachmentListForContext(reference.attachments)}`
+    const imageCount = (reference.media ?? reference.imageUrls ?? []).length;
+    const altTexts = (reference.media ?? []).flatMap((asset) => asset.altText ? [asset.altText] : []);
+    const images = imageCount
+      ? ` 图片：${altTexts.length ? `${altTexts.join("；")}；` : ""}${Array.from({ length: Math.min(imageCount, 4) }, (_, index) => (
+        generateImgMediaHandle(String(reference.messageId), index)
+      )).join("、")}`
       : "";
-    return `${sender}#${reference.messageId} ${text}${files}`;
+    const files = reference.attachments?.length
+      ? ` 文件：${formatAttachmentListForContext(reference.attachments, String(reference.messageId))}`
+      : "";
+    return `${sender}#${reference.messageId} ${text}${images}${files}`;
   }).join("；");
 }
 export function readRecord(value: unknown): Record<string, unknown> {
@@ -547,8 +509,26 @@ export function sanitizeAttachmentForPersistence(attachment: ParsedAttachment): 
   return {
     ...persisted,
     fileId: safePersistedFileIdentifier(persisted.fileId),
+    fileToken: safePersistedFileIdentifier(persisted.fileToken),
+    acquisition: persisted.acquisition?.status === "acquired"
+      ? { status: "acquired", blob: { ...persisted.acquisition.blob } }
+      : persisted.acquisition
+        ? { ...persisted.acquisition }
+        : undefined,
     textPreview: persistedAttachmentPreview(persisted),
     visualPagePaths: persisted.visualPagePaths?.slice(0, 12)
+  };
+}
+
+function cloneRuntimeAttachment(attachment: ParsedAttachment): ParsedAttachment {
+  return {
+    ...attachment,
+    acquisition: attachment.acquisition?.status === "acquired"
+      ? { status: "acquired", blob: { ...attachment.acquisition.blob } }
+      : attachment.acquisition
+        ? { ...attachment.acquisition }
+        : undefined,
+    visualPagePaths: attachment.visualPagePaths?.slice()
   };
 }
 export function persistedAttachmentPreview(attachment: ParsedAttachment) {
@@ -567,9 +547,17 @@ export function persistedAttachmentPreview(attachment: ParsedAttachment) {
   return partialLength > 0 ? `${preview.slice(0, partialLength)}…` : undefined;
 }
 export function safePersistedFileIdentifier(value: string | undefined) {
-  const result = value?.trim();
-  if (!result || result.length > 2_048) return undefined;
-  if (/^(?:data:[^,]*;base64,|base64:\/\/|https?:\/\/|file:)/i.test(result)) return undefined;
+  if (!value || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return undefined;
+  const result = value.trim();
+  if (
+    !result ||
+    result.length > 2_048 ||
+    result.includes("\\") ||
+    /^[a-z]:/i.test(result) ||
+    path.posix.isAbsolute(result) ||
+    path.win32.isAbsolute(result) ||
+    /^[a-z][a-z0-9+.-]*:/i.test(result)
+  ) return undefined;
   return result;
 }
 export function persistedAttachments(values: readonly ParsedAttachment[]) {
@@ -581,14 +569,31 @@ export function persistedQuoteReferences(values: readonly ConversationMessageQuo
     attachments: quote.attachments ? persistedAttachments(quote.attachments) : undefined
   }));
 }
-export function formatAttachmentListForContext(values: readonly ParsedAttachment[]) {
-  return values.map((attachment) => `${attachment.name}（${attachmentStatusLabel(attachment.status)}）`).join("、");
+export function formatAttachmentListForContext(
+  values: readonly ParsedAttachment[],
+  messageId?: string
+) {
+  return values.map((attachment, index) => {
+    const handle = messageId && /^\d+$/.test(messageId)
+      ? `；媒体句柄：message:${messageId}:file:${index}`
+      : "";
+    return `${attachment.name}（${attachmentStatusLabel(attachment)}${handle}）`;
+  }).join("、");
 }
-export function attachmentStatusLabel(status: ParsedAttachment["status"]) {
+export function attachmentStatusLabel(
+  input: ParsedAttachment["status"] | Pick<ParsedAttachment, "status" | "acquisition" | "parseStatus">
+) {
+  const attachment = typeof input === "string" ? undefined : input;
+  const status = typeof input === "string" ? input : input.status;
   if (status === "ready") return "已读取";
   if (status === "partial") return "部分读取";
   if (status === "too_large") return "超过 256 MB";
   if (status === "unsupported") return "格式不支持";
+  if (
+    status === "failed"
+    && attachment?.acquisition?.status === "acquired"
+    && attachment.parseStatus === "parse_failed"
+  ) return "正文读取失败，原文件可导出";
   if (status === "failed") return "读取失败";
   return "处理中";
 }
@@ -607,6 +612,9 @@ export function selectRelevantConversationAttachments(
   if (record && contextThroughSequence != null && contextFromSequence != null) {
     const windowAttachments = record.messages
       .filter((message) => message.role === "user")
+      .filter((message) => (
+        incoming.scope === "private" || message.userId === incoming.userId
+      ))
       .filter((message) => {
         const sequence = Number(message.sequence ?? 0);
         return Number.isSafeInteger(sequence) &&

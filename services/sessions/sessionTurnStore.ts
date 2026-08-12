@@ -2,6 +2,7 @@ import {
   decodeTurnOutcome,
   encodeTurnOutcome
 } from "../../packages/contracts/session/durableQueue.js";
+import type { DatabaseSync } from "node:sqlite";
 import { SessionOutboxStore } from "./sessionOutboxStore.js";
 import { appendHeldTurnOutbox as persistHeldTurnOutbox } from "./sessionHeldOutboxStore.js";
 import {
@@ -14,6 +15,7 @@ import {
   requiredText
 } from "./sessionStoreBackend.js";
 import type {
+  AppendDeferredTurnOutboxInput,
   AppendTurnOutboxInput,
   AppendTurnOutboxResult,
   AppendHeldTurnOutboxInput,
@@ -28,11 +30,13 @@ import type {
   HeldOutboxReplyGateResolver,
   InterruptTurnInput,
   InterruptTurnResult,
+  OutboxDraft,
   OutboxRecord,
   SessionEventRecord,
   SqlRow,
   TurnRecord,
-  TurnStatus
+  TurnStatus,
+  ToolJobRecord
 } from "./sessionTypes.js";
 
 export abstract class SessionTurnStore extends SessionOutboxStore {
@@ -134,6 +138,15 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
         inserted: true
       };
     });
+  }
+
+  appendDeferredTurnOutbox(input: AppendDeferredTurnOutboxInput): AppendTurnOutboxResult {
+    return persistDeferredTurnOutbox({
+      database: this.database, now: () => this.now(), transaction: (operation) => this.transaction(operation),
+      requireTurn: (id) => this.requireTurn(id), requireEvent: (id) => this.requireEvent(id), requireOutbox: (id) => this.requireOutbox(id),
+      requireToolJob: (turnId, callId) => this.requireToolJobForTurn(turnId, callId),
+      insertOutbox: (turn, draft, now) => this.insertOutbox(turn, draft, now)
+    }, input);
   }
 
   appendHeldTurnOutbox(input: AppendHeldTurnOutboxInput): AppendTurnOutboxResult {
@@ -525,6 +538,62 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
   }
 }
 
+interface DeferredTurnOutboxBackend {
+  database: DatabaseSync;
+  now(): number;
+  transaction<T>(operation: () => T): T;
+  requireTurn(id: string): TurnRecord;
+  requireEvent(id: string): SessionEventRecord;
+  requireToolJob(turnId: string, providerCallId: string): ToolJobRecord;
+  requireOutbox(id: string): OutboxRecord;
+  insertOutbox(turn: TurnRecord, draft: OutboxDraft, now: number): OutboxRecord;
+}
+
+function persistDeferredTurnOutbox(
+  backend: DeferredTurnOutboxBackend,
+  input: AppendDeferredTurnOutboxInput
+): AppendTurnOutboxResult {
+  const turnId = requiredText(input.turnId, "turnId");
+  const eventId = requiredText(input.eventId, "eventId");
+  const providerCallId = requiredText(input.providerCallId, "providerCallId");
+  const dedupeKey = requiredText(input.dedupeKey, "dedupeKey");
+  const persistedDedupeKey = `${dedupeKey}:${deferredOutboxFingerprint(input.draft.dedupeFingerprint)}`;
+  const now = backend.now();
+  return backend.transaction(() => {
+    const turn = backend.requireTurn(turnId);
+    if (turn.status !== "deferred") throw new Error(`Turn ${turn.id} is ${turn.status}, not deferred.`);
+    if (turn.eventId !== eventId) {
+      throw new Error(`Deferred outbox event ${eventId} does not belong to turn ${turn.id}.`);
+    }
+    const event = backend.requireEvent(eventId);
+    const job = backend.requireToolJob(turn.id, providerCallId);
+    if (
+      event.status !== "completed" || event.sessionId !== turn.sessionId ||
+      job.sessionId !== turn.sessionId || job.originEventId !== event.id ||
+      job.originTurnId !== turn.id || job.providerCallId !== providerCallId
+    ) throw new Error(`Deferred outbox source does not match tool job ${job.id}.`);
+    const existingRow = backend.database.prepare(`
+      SELECT id FROM outbox WHERE session_id = ? AND (dedupe_key = ? OR (
+        instr(dedupe_key, ?) = 1 AND substr(dedupe_key, length(?) + 1, 1) = ':'
+      ))
+    `).get(turn.sessionId, dedupeKey, dedupeKey, dedupeKey) as SqlRow | undefined;
+    if (existingRow) {
+      const existing = backend.requireOutbox(String(existingRow.id));
+      if (existing.originTurnId !== turn.id) {
+        throw new Error(`Deferred outbox dedupe key ${dedupeKey} belongs to another turn.`);
+      }
+      if (existing.dedupeKey !== persistedDedupeKey) {
+        throw new Error(`Outbox dedupe fingerprint changed for ${dedupeKey}.`);
+      }
+      return { outbox: existing, inserted: false };
+    }
+    return {
+      outbox: backend.insertOutbox(turn, { ...input.draft, dedupeKey: persistedDedupeKey }, now),
+      inserted: true
+    };
+  });
+}
+
 function heldAwareTurnCompletion(
   input: Pick<FinishTurnInput, "outcome" | "error">,
   outbox: readonly Pick<OutboxRecord, "holdState">[]
@@ -549,4 +618,12 @@ function mapTurn(row: SqlRow): TurnRecord {
     startedAt: numberValue(row.started_at),
     finishedAt: nullableNumber(row.finished_at)
   };
+}
+
+function deferredOutboxFingerprint(value: unknown) {
+  const fingerprint = requiredText(value, "outbox.dedupeFingerprint");
+  if (!/^[a-f0-9]{64}$/.test(fingerprint)) {
+    throw new Error("outbox.dedupeFingerprint must be a lowercase SHA-256 digest.");
+  }
+  return fingerprint;
 }

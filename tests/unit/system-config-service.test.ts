@@ -7,7 +7,11 @@ import {
   type SystemConfigRuntime,
   type SystemConfigServiceOptions
 } from "../../src/admin/systemConfigService.js";
-import type { SystemConfigInput, SystemConfigTurnContext } from "../../services/tools/systemConfigTool.js";
+import {
+  parseSystemConfigInput,
+  type SystemConfigInput,
+  type SystemConfigTurnContext
+} from "../../services/tools/systemConfigTool.js";
 import type { AppConfig, ConversationRecord } from "../../src/types.js";
 
 const AGENT_ID = "plana";
@@ -31,11 +35,12 @@ describe("SystemConfigService", () => {
       autoReply: { private: true, userGroup: true, botGroup: false },
       orchestrator: {
         enabled: false,
-        scope: "ambient_group_replies",
-        groupThreadClassifierControlled: false
+        scope: "ambient_group_replies"
       },
       tone: {
         enabled: false,
+        segmentedReply: false,
+        followMainModel: false,
         providerId: null,
         model: "gpt-5.4-mini",
         reasoningEffort: "low",
@@ -54,17 +59,16 @@ describe("SystemConfigService", () => {
       bash: {
         enabled: false,
         configuredEnabled: false,
-        adminPrivateBackend: "native",
-        configuredBackend: "native",
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         available: true,
         effectiveEnabled: false,
         unavailableReason: "BASH_CONFIG_DISABLED",
         unavailableMessage: "Bash 未启用。",
-        isolationRequired: "bubblewrap_or_equivalent",
+        isolationRequired: "platform_native",
+        nativeHostExecutionAllowed: process.platform === "darwin",
         rawHostFallbackAllowed: false,
-        dockerSocketAllowed: false
+        bubblewrapRequired: process.platform === "linux"
       },
       groups: {
         total: 2,
@@ -301,17 +305,16 @@ describe("SystemConfigService", () => {
       bash: {
         enabled: false,
         configuredEnabled: false,
-        adminPrivateBackend: "native",
-        configuredBackend: "native",
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         available: true,
         effectiveEnabled: false,
         unavailableReason: "BASH_CONFIG_DISABLED",
         unavailableMessage: "Bash 未启用。",
-        isolationRequired: "bubblewrap_or_equivalent",
+        isolationRequired: "platform_native",
+        nativeHostExecutionAllowed: process.platform === "darwin",
         rawHostFallbackAllowed: false,
-        dockerSocketAllowed: false
+        bubblewrapRequired: process.platform === "linux"
       },
       recovery: { required: true },
       probe: {
@@ -336,7 +339,6 @@ describe("SystemConfigService", () => {
     ["auto reply", systemInput("set_auto_reply", { replyScope: "private", enabled: false })],
     ["orchestrator", systemInput("set_orchestrator", { enabled: false })],
     ["search", systemInput("set_search", { enabled: true, searchImplementation: "tavily" })],
-    ["Bash backend", systemInput("set_bash_admin_backend", { bashAdminBackend: "docker" })],
     ["group reply", systemInput("set_group_reply", { conversationId: "group:101", enabled: false })]
   ] as const)("rejects the Web Chat %s mutation before staging or reading configuration", async (_label, input) => {
     const harness = createHarness("web:admin");
@@ -395,13 +397,12 @@ describe("SystemConfigService", () => {
       persisted: false,
       effectiveFrom: "next_turn",
       scope: "ambient_group_replies",
-      groupThreadClassifierControlled: false,
       changes: ["orchestrator.enabled"]
     });
     expect(second).toEqual({
       ok: false,
       code: "SYSTEM_CONFIG_MUTATION_PENDING",
-      error: "配置修改后请直接完成当前回复。"
+      error: "当前回合已有一项待提交的配置修改。"
     });
     expect(turn.mutationStaged()).toBe(true);
     expect(harness.patch).not.toHaveBeenCalled();
@@ -414,6 +415,22 @@ describe("SystemConfigService", () => {
       revision: configRevision(harness.config),
       value: { ...harness.config.bot.orchestrator, enabled: true }
     });
+  });
+
+  it("allows settings queries before staging a mutation in the same turn", async () => {
+    const harness = createHarness();
+    const turn = harness.service.createTurn(harness.context);
+
+    await expect(turn.execute(systemInput("get_settings")))
+      .resolves.toMatchObject({ ok: true, operation: "get_settings" });
+    await expect(turn.execute(systemInput("set_search", { enabled: true })))
+      .resolves.toMatchObject({
+        ok: true,
+        operation: "set_search",
+        staged: true
+      });
+    expect(turn.mutationStaged()).toBe(true);
+    expect(harness.patch).not.toHaveBeenCalled();
   });
 
   it("discards a staged mutation without persisting it", async () => {
@@ -430,7 +447,7 @@ describe("SystemConfigService", () => {
     expect(harness.patch).not.toHaveBeenCalled();
   });
 
-  it("exposes the normalized private-gate descriptor and rejects the whole turn without side effects", async () => {
+  it("keeps a staged mutation while allowing later read operations", async () => {
     const harness = createHarness();
     const turn = harness.service.createTurn(harness.context);
     const input = systemInput("set_auto_reply", { replyScope: "private", enabled: false });
@@ -443,13 +460,11 @@ describe("SystemConfigService", () => {
       closesCurrentPrivateReplyGate: true
     });
 
-    turn.rejectTurn();
-
-    expect(turn.turnRejected()).toBe(true);
-    expect(turn.mutationStaged()).toBe(false);
-    expect(turn.stagedMutation()).toBeUndefined();
-    await expect(turn.commit()).rejects.toThrow("已拒绝的 system_config 回合不能提交配置");
-    expect(harness.patch).not.toHaveBeenCalled();
+    await expect(turn.execute(systemInput("get_status")))
+      .resolves.toMatchObject({ ok: true, operation: "get_status" });
+    expect(turn.mutationStaged()).toBe(true);
+    await turn.commit();
+    expect(harness.patch).toHaveBeenCalledOnce();
   });
 
   it("does not mark unrelated mutations as closing the current private gate", async () => {
@@ -679,25 +694,15 @@ describe("SystemConfigService", () => {
 
   it.each([
     {
-      label: "native isolation unavailable",
+      label: "Native isolation unavailable",
       enabled: true,
-      backend: "native" as const,
       available: false,
       reason: "BASH_NATIVE_ISOLATION_UNAVAILABLE",
-      message: "Native 后端未通过 bubblewrap 或等价强隔离检查；Bash 已安全关闭，不会回退到宿主 Bash。可切换 Docker 后端后重新检查。"
-    },
-    {
-      label: "docker isolation unavailable",
-      enabled: true,
-      backend: "docker" as const,
-      available: false,
-      reason: "BASH_DOCKER_ISOLATION_UNAVAILABLE",
-      message: "Docker 后端未通过强隔离检查；Bash 已安全关闭，不会使用 Docker socket 或宿主 Bash 回退。"
+      message: "Native Bash 当前不可用。"
     },
     {
       label: "configuration disabled",
       enabled: false,
-      backend: "native" as const,
       available: true,
       reason: "BASH_CONFIG_DISABLED",
       message: "Bash 未启用。"
@@ -705,34 +710,29 @@ describe("SystemConfigService", () => {
     {
       label: "enabled with isolation",
       enabled: true,
-      backend: "native" as const,
       available: true,
       reason: null,
       message: null
     }
   ])("reports Bash configured and effective state for $label", async ({
     enabled,
-    backend,
     available,
     reason,
     message
   }) => {
     const harness = createHarness();
     harness.config.bot.bash.enabled = enabled;
-    harness.config.bot.bash.adminPrivateBackend = backend;
     harness.runtime.resolveToolCapabilities = vi.fn(async () => ({ workspaceBash: available }));
 
     for (const operation of ["get_settings", "get_status"] as const) {
       const result = await execute(harness, systemInput(operation));
       expect(result.bash).toMatchObject({
         configuredEnabled: enabled,
-        adminPrivateBackend: backend,
         available,
         effectiveEnabled: enabled && available,
         unavailableReason: reason,
         unavailableMessage: message,
-        rawHostFallbackAllowed: false,
-        dockerSocketAllowed: false
+        rawHostFallbackAllowed: false
       });
     }
   });
@@ -755,7 +755,7 @@ describe("SystemConfigService", () => {
   });
 
   it.each([
-    ["BASH_AUDIT_UNAVAILABLE", "独立 Bash 审计不可用，Bash 已安全关闭。"],
+    ["BASH_AUDIT_UNAVAILABLE", "Bash 对抗审批 Agent 不可用，Bash 已安全关闭。"],
     ["BASH_WORKBENCH_UNAVAILABLE", "当前 Agent workbench 不可用，Bash 已安全关闭。"]
   ] as const)("preserves the safe Bash capability reason %s", async (reason, message) => {
     const harness = createHarness();
@@ -777,7 +777,7 @@ describe("SystemConfigService", () => {
     }
   });
 
-  it("reports the disabled administrator identity gate as a session restriction", async () => {
+  it("keeps native status independent of legacy identity flags", async () => {
     const harness = createHarness();
     harness.config.bot.bash.enabled = true;
     harness.config.bot.bash.adminOnly = false;
@@ -787,42 +787,20 @@ describe("SystemConfigService", () => {
 
     expect(result.bash).toMatchObject({
       configuredEnabled: true,
-      available: false,
-      effectiveEnabled: false,
-      unavailableReason: "BASH_ADMIN_IDENTITY_DISABLED",
-      unavailableMessage: "管理员身份门禁已关闭，所有会话均不可用。",
-      unavailabilityKind: "session"
+      available: true,
+      effectiveEnabled: true
     });
   });
 
-  it("stages only the administrator Bash backend preference and never claims capability", async () => {
-    const harness = createHarness();
-    harness.config.bot.bash.enabled = true;
-    harness.runtime.resolveToolCapabilities = vi.fn(async () => ({ workspaceBash: false }));
-    const turn = harness.service.createTurn(harness.context);
-
-    const result = await turn.execute(systemInput("set_bash_admin_backend", {
-      bashAdminBackend: "docker"
-    }));
-
-    expect(result).toMatchObject({
-      ok: true,
-      staged: true,
-      persisted: false,
-      before: { adminPrivateBackend: "native" },
-      after: { adminPrivateBackend: "docker" },
-      preferenceOnly: true,
-      isolationCapabilityRequired: true
-    });
-    expect(result).not.toHaveProperty("effectiveEnabled");
-    expect(harness.patch).not.toHaveBeenCalled();
-
-    await turn.commit();
-
-    expect(harness.patch).toHaveBeenCalledWith(AGENT_ID, "bash", {
-      revision: configRevision(harness.config),
-      value: { ...harness.config.bot.bash, adminPrivateBackend: "docker" }
-    });
+  it("rejects the removed Bash backend operation and field", () => {
+    expect(parseSystemConfigInput({
+      ...systemInput("get_settings"),
+      operation: "set_bash_admin_backend"
+    })).toMatchObject({ ok: false, field: "operation" });
+    expect(parseSystemConfigInput({
+      ...systemInput("get_settings"),
+      bashAdminBackend: "native"
+    })).toMatchObject({ ok: false, field: "bashAdminBackend" });
   });
 });
 
@@ -1059,7 +1037,6 @@ function systemInput(
     enabled: null,
     orchestratorEnabled: null,
     searchImplementation: null,
-    bashAdminBackend: null,
     conversationId: null,
     groupCursor: null,
     groupLimit: null,

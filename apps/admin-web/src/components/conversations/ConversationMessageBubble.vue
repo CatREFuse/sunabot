@@ -32,8 +32,8 @@ const qq = computed(() => orchestratorDecision.value
   : messageQq(props.message, props.conversation));
 const nickname = computed(() => props.message.senderNickname?.trim() ?? "");
 const card = computed(() => props.message.senderCard?.trim() ?? "");
-const roleName = computed(() => props.message.role === "assistant" ? "普拉娜" : props.message.role === "event" ? "系统" : "用户");
-const displayName = computed(() => card.value || nickname.value || props.message.senderName?.trim() || (orchestratorDecision.value ? "普拉娜" : roleName.value));
+const roleName = computed(() => props.message.role === "assistant" ? "助手" : props.message.role === "event" ? "系统" : "用户");
+const displayName = computed(() => card.value || nickname.value || props.message.senderName?.trim() || (orchestratorDecision.value ? "助手" : roleName.value));
 const identityDetails = computed(() => {
   const seen = new Set([identityKey(displayName.value)]);
   return [
@@ -119,8 +119,8 @@ function identityKey(value: string) {
         </div>
         <p v-else-if="!orchestratorDecision && messageText" class="whitespace-pre-wrap break-words text-sm leading-6">{{ messageText }}</p>
         <div v-if="!orchestratorDecision && message.imageUrls?.length" class="grid gap-2 sm:grid-cols-2">
-          <a v-for="url in message.imageUrls" :key="url" :href="authenticatedMediaPath(url)" target="_blank" rel="noopener noreferrer" title="打开原图">
-            <AuthenticatedImage :src="url" alt="会话图片" thumbnail class-name="max-h-96 w-full rounded object-contain" />
+          <a v-for="(url, index) in message.imageUrls" :key="url" :href="authenticatedMediaPath(url)" target="_blank" rel="noopener noreferrer" title="打开原图">
+            <AuthenticatedImage :src="url" :alt="message.imageAltTexts?.[index] || '会话图片'" thumbnail class-name="max-h-96 w-full rounded object-contain" />
           </a>
         </div>
         <div v-if="messageTraceVisible" data-slot="message-trace" class="flex w-full flex-wrap items-center gap-x-3 gap-y-2 border-t border-page/20 pt-3 font-mono text-[10px] text-page/65" aria-label="消息来源与工具">

@@ -8,11 +8,9 @@ import {
   loadSmokeContext
 } from "./runtime-smoke/context.js";
 import { assertPortFree, runOneBotSmoke, validateActionResponse } from "./runtime-smoke/onebot.js";
-import { assertNonEmptyProviderReply, runProviderSmoke } from "./runtime-smoke/provider.js";
 import { maskQq, scrubSecrets } from "./runtime-smoke/shared.js";
 
 export {
-  assertNonEmptyProviderReply,
   buildNapCatSmokeConfig,
   loadSmokeContext,
   maskQq,
@@ -46,13 +44,6 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
 
-  if (command === "provider") {
-    requireExecutionGate(flags, "--execute-provider", "SUNABOT_SMOKE_ALLOW_PROVIDER_REQUEST");
-    const context = await loadSmokeContext({ requireProviderCredential: true });
-    printProviderResult(await runProviderSmoke(context));
-    return;
-  }
-
   if (command === "onebot") {
     requireExecutionGate(flags, "--execute-onebot", "SUNABOT_SMOKE_ALLOW_ONEBOT_SEND");
     requireDedicatedTestQqAttestation();
@@ -61,19 +52,7 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
 
-  if (command === "all") {
-    requireExecutionGate(flags, "--execute-provider", "SUNABOT_SMOKE_ALLOW_PROVIDER_REQUEST");
-    requireExecutionGate(flags, "--execute-onebot", "SUNABOT_SMOKE_ALLOW_ONEBOT_SEND");
-    requireDedicatedTestQqAttestation();
-    const context = await fullSmokeContext();
-    await assertPortFree("127.0.0.1", context.onebotPort);
-    printPreflight(context);
-    printProviderResult(await runProviderSmoke(context));
-    printOneBotResult(await runOneBotSmoke(context), context.adminQq);
-    return;
-  }
-
-  throw new Error("未知命令。可用命令：init、configure-onebot、preflight、provider、onebot、all。");
+  throw new Error("未知命令。可用命令：init、configure-onebot、preflight、onebot。");
 }
 
 function fullSmokeContext() {
@@ -91,10 +70,6 @@ function printPreflight(context: Awaited<ReturnType<typeof loadSmokeContext>>) {
   console.log(`provider credential: configured (${context.provider.apiKeyEnv})`);
   console.log(`OneBot: ${context.onebotUrl} / token configured`);
   console.log(`test QQ: ${maskQq(context.napcatAccount)} / admin QQ: ${maskQq(context.adminQq)}`);
-}
-
-function printProviderResult(result: Awaited<ReturnType<typeof runProviderSmoke>>) {
-  console.log(`Provider 冒烟通过：${result.model}，回复 ${result.length} 字符，摘要 ${result.digest}。`);
 }
 
 function printOneBotResult(result: Awaited<ReturnType<typeof runOneBotSmoke>>, adminQq: string) {

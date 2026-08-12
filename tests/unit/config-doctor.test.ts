@@ -46,28 +46,54 @@ describe("ConfigDoctorService", () => {
     ]));
   });
 
-  it("repairs a missing group thread model with the normalized default", async () => {
-    const document = structuredClone(defaultConfig());
-    delete (document.bot.orchestrator as Partial<typeof document.bot.orchestrator>).groupThreadModel;
-    await writeDocument(document);
-
+  it("fills every missing configuration field from the current defaults", async () => {
+    await writeDocument({});
     const doctor = createDoctor();
-    const report = await doctor.scan();
 
-    expect(report.status).toBe("repairable");
-    expect(report.proposal?.source).toBe("rules");
-    expect(report.proposal?.changes).toContainEqual(expect.objectContaining({
-      path: "/bot/orchestrator/groupThreadModel",
-      action: "add",
-      summary: expect.stringContaining("gpt-5.4-mini")
-    }));
+    const scan = await doctor.scan();
+
+    expect(scan.status).toBe("repairable");
+    expect(scan.issues.every((issue) => issue.repairable)).toBe(true);
+    expect(scan.proposal?.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "/bot/tone/followMainModel", action: "add", summary: expect.stringContaining("false") }),
+      expect.objectContaining({ path: "/bot/adminQq", action: "add", summary: expect.stringContaining("\"\"") }),
+      expect.objectContaining({ path: "/onebot/autoReplyPrivate", action: "add" })
+    ]));
+
     await doctor.apply({
-      proposalId: report.proposal!.id,
-      sourceRevision: report.sourceRevision
+      proposalId: scan.proposal!.id,
+      sourceRevision: scan.sourceRevision
     });
-    await expect(fs.readFile(configPath, "utf8").then(JSON.parse)).resolves.toMatchObject({
-      bot: { orchestrator: { groupThreadModel: "gpt-5.4-mini" } }
+
+    const repaired = JSON.parse(await fs.readFile(configPath, "utf8")) as AppConfig;
+    expect(repaired).toMatchObject({
+      schemaVersion: 1,
+      bot: { adminQq: "", tone: { enabled: false, followMainModel: false } },
+      onebot: { autoReplyPrivate: true }
     });
+    await expect(doctor.scan()).resolves.toMatchObject({ status: "healthy", issues: [] });
+  });
+
+  it("repairs missing and invalid tone booleans locally with false defaults", async () => {
+    const document = structuredClone(defaultConfig());
+    delete (document.bot.tone as Partial<typeof document.bot.tone>).followMainModel;
+    (document.bot.tone as unknown as Record<string, unknown>).enabled = "enabled";
+    await writeDocument(document);
+    const runModel = vi.fn();
+    const doctor = createDoctor({ runModel });
+
+    const scan = await doctor.scan();
+
+    expect(scan.status).toBe("repairable");
+    expect(scan.proposal?.source).toBe("rules");
+    expect(scan.proposal?.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "/bot/tone/followMainModel", action: "add", summary: expect.stringContaining("false") }),
+      expect.objectContaining({ path: "/bot/tone/enabled", action: "replace", summary: expect.stringContaining("false") })
+    ]));
+    await doctor.apply({ proposalId: scan.proposal!.id, sourceRevision: scan.sourceRevision });
+    const repaired = JSON.parse(await fs.readFile(configPath, "utf8")) as AppConfig;
+    expect(repaired.bot.tone).toMatchObject({ enabled: false, followMainModel: false });
+    expect(runModel).not.toHaveBeenCalled();
   });
 
   it("keeps invalid JSON local and refuses an AI request", async () => {
@@ -215,7 +241,7 @@ describe("ConfigDoctorService", () => {
     });
   });
 
-  it("does not send arbitrary issue keys to the model and keeps manual status", async () => {
+  it("removes unsupported configuration fields locally without sending them to the model", async () => {
     const document = structuredClone(defaultConfig()) as AppConfig & Record<string, unknown>;
     delete (document as Partial<AppConfig>).schemaVersion;
     document["secret-key-name-sentinel"] = "ignored";
@@ -224,53 +250,38 @@ describe("ConfigDoctorService", () => {
     const doctor = createDoctor({ runModel });
 
     const scan = await doctor.scan();
-    expect(scan.status).toBe("manual");
-    expect(scan.proposal).toBeUndefined();
-    const report = await doctor.propose(scan.sourceRevision);
-
-    expect(report.status).toBe("manual");
-    expect(report.proposal).toBeUndefined();
-    expect(JSON.stringify(runModel.mock.calls[0]?.[0]?.request)).not.toContain("secret-key-name-sentinel");
+    expect(scan.status).toBe("repairable");
+    expect(scan.proposal?.changes).toContainEqual(expect.objectContaining({
+      path: "/secret-key-name-sentinel",
+      action: "remove"
+    }));
+    expect(runModel).not.toHaveBeenCalled();
   });
 
-  it("lets AI repair an allowed invalid type without exposing its raw value", async () => {
+  it("repairs an invalid boolean locally without exposing its raw value", async () => {
     const document = structuredClone(defaultConfig());
     (document.bot as unknown as Record<string, unknown>).pokeOnNoReply = "sensitive-invalid-value";
     await writeDocument(document);
-    const runModel = vi.fn(async () => JSON.stringify({
-      summary: "修复布尔字段",
-      operations: [{
-        op: "replace",
-        path: "/bot/pokeOnNoReply",
-        valueJson: "false",
-        reason: "恢复为布尔值"
-      }]
-    }));
+    const runModel = vi.fn();
     const doctor = createDoctor({ runModel });
     const scan = await doctor.scan();
 
-    expect(scan.status).toBe("manual");
+    expect(scan.status).toBe("repairable");
     expect(scan.issues).toContainEqual(expect.objectContaining({ path: "/bot/pokeOnNoReply" }));
-    const proposal = await doctor.propose(scan.sourceRevision);
-
-    expect(proposal.status).toBe("repairable");
-    expect(proposal.proposal?.changes).toContainEqual(expect.objectContaining({ path: "/bot/pokeOnNoReply" }));
-    expect(JSON.stringify(runModel.mock.calls[0]?.[0]?.request)).not.toContain("sensitive-invalid-value");
+    expect(scan.proposal?.changes).toContainEqual(expect.objectContaining({
+      path: "/bot/pokeOnNoReply",
+      summary: expect.stringContaining("false")
+    }));
+    expect(runModel).not.toHaveBeenCalled();
   });
 
-  it("collects multiple invalid fields and derives the quote mirror repair", async () => {
+  it("repairs multiple invalid booleans locally and derives the quote mirror repair", async () => {
     const document = structuredClone(defaultConfig());
     (document.bot as unknown as Record<string, unknown>).pokeOnNoReply = "invalid-poke";
     (document.bot as unknown as Record<string, unknown>).quoteGroupReplies = "invalid-quote";
     document.onebot.quoteGroupReplies = true;
     await writeDocument(document);
-    const runModel = vi.fn(async () => JSON.stringify({
-      summary: "repair invalid booleans",
-      operations: [
-        { op: "replace", path: "/bot/pokeOnNoReply", valueJson: "false", reason: "deceptive reason" },
-        { op: "replace", path: "/bot/quoteGroupReplies", valueJson: "false", reason: "deceptive reason" }
-      ]
-    }));
+    const runModel = vi.fn();
     const doctor = createDoctor({ runModel });
     const scan = await doctor.scan();
 
@@ -278,15 +289,13 @@ describe("ConfigDoctorService", () => {
       expect.objectContaining({ path: "/bot/pokeOnNoReply" }),
       expect.objectContaining({ path: "/bot/quoteGroupReplies" })
     ]));
-    const proposal = await doctor.propose(scan.sourceRevision);
-
-    expect(proposal.status).toBe("repairable");
-    expect(proposal.proposal?.changes).toEqual(expect.arrayContaining([
+    expect(scan.status).toBe("repairable");
+    expect(scan.proposal?.changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "/bot/pokeOnNoReply", summary: expect.stringContaining("false") }),
       expect.objectContaining({ path: "/bot/quoteGroupReplies", summary: expect.stringContaining("false") }),
       expect.objectContaining({ path: "/onebot/quoteGroupReplies", summary: expect.stringContaining("false") })
     ]));
-    expect(proposal.proposal?.changes.some((change) => change.summary.includes("deceptive reason"))).toBe(false);
+    expect(runModel).not.toHaveBeenCalled();
   });
 
   it("rejects an allowlisted AI change when that field is not an active issue", async () => {

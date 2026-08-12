@@ -7,6 +7,7 @@ export const ARCHITECTURE_RULES = [
   "structure",
   "path-drift",
   "service-boundary",
+  "layer-boundary",
   "contracts-boundary",
   "public-api",
   "executable-cycle",
@@ -38,7 +39,7 @@ const REQUIRED_DIRECTORIES = [
   "packages/platform",
   "packages/testkit",
   "components",
-  "deploy/docker",
+  "deploy/napcat",
   "deploy/native",
   "tooling/quality",
   "tests"
@@ -152,6 +153,16 @@ export function auditArchitecture(projectRoot, overrides = {}) {
         });
       }
 
+      if (rules.has("layer-boundary") && target.relative?.startsWith("src/")
+        && /^(?:adapters|packages\/platform)\//.test(source.relative)) {
+        report({
+          rule: "layer-boundary",
+          source: source.relative,
+          target: target.relative,
+          message: `${source.relative}:${reference.line} imports application composition boundary ${target.relative}`
+        });
+      }
+
       if (rules.has("contracts-boundary") && source.relative.startsWith("packages/contracts/")) {
         const reason = forbiddenContractDependency(target, reference.specifier);
         if (reason) report({
@@ -212,10 +223,10 @@ export function auditArchitecture(projectRoot, overrides = {}) {
     } else {
       try {
         const contract = JSON.parse(fs.readFileSync(absolute, "utf8"));
-        if (contract.schemaVersion !== 2) report({
+        if (contract.schemaVersion !== 3) report({
           rule: "runtime-contract",
           source: runtimeContractPath,
-          message: `${runtimeContractPath} must declare schemaVersion 2`
+          message: `${runtimeContractPath} must declare schemaVersion 3`
         });
       } catch (error) {
         report({
@@ -359,7 +370,7 @@ function isForbiddenServiceTarget(relative) {
   return relative.startsWith("adapters/")
     || relative.startsWith("deploy/")
     || relative.startsWith("tooling/")
-    || relative.startsWith("src/admin/")
+    || relative.startsWith("src/")
     || relative.startsWith("apps/admin-web/")
     || relative.startsWith("admin/");
 }

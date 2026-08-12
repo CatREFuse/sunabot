@@ -19,6 +19,7 @@ import {
 import {
   SKILL_SCRIPT_MAX_OUTPUT_BYTES,
   StrongIsolatedAgentSkillScriptSandbox,
+  resolveAgentSkillScriptBubblewrapExecutable,
   type AgentSkillScriptSandboxPort
 } from "./agentSkillScriptSandbox.js";
 
@@ -29,13 +30,10 @@ export interface AgentSkillScriptExecutorOptions {
   projection?: AgentSkillScriptProjectionPort;
   sandbox?: AgentSkillScriptSandboxPort;
   auditRunner?: AgentSkillScriptAuditRunnerPort;
-  backend?: "auto" | "bubblewrap" | "docker";
+  backend?: "auto" | "bubblewrap";
   platform?: NodeJS.Platform;
   bwrapExecutable?: string;
   prlimitExecutable?: string;
-  dockerExecutable?: string;
-  dockerImage?: string;
-  dockerEnvironment?: Readonly<Record<string, string>>;
 }
 
 export class AgentSkillScriptExecutor {
@@ -54,11 +52,8 @@ export class AgentSkillScriptExecutor {
     this.sandbox = options.sandbox ?? new StrongIsolatedAgentSkillScriptSandbox({
       backend: options.backend,
       platform: options.platform,
-      bwrapExecutable: options.bwrapExecutable,
-      prlimitExecutable: options.prlimitExecutable,
-      dockerExecutable: options.dockerExecutable,
-      dockerImage: options.dockerImage,
-      dockerEnvironment: options.dockerEnvironment
+      bwrapExecutable: options.bwrapExecutable ?? resolveAgentSkillScriptBubblewrapExecutable(),
+      prlimitExecutable: options.prlimitExecutable
     });
   }
 

@@ -57,30 +57,22 @@ export class SystemConfigService {
 
   createTurn(context: SystemConfigTurnContext): SystemConfigTurn {
     let pending: PendingMutation | undefined;
-    let rejected = false;
     return {
       execute: async (input) => {
-        if (rejected) return failure("SYSTEM_CONFIG_TURN_REJECTED", "system_config 必须在当前模型回合中单独调用。");
         if (context.conversationId === WEB_CHAT_CONVERSATION_ID && isMutation(input)) {
           return failure(DURABLE_DELIVERY_REQUIRED_CODE, DURABLE_DELIVERY_REQUIRED_MESSAGE);
         }
-        if (pending) return failure("SYSTEM_CONFIG_MUTATION_PENDING", "配置修改后请直接完成当前回复。");
         if (input.operation === "get_settings") return this.settings(context);
         if (input.operation === "get_status") return this.status(context);
         if (input.operation === "list_groups") return this.groups(context, input);
+        if (pending) return failure("SYSTEM_CONFIG_MUTATION_PENDING", "当前回合已有一项待提交的配置修改。");
         const prepared = await this.prepareMutation(context, input);
         if ("pending" in prepared && prepared.pending) pending = prepared.pending;
         return prepared.result;
       },
       mutationStaged: () => Boolean(pending),
       stagedMutation: () => pending ? structuredClone(pending.descriptor) : undefined,
-      rejectTurn: () => {
-        pending = undefined;
-        rejected = true;
-      },
-      turnRejected: () => rejected,
       commit: async () => {
-        if (rejected) throw new Error("已拒绝的 system_config 回合不能提交配置。");
         const mutation = pending;
         if (!mutation) return;
         await mutation.commit();
@@ -118,11 +110,9 @@ export class SystemConfigService {
       orchestrator: {
         enabled: config.bot.orchestrator.enabled,
         model: config.bot.orchestrator.userGroupchatOrchestratorModel,
-        groupThreadModel: config.bot.orchestrator.groupThreadModel,
         messageThreshold: config.bot.orchestrator.messageThreshold,
         recentMessageWindowMs: config.bot.orchestrator.recentMessageWindowMs,
-        scope: "ambient_group_replies",
-        groupThreadClassifierControlled: false
+        scope: "ambient_group_replies"
       },
       search: {
         implementation: config.bot.tools.websearch.provider,
@@ -141,6 +131,8 @@ export class SystemConfigService {
       },
       tone: {
         enabled: config.bot.tone.enabled,
+        segmentedReply: config.bot.tone.segmentedReply,
+        followMainModel: config.bot.tone.followMainModel,
         providerId: config.bot.tone.providerId || null,
         model: config.bot.tone.model,
         reasoningEffort: config.bot.tone.reasoningEffort ?? null,
@@ -150,8 +142,9 @@ export class SystemConfigService {
       },
       memory: {
         model: config.bot.memory.memoryModel,
-        messageThreshold: config.bot.memory.messageThreshold,
-        workingMemoryMaxEntries: config.bot.memory.workingMemoryMaxEntries
+        dreamRecentWindowHours: config.bot.memory.dreamRecentWindowHours,
+        dreamRecentMemoryLimit: config.bot.memory.dreamRecentMemoryLimit,
+        dreamOlderMemoryLimit: config.bot.memory.dreamOlderMemoryLimit
       },
       tools: {
         maxCalls: config.bot.tools.maxCalls,
@@ -166,8 +159,7 @@ export class SystemConfigService {
       },
       options: {
         replyScopes: ["all", "private", "user_group", "bot_group"],
-        searchImplementations: ["tavily"],
-        bashAdminBackends: ["native", "docker"]
+        searchImplementations: ["tavily"]
       }
     };
   }
@@ -224,9 +216,6 @@ export class SystemConfigService {
     const config = await this.options.registry.config(context.agentId);
     if (input.operation === "set_auto_reply") return this.prepareAutoReply(context.agentId, config, input);
     if (input.operation === "set_orchestrator") return this.prepareOrchestrator(context.agentId, config, input);
-    if (input.operation === "set_bash_admin_backend") {
-      return this.prepareBashAdminBackend(context.agentId, config, input);
-    }
     return this.prepareSearch(context.agentId, config, input);
   }
 
@@ -259,8 +248,7 @@ export class SystemConfigService {
     const after = { enabled: input.enabled! };
     const changes = changedFields(before, after, "orchestrator");
     if (!changes.length) return noOp("set_orchestrator", before, after, {
-      scope: "ambient_group_replies",
-      groupThreadClassifierControlled: false
+      scope: "ambient_group_replies"
     });
     const orchestrator = structuredClone(config.bot.orchestrator);
     orchestrator.enabled = after.enabled;
@@ -270,8 +258,7 @@ export class SystemConfigService {
         value: orchestrator
       });
     }, {
-      scope: "ambient_group_replies",
-      groupThreadClassifierControlled: false
+      scope: "ambient_group_replies"
     });
   }
 
@@ -303,22 +290,6 @@ export class SystemConfigService {
         value: tools
       });
     }, { availableImplementations: ["tavily"] });
-  }
-
-  private prepareBashAdminBackend(agentId: string, config: AppConfig, input: SystemConfigInput) {
-    const before = { adminPrivateBackend: config.bot.bash.adminPrivateBackend };
-    const after = { adminPrivateBackend: input.bashAdminBackend! };
-    const changes = changedFields(before, after, "bash");
-    const details = { preferenceOnly: true, isolationCapabilityRequired: true };
-    if (!changes.length) return noOp("set_bash_admin_backend", before, after, details);
-    const bash = structuredClone(config.bot.bash);
-    bash.adminPrivateBackend = after.adminPrivateBackend;
-    return staged(input, before, after, changes, async () => {
-      await this.options.agentConfigService.patch(agentId, "bash", {
-        revision: configRevision(config),
-        value: bash
-      });
-    }, details);
   }
 
   private prepareGroupMutation(context: SystemConfigTurnContext, input: SystemConfigInput) {
@@ -411,48 +382,35 @@ function safeBashSettings(
   capabilities: { workspaceBash: boolean; workspaceBashReason?: WorkspaceBashUnavailableReason }
 ) {
   const configuredEnabled = config.bot.bash.enabled;
-  const backend = config.bot.bash.adminPrivateBackend;
-  const available = config.bot.bash.adminOnly && capabilities.workspaceBash;
-  const unavailableReason = !config.bot.bash.adminOnly
-    ? "BASH_ADMIN_IDENTITY_DISABLED"
-    : available
-      ? configuredEnabled ? null : "BASH_CONFIG_DISABLED"
-      : capabilities.workspaceBashReason
-        ?? (backend === "native"
-          ? "BASH_NATIVE_ISOLATION_UNAVAILABLE"
-          : "BASH_DOCKER_ISOLATION_UNAVAILABLE");
+  const available = capabilities.workspaceBash;
+  const unavailableReason = available
+    ? configuredEnabled ? null : "BASH_CONFIG_DISABLED"
+    : capabilities.workspaceBashReason ?? "BASH_NATIVE_ISOLATION_UNAVAILABLE";
   const unavailableMessage = unavailableReason === "BASH_CONFIG_DISABLED"
     ? "Bash 未启用。"
-    : unavailableReason === "BASH_ADMIN_IDENTITY_DISABLED"
-      ? "管理员身份门禁已关闭，所有会话均不可用。"
-      : unavailableReason === "BASH_AUDIT_UNAVAILABLE"
-        ? "独立 Bash 审计不可用，Bash 已安全关闭。"
+    : unavailableReason === "BASH_AUDIT_UNAVAILABLE"
+      ? "Bash 对抗审批 Agent 不可用，Bash 已安全关闭。"
         : unavailableReason === "BASH_WORKBENCH_UNAVAILABLE"
           ? "当前 Agent workbench 不可用，Bash 已安全关闭。"
           : unavailableReason === "BASH_NATIVE_ISOLATION_UNAVAILABLE"
-            ? "Native 后端未通过 bubblewrap 或等价强隔离检查；Bash 已安全关闭，不会回退到宿主 Bash。可切换 Docker 后端后重新检查。"
-            : unavailableReason === "BASH_DOCKER_ISOLATION_UNAVAILABLE"
-              ? "Docker 后端未通过强隔离检查；Bash 已安全关闭，不会使用 Docker socket 或宿主 Bash 回退。"
-              : null;
+            ? "Native Bash 当前不可用。"
+            : null;
   return {
     enabled: configuredEnabled,
     configuredEnabled,
-    adminPrivateBackend: backend,
-    configuredBackend: backend,
     auditModel: config.bot.bash.auditModel,
     strictMode: config.bot.bash.strictMode,
     available,
     effectiveEnabled: configuredEnabled && available,
     unavailableReason,
     unavailableMessage,
-    ...(unavailableReason === "BASH_ADMIN_IDENTITY_DISABLED"
-      ? { unavailabilityKind: "session" }
-      : unavailableReason && unavailableReason !== "BASH_CONFIG_DISABLED"
-        ? { unavailabilityKind: "runtime" }
-        : {}),
-    isolationRequired: "bubblewrap_or_equivalent",
+    ...(unavailableReason && unavailableReason !== "BASH_CONFIG_DISABLED"
+      ? { unavailabilityKind: "runtime" }
+      : {}),
+    isolationRequired: "platform_native",
+    nativeHostExecutionAllowed: process.platform === "darwin",
     rawHostFallbackAllowed: false,
-    dockerSocketAllowed: false
+    bubblewrapRequired: process.platform === "linux"
   };
 }
 

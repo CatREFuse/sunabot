@@ -1,4 +1,5 @@
 export type EmojiSource = "generated" | "upload";
+export type EmojiSendSize = 64 | 128 | 256 | 512 | 1024;
 
 export interface EmojiRecord {
   key: string;
@@ -13,9 +14,21 @@ export interface EmojiRecord {
   placeholderUrl: string;
 }
 
+export interface EmojiVersionRecord extends EmojiRecord {
+  current: boolean;
+}
+
+export interface EmojiVersionsPayload {
+  key: string;
+  versions: EmojiVersionRecord[];
+}
+
 export interface EmojiPayload {
   presetKeys: string[];
   emojis: EmojiRecord[];
+  sendSize?: EmojiSendSize;
+  sendSeparately?: boolean;
+  revision?: string;
 }
 
 export interface EmojiUploadInput {

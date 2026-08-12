@@ -7,8 +7,9 @@ import {
   McpOAuthService,
   type McpOAuthTokenExchangePort
 } from "../../adapters/mcp/oauthService.js";
+import { testTempRoot } from "./test-temp-root.js";
 
-const TEST_ROOT = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/oauth-service";
+const TEST_ROOT = testTempRoot("mcp-oauth-service");
 
 describe("MCP OAuth service", () => {
   let root = "";

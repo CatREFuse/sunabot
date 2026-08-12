@@ -19,7 +19,7 @@ const entries = computed(() => props.messages.map((message) => ({
   event: message.role === "event",
   name: message.role === "user"
     ? message.senderName?.trim() || "管理员"
-    : message.senderName?.trim() || "普拉娜",
+    : message.senderName?.trim() || "助手",
   text: displayMessageText(message.text, message.imageUrls)
 })));
 
@@ -86,7 +86,7 @@ function contentLoaded() {
 
           <div v-if="entry.message.imageUrls?.length" class="grid gap-4 pt-2 sm:grid-cols-2">
             <a
-              v-for="url in entry.message.imageUrls"
+              v-for="(url, index) in entry.message.imageUrls"
               :key="url"
               :href="authenticatedMediaPath(url)"
               target="_blank"
@@ -96,7 +96,7 @@ function contentLoaded() {
               <AuthenticatedImage
                 :src="url"
                 thumbnail
-                alt="会话图片"
+                :alt="entry.message.imageAltTexts?.[index] || '会话图片'"
                 class-name="max-h-80 w-full object-contain"
               />
             </a>

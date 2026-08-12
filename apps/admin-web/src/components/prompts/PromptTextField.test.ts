@@ -20,21 +20,19 @@ const variables = [
 ];
 
 describe("PromptTextField", () => {
-  it("searches variables by annotation and inserts the @{name} syntax", async () => {
+  it("renders one standard Markdown contenteditable with line numbers", () => {
     const wrapper = mount(PromptTextField, {
-      props: { modelValue: "", variables, label: "系统提示词" }
+      props: { modelValue: "# 标题\n正文", variables, label: "系统提示词" }
     });
-    const textarea = wrapper.get("textarea");
 
-    await textarea.setValue("@用户");
-    const option = wrapper.get('[role="option"]');
-    expect(option.text()).toContain("当前用户输入");
-    await option.trigger("mousedown");
-
-    expect(wrapper.emitted("update:modelValue")?.at(-1)).toEqual(["@{user.input}"]);
+    expect(wrapper.get('[role="textbox"]').attributes("contenteditable")).toBe("true");
+    expect(wrapper.get('[role="textbox"]').attributes("data-language")).toBe("markdown");
+    expect(wrapper.find(".cm-lineNumbers").exists()).toBe(true);
+    expect(wrapper.find("textarea").exists()).toBe(false);
+    expect(wrapper.find(".prompt-field__highlight").exists()).toBe(false);
   });
 
-  it("shows every directly available variable below the input", () => {
+  it("shows every directly available variable below the editor", () => {
     const wrapper = mount(PromptTextField, {
       props: { modelValue: "", variables, label: "用户提示词" }
     });
@@ -64,12 +62,11 @@ describe("PromptTextField", () => {
     const wrapper = mount(PromptTextField, {
       props: { modelValue: "{{ persona.soul }}\n", variables, label: "系统提示词", semanticXml: true }
     });
-    const textarea = wrapper.get("textarea").element as HTMLTextAreaElement;
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
     await wrapper.findAll(".variable-context__row")[0]!.trigger("click");
 
     expect(wrapper.emitted("update:modelValue")?.at(-1)).toEqual([
-      "{{ persona.soul }}\n<user_input>@{user.input}</user_input>"
+      "<user_input>@{user.input}</user_input>{{ persona.soul }}\n"
     ]);
     expect(wrapper.findAll(".variable-context__row--used").map((row) => row.text()).join(" ")).toContain("persona.soul");
   });
@@ -79,51 +76,55 @@ describe("PromptTextField", () => {
     const wrapper = mount(PromptTextField, {
       props: { modelValue: content, variables, label: "系统提示词" }
     });
-    const textarea = wrapper.get("textarea").element as HTMLTextAreaElement;
-    textarea.scrollTop = 240;
-    textarea.setSelectionRange(12, 12);
+    const scroller = wrapper.get(".cm-scroller").element as HTMLElement;
+    scroller.scrollTop = 240;
 
     await wrapper.findAll(".variable-context__row")[0]!.trigger("click");
 
-    expect(textarea.scrollTop).toBe(240);
+    expect(scroller.scrollTop).toBe(240);
     expect(wrapper.emitted("update:modelValue")?.at(-1)?.[0]).toContain("@{user.input}");
   });
 
-  it("renders escaped Markdown and XML syntax in the highlight layer", () => {
+  it("renders Markdown, embedded HTML, conditional directives, and registered variables", () => {
     const wrapper = mount(PromptTextField, {
       props: {
-        modelValue: "# 标题\n- **重点**与*斜体*\n> 引用\n`code` <context>@{user.input}</context>\n```ts\nconst value = '<safe>';\n**代码内不是粗体**\n```",
+        modelValue: "# 标题\n- **重点**\n<context s-if=\"tone_mode == true\">@{user.input}</context>",
         variables,
         label: "系统提示词"
       }
     });
-    const highlight = wrapper.get(".prompt-field__highlight");
+    const content = wrapper.get(".cm-content");
 
-    expect(highlight.find(".markup-heading").exists()).toBe(true);
-    expect(highlight.find(".markup-bold").text()).toBe("**重点**");
-    expect(highlight.find(".markup-italic").text()).toBe("*斜体*");
-    expect(highlight.find(".markup-quote").exists()).toBe(true);
-    expect(highlight.findAll(".markup-xml")).toHaveLength(2);
-    expect(highlight.find(".markup-code-block").text()).toContain("const value = '<safe>';\n**代码内不是粗体**");
-    expect(highlight.findAll(".markup-code-fence")).toHaveLength(2);
-    expect(highlight.find(".markup-code-block").find(".markup-bold").exists()).toBe(false);
-    expect(highlight.html()).toContain("&lt;safe&gt;");
-    expect(highlight.text()).toContain("@{user.input}");
+    expect(content.text()).toContain("# 标题");
+    expect(content.findAll("span").length).toBeGreaterThan(4);
+    expect(content.get(".cm-prompt-directive").text()).toContain("s-if=");
+    expect(content.get(".cm-prompt-condition").text()).toBe("tone_mode == true");
+    expect(content.get(".cm-prompt-variable").text()).toBe("@{user.input}");
   });
 
-  it("styles only available variable references like inline code", () => {
+  it("styles only registered variable references", () => {
     const wrapper = mount(PromptTextField, {
       props: {
-        modelValue: "`inline` @{user.input} @{missing.value}",
+        modelValue: "@{user.input} @{missing.value}",
         variables,
         label: "系统提示词"
       }
     });
-    const highlight = wrapper.get(".prompt-field__highlight");
 
-    expect(highlight.findAll(".markup-code")).toHaveLength(2);
-    expect(highlight.get(".markup-variable.markup-code").text()).toBe("@{user.input}");
-    expect(highlight.findAll(".markup-variable")).toHaveLength(1);
-    expect(highlight.text()).toContain("@{missing.value}");
+    expect(wrapper.findAll(".cm-prompt-variable")).toHaveLength(1);
+    expect(wrapper.get(".cm-prompt-variable").text()).toBe("@{user.input}");
+    expect(wrapper.get(".cm-content").text()).toContain("@{missing.value}");
+  });
+
+  it("reflects an external model update without creating a second text layer", async () => {
+    const wrapper = mount(PromptTextField, {
+      props: { modelValue: "旧内容", variables, label: "系统提示词" }
+    });
+
+    await wrapper.setProps({ modelValue: "# 新内容\n@{user.input}" });
+
+    expect(wrapper.get(".cm-content").text()).toContain("# 新内容");
+    expect(wrapper.findAll(".cm-content")).toHaveLength(1);
+    expect(wrapper.findAll(".cm-prompt-variable")).toHaveLength(1);
   });
 });

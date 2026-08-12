@@ -2,9 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { AgentRegistry } from "../../../services/agents/agentRegistry.js";
+import type {
+  AgentConfigImportFileInput,
+  AgentConfigImportInput
+} from "../../../services/agents/agentConfigImport.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
 import type { AgentSummary } from "../../../services/agents/agentRegistry.js";
 import type { AccountRuntimeState } from "../../../services/agents/accountRuntimeReconciler.js";
+import type { AgentSoulService } from "../../../src/admin/agentSoul.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 
@@ -16,6 +21,7 @@ export interface AgentRouteOptions {
   onPromptSettingsUpdated?: (agentId: string) => Promise<void>;
   isAccountConnected?: (accountId: string) => boolean;
   reconcileAccount?: (accountId: string) => Promise<AccountRuntimeState>;
+  soulService?: AgentSoulService;
 }
 
 export function registerAgentRoutes(app: FastifyInstance, registry: AgentRegistry, options: AgentRouteOptions = {}) {
@@ -23,12 +29,16 @@ export function registerAgentRoutes(app: FastifyInstance, registry: AgentRegistr
     agents: options.decorateAgents?.(await registry.list()) ?? await registry.list()
   }));
 
-  app.post("/api/agents", { schema: { response: { 200: openObject } } }, async (request) => {
+  app.post("/api/agents", {
+    bodyLimit: 112 * 1024 * 1024,
+    schema: { response: { 200: openObject } }
+  }, async (request) => {
     const body = object(request.body);
     const created = await registry.create({
       id: text(body.id, "id"),
       name: text(body.name, "name"),
-      ...(body.avatar == null ? {} : { avatar: avatar(body.avatar) })
+      ...(body.avatar == null ? {} : { avatar: avatar(body.avatar) }),
+      ...(body.import == null ? {} : { import: agentConfigImport(body.import) })
     });
     try {
       await options.onAgentCreated?.(created.id);
@@ -38,6 +48,41 @@ export function registerAgentRoutes(app: FastifyInstance, registry: AgentRegistr
     }
     return created;
   });
+
+  app.post("/api/agent-imports/preview", {
+    bodyLimit: 112 * 1024 * 1024,
+    schema: { response: { 200: openObject } }
+  }, async (request) => registry.previewImport(agentConfigImport(request.body)));
+
+  if (options.soulService) {
+    app.get("/api/agents/:agentId/soul/export", async (request, reply) => {
+      const { agentId } = request.params as { agentId: string };
+      const exported = await options.soulService!.export(agentId);
+      return reply
+        .header("cache-control", "no-store")
+        .header("content-disposition", `attachment; filename="${exported.fileName}"`)
+        .type("application/json; charset=utf-8")
+        .send(exported.bytes);
+    });
+
+    app.post("/api/agents/:agentId/soul/preview", {
+      bodyLimit: 5 * 1024 * 1024,
+      schema: { response: { 200: openObject } }
+    }, async (request, reply) => {
+      const { agentId } = request.params as { agentId: string };
+      reply.header("cache-control", "no-store");
+      return options.soulService!.preview(agentId, request.body);
+    });
+
+    app.post("/api/agents/:agentId/soul/import", {
+      bodyLimit: 5 * 1024 * 1024,
+      schema: { response: { 200: openObject } }
+    }, async (request, reply) => {
+      const { agentId } = request.params as { agentId: string };
+      reply.header("cache-control", "no-store");
+      return options.soulService!.apply(agentId, request.body);
+    });
+  }
 
   app.get("/api/agents/:agentId", { schema: { response: { 200: openObject } } }, async (request) => {
     const { agentId } = request.params as { agentId: string };
@@ -167,6 +212,20 @@ function avatar(value: unknown) {
     fileName: text(input.fileName, "avatar.fileName"),
     dataBase64: text(input.dataBase64, "avatar.dataBase64")
   };
+}
+
+function agentConfigImport(value: unknown): AgentConfigImportInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    badRequest("AGENT_IMPORT_INVALID", "配置包无效。", "import");
+  }
+  const input = value as Record<string, unknown>;
+  if (input.source === "folder" && Array.isArray(input.files)) {
+    return { source: "folder", files: input.files as AgentConfigImportFileInput[] };
+  }
+  if (input.source === "zip" && typeof input.fileName === "string" && typeof input.dataBase64 === "string") {
+    return { source: "zip", fileName: input.fileName, dataBase64: input.dataBase64 };
+  }
+  badRequest("AGENT_IMPORT_INVALID", "配置包无效。", "import");
 }
 
 function contentType(filePath: string) {

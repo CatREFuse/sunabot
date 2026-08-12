@@ -1,115 +1,28 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { nanoid } from "nanoid";
+import {
+  inboundImageAltTexts,
+  inboundImageUrls
+} from "../../packages/contracts/messaging/messages.js";
+import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
+import { senderDisplayName } from "../../services/conversations/senderName.js";
+import {
+  formatMemoryMatchesForPrompt,
+  type MemoryEntry
+} from "../../services/memory/memoryService.js";
+import { isAdminSender } from "../../services/messaging/replySenderPolicy.js";
+import { generateImgMediaHandle } from "../../services/tools/generateImgTool.js";
 import {
   AppConfig,
   ChatMessage,
-  ConversationMessageQuote,
   ConversationRecord,
-  ImageResult,
-  ParsedIncomingMessage,
-  ReasoningEffort
+  ParsedIncomingMessage
 } from "../types.js";
-import { resolveModelReasoningEffort } from "../admin/models.js";
-import { AttachmentService } from "../../services/media/attachments/service.js";
-import type {
-  AttachmentExtractionContext,
-  ParsedAttachment
-} from "../../services/media/attachments/types.js";
-import { CommandRouter, type CommandMatch } from "../../services/messaging/commandRouter.js";
-import { isAdminSender, isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
-import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
-import {
-  assistantReplyEnvelope,
-  decodeAssistantReply,
-  decodeIncomingReply,
-  decodeToolCompletion,
-  incomingReplyEnvelope,
-  type AssistantReplyOutboxEnvelope,
-  type AssistantReplyOutboxPayload,
-  type AsyncToolCompletionPayload,
-  type RuntimeIncomingReplyEventPayload
-} from "../../packages/contracts/session/runtimeMessages.js";
-import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
-import { configureMemoryPersistence } from "../../services/memory/persistence.js";
-import {
-  ReplyGateEpochs,
-  isOrchestratorReplyRateLimited,
-  resolveUserGroupReplyRoute,
-  type ReplyGateSnapshot
-} from "../../services/orchestration/groupReplyPolicy.js";
-import { HookBus } from "../../services/messaging/hookBus.js";
-import {
-  applyMemoryBatchTransaction,
-  ensureAgentTextFile,
-  formatMemoryMatchesForPrompt,
-  isMemoryBatchCommitted,
-  mergeUserProfileMemory,
-  normalizeEventMemorySchema,
-  readAgentTextFile,
-  readMemorySourceEntries,
-  readUserProfileForUser,
-  readWorkingMemorySnapshot,
-  recallMemory,
-  recoverMemoryTransactions,
-  replaceWorkingMemoryFacts,
-  resolveUserAddressName,
-  type MemoryEntry,
-  type MemoryFactInput
-} from "../../services/memory/memoryService.js";
-import {
-  MemorySchedulerStore,
-  type MemoryClaim,
-  type MemoryQueuedMessage
-} from "../../services/memory/memoryScheduler.js";
-import {
-  OpenAIProvider,
-  type ProviderBashOptions,
-  type ProviderCompleteOptions,
-  type ProviderDeferredTurn
-} from "../../adapters/model/openaiProvider.js";
-import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
-import {
-  inboundImageUrls,
-  replaceInboundImageUrls,
-  type MessageDetailsV1,
-  type MessagingPort,
-  type OutboundMessageV1
-} from "../../packages/contracts/messaging/messages.js";
-import {
-  generatedImageMediaAsset,
-  imageMediaAsset,
-  type AttachmentSourcePort
-} from "../../packages/contracts/media/media.js";
-import { loadPersona, AgentPersona } from "../../services/agent/persona.js";
-import { appendRequestLog } from "../requestLog.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
-import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
-import { generateImgMediaHandle } from "../../services/tools/generateImgTool.js";
-import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
-import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
-import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
-import {
-  OutboxDisconnectedError,
-  SessionCoordinator,
-  type SessionHandleResult
-} from "../../services/sessions/sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
-import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
-import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
-import {
-  parseFinalPromptTemplate,
-  renderFinalPromptTemplate,
-  type PromptVariableValue,
-  type RenderedPromptRequest
-} from "../../services/agent/promptSystem.js";
-import { buildConversationPromptVariables } from "../../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { conversationRecordId, escapeRegExp, formatAttachmentListForContext, formatQuoteReferencesForContext, matchesMentionName, readRecord, uniqueStrings } from "./messagingAttachmentHelpers.js";
+import { conversationRecordId, formatAttachmentListForContext, formatQuoteReferencesForContext, matchesMentionName } from "./messagingAttachmentHelpers.js";
+import { AdminIdentity, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_STORED_CONVERSATION_MESSAGES } from "./runtimeContracts.js";
 import { conversationLastText, conversationTitle } from "./selfieHelpers.js";
+
+export function resolveRuntimePersonaName(personaName: string | undefined, configuredName: string | undefined) {
+  return personaName?.trim() || configuredName?.trim() || "助手";
+}
 
 export function estimatePromptTokens(text: string) {
   let tokens = 0;
@@ -155,16 +68,18 @@ export function collectGroupChatSummaryMessages(
       const at = Date.parse(message.at);
       return Number.isFinite(at) && now - at <= GROUP_CHAT_SUMMARY_WINDOW_MS;
     })
-    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter(isModelVisibleConversationMessage)
     .flatMap((message) => {
       const text = groupSummaryMessageText(message);
       if (!text) return [];
       return [{
         sequence: message.sequence,
-        at: message.at,
+        at: formatModelTimestamp(message.at),
         role: message.role,
         userId: message.userId,
-        senderName: message.role === "assistant" ? "普拉娜" : message.senderName,
+        senderName: message.role === "assistant"
+          ? resolveRuntimePersonaName(message.senderName, undefined)
+          : message.senderName,
         text
       }];
     });
@@ -191,28 +106,6 @@ export function stripImageTokens(text: string) {
     .replace(/\s+/g, " ")
     .trim();
 }
-export function collectBatchUsers(
-  batch: Array<{ sequence: number; message: ConversationRecord["messages"][number] }>,
-  admin: AdminIdentity
-) {
-  const users = new Map<string, BatchUserInfo>();
-  for (const { message } of batch) {
-    if (message.role !== "user" || message.userId == null) continue;
-    const userId = String(message.userId);
-    const existing = users.get(userId);
-    const currentName = normalizeParticipantName(message.senderName, userId) || existing?.currentName || "";
-    const names = uniqueStrings([...(existing?.names ?? []), currentName].filter(Boolean));
-    const isAdmin = isAdminUserId(userId, admin);
-    users.set(userId, {
-      userId,
-      names,
-      currentName,
-      addressName: isAdmin ? admin.name : currentName || userId,
-      isAdmin
-    });
-  }
-  return [...users.values()];
-}
 export function formatIncomingUserLabel(incoming: ParsedIncomingMessage, admin: AdminIdentity) {
   const userId = String(incoming.userId);
   if (isAdminUserId(userId, admin)) return `${admin.name}(${admin.userId})`;
@@ -232,9 +125,6 @@ export function buildWorkingMemoryRecallQuery(incoming: ParsedIncomingMessage, t
     conversationTitle(incoming),
     text
   ].filter(Boolean).join(" ");
-}
-export function formatBatchUserLabel(user: BatchUserInfo) {
-  return `QQ ${user.userId}（${user.addressName}）`;
 }
 export function isMemoryEntryRelatedToUsers(entry: MemoryEntry, userIds: Set<string>) {
   if (entry.userId && userIds.has(entry.userId)) return true;
@@ -256,13 +146,25 @@ export function buildUserPrompt(
   const currentTextBudget = Math.max(1_024, 6_144 - estimatePromptTokens(boundedAttachmentContext));
   const boundedText = truncateToEstimatedTokens(text, currentTextBudget);
   const scopeName = incoming.scope === "private" ? "私聊" : incoming.scope === "user_group" ? "用户群聊" : "bot群聊";
+  const timeZone = systemModelTimeZone();
+  const messageTimeLine = `消息时间：${formatModelTimestamp(incoming.time, timeZone)} [${timeZone}]\n`;
   const groupLine = incoming.groupId ? `群号：${incoming.groupId}\n` : "";
   const roleLine = isAdmin ? `角色：管理员；称呼：${admin.name}\n` : "";
   const imageCount = inboundImageUrls(incoming).length;
-  const imageLine = imageCount ? `图片：${imageCount} 张，可作为生图参考图\n` : "";
+  const imageHandles = incoming.messageId == null
+    ? []
+    : inboundImageUrls(incoming).slice(0, 4).map((_, index) => (
+      generateImgMediaHandle(String(incoming.messageId), index)
+    ));
+  const imageLine = imageCount
+    ? `图片：${imageCount} 张${inboundImageAltTexts(incoming).filter(Boolean).length ? `；内容：${inboundImageAltTexts(incoming).filter(Boolean).join("；")}` : ""}${imageHandles.length ? `；媒体句柄：${imageHandles.join("、")}` : ""}\n`
+    : "";
   const quoteLine = incoming.quoteReferences.length ? `引用：${formatQuoteReferencesForContext(incoming.quoteReferences)}\n` : "";
-  const attachmentLine = boundedAttachmentContext ? `文件内容：\n${boundedAttachmentContext}\n` : "";
-  return `消息场景：${scopeName}\n${groupLine}用户：${formatIncomingUserLabel(incoming, admin)}\n${roleLine}${imageLine}${quoteLine}${attachmentLine}内容：${boundedText}`;
+  const attachmentLine = incoming.messageId == null || !incoming.attachments.length
+    ? ""
+    : `文件：${formatAttachmentListForContext(incoming.attachments, String(incoming.messageId))}\n`;
+  const attachmentContentLine = boundedAttachmentContext ? `文件内容：\n${boundedAttachmentContext}\n` : "";
+  return `消息场景：${scopeName}\n${messageTimeLine}${groupLine}用户：${formatIncomingUserLabel(incoming, admin)}\n${roleLine}${imageLine}${quoteLine}${attachmentLine}${attachmentContentLine}内容：${boundedText}`;
 }
 
 export function buildMemoryPromptVariables(input: {
@@ -292,33 +194,43 @@ export function truncateToEstimatedTokens(text: string, budget: number) {
   }
   return `${output.trimEnd()}\n[内容已截断]`;
 }
-export function toContextChatMessage(message: ConversationRecord["messages"][number], isAdmin: boolean, admin: AdminIdentity): ChatMessage {
+export function toContextChatMessage(
+  message: ConversationRecord["messages"][number],
+  isAdmin: boolean,
+  admin: AdminIdentity,
+  timeZone = systemModelTimeZone()
+): ChatMessage {
   const speaker = formatContextSpeaker(message, isAdmin, admin);
   const quoteText = message.quoteReferences?.length ? ` 引用：${formatQuoteReferencesForContext(message.quoteReferences)}` : "";
   const imageHandles = (message.imageUrls ?? []).map((_, index) => generateImgMediaHandle(message.id, index));
   const imageText = imageHandles.length
-    ? ` 图片：${imageHandles.length} 张（媒体句柄：${imageHandles.join("、")}）`
+    ? ` 图片：${imageHandles.length} 张${message.imageAltTexts?.filter(Boolean).length ? `（${message.imageAltTexts.filter(Boolean).join("；")}）` : ""}（媒体句柄：${imageHandles.join("、")}）`
     : "";
   const attachmentText = message.attachments?.length
-    ? ` 文件：${formatAttachmentListForContext(message.attachments)}`
+    ? ` 文件：${formatAttachmentListForContext(message.attachments, message.id)}`
     : "";
   const body = `${message.text}${quoteText}${imageText}${attachmentText}`;
   return {
     role: message.role === "assistant" ? "assistant" : "user",
     content: message.groupId == null
-      ? `${formatContextTime(message.at)} ${speaker}：${body}`
-      : `${formatGroupContextMessageHeader(message)}\n${body}`,
-    imageUrls: message.imageUrls
+      ? `${formatContextTime(message.at, timeZone)} [${timeZone}] ${speaker}：${body}`
+      : `${formatGroupContextMessageHeader(message, timeZone)}\n${body}`,
+    imageUrls: message.imageUrls,
+    imageAltTexts: message.imageAltTexts
   };
 }
-export function formatGroupContextMessageHeader(message: ConversationRecord["messages"][number]) {
+export function formatGroupContextMessageHeader(
+  message: ConversationRecord["messages"][number],
+  timeZone = systemModelTimeZone()
+) {
   const uid = message.role === "assistant"
     ? message.selfId ?? message.userId
     : message.userId;
   const displayName = String(message.senderName || "").trim() || (message.role === "assistant" ? "助手" : "用户");
   const replyToMessageId = message.replyMessageIds?.[0] ?? message.quoteReferences?.[0]?.messageId;
   const fields = [
-    `timestamp=${formatGroupContextMetadataValue(formatContextTime(message.at) || message.at)}`,
+    `timestamp=${formatGroupContextMetadataValue(formatContextTime(message.at, timeZone) || message.at)}`,
+    `timezone=${formatGroupContextMetadataValue(timeZone)}`,
     `sequence=${formatGroupContextMetadataValue(message.sequence ?? "unknown")}`,
     `message_id=${formatGroupContextMetadataValue(message.id)}`,
     `display_name=${formatGroupContextMetadataValue(displayName)}`,
@@ -355,10 +267,8 @@ export function formatContextSpeaker(message: ConversationRecord["messages"][num
   const userLabel = !name || name === fallback ? `用户 ${fallback}` : `用户 ${name}(${fallback})`;
   return userLabel;
 }
-export function formatContextTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toISOString().replace("T", " ").slice(0, 16);
+export function formatContextTime(value: string, timeZone = systemModelTimeZone()) {
+  return formatModelTimestamp(value, timeZone);
 }
 export function appendConversationMessage(
   record: ConversationRecord,
@@ -380,209 +290,17 @@ export function indexedConversationMessages(record: ConversationRecord) {
     message
   }));
 }
-export function isMemoryEligibleConversationMessage(message: ConversationRecord["messages"][number]) {
+export function isModelVisibleConversationMessage(message: ConversationRecord["messages"][number]) {
   if (message.role !== "user" && message.role !== "assistant") return false;
-  if (message.visibility === "internal" || message.eventKind === "orchestrator_decision") return false;
+  return message.visibility !== "internal" && message.eventKind !== "orchestrator_decision";
+}
+export function isMemoryEligibleConversationMessage(message: ConversationRecord["messages"][number]) {
+  if (!isModelVisibleConversationMessage(message)) return false;
   if (message.requestStatus === "running" || message.requestStatus === "failed") return false;
   return Boolean(message.text.trim());
 }
-export function parseWorkingMemoryMergeOutput(text: string): WorkingMemoryMergeOutput | null {
-  const parsed = parseModelJson(text);
-  if (Array.isArray(parsed)) {
-    return {
-      facts: normalizeMemoryFacts(parsed),
-      allPreviousMemoriesInvalidated: false
-    };
-  }
-  const record = readRecord(parsed);
-  if (!Array.isArray(record.facts)) return null;
-  return {
-    facts: normalizeMemoryFacts(record.facts),
-    allPreviousMemoriesInvalidated: record.allPreviousMemoriesInvalidated === true
-  };
-}
-export function invalidWorkingMemoryClear(output: WorkingMemoryMergeOutput, previousCount: number) {
-  return output.allPreviousMemoriesInvalidated && (output.facts.length > 0 || previousCount === 0);
-}
-export function parseMemoryFactOutput(text: string): MemoryFactInput[] | null {
-  const parsed = parseModelJson(text);
-  if (Array.isArray(parsed)) return normalizeMemoryFacts(parsed);
-  const record = readRecord(parsed);
-  const values = record.profiles ?? record.facts ?? record.memories ?? record.items;
-  return Array.isArray(values) ? normalizeMemoryFacts(values) : null;
-}
-export function normalizeMemoryFacts(values: unknown[]): MemoryFactInput[] {
-  const facts: MemoryFactInput[] = [];
-  for (const value of values) {
-    const record = readRecord(value);
-    const id = stringValue(record.id);
-    const fact = stringValue(record.fact ?? record.text ?? record.summary ?? record.memory ?? record.impression ?? record.profile);
-    if (!fact) continue;
-    const time = stringValue(record.time ?? record.at ?? record.createdAt ?? record.date);
-    const userId = normalizeQqId(record.userId ?? record.qq ?? record.qqId);
-    const userIds = uniqueStrings([
-      ...normalizeQqIds(record.userIds ?? record.user_ids ?? record.qqs),
-      ...(userId ? [userId] : [])
-    ]);
-    const userName = stringValue(record.userName ?? record.user_name ?? record.name ?? record.nickname ?? record.card);
-    const addressName = stringValue(record.addressName ?? record.address_name ?? record.salutation);
-    const occurredAt = stringValue(record.occurredAt ?? record.occurred_at);
-    const occurredEndAtValue = record.occurredEndAt ?? record.occurred_end_at;
-    const occurredEndAt = occurredEndAtValue == null ? undefined : stringValue(occurredEndAtValue);
-    const observedAt = stringValue(record.observedAt ?? record.observed_at);
-    const sourceWorkingMemoryIds = normalizeStringIds(record.sourceWorkingMemoryIds ?? record.source_working_memory_ids);
-    const sourceCandidateIds = normalizeStringIds(record.sourceCandidateIds ?? record.source_candidate_ids);
-    const eventType = stringValue(record.eventType ?? record.event_type);
-    const subjectKey = stringValue(record.subjectKey ?? record.subject_key);
-    const eventKey = stringValue(record.eventKey ?? record.event_key);
-    const eventFingerprint = stringValue(record.eventFingerprint ?? record.event_fingerprint);
-    const longTermId = stringValue(record.longTermId ?? record.long_term_id);
-    const batchId = stringValue(record.batchId ?? record.batch_id);
-    facts.push({
-      id: id || undefined,
-      fact,
-      time: time || undefined,
-      occurredAt: occurredAt || undefined,
-      occurredEndAt: occurredEndAt || undefined,
-      observedAt: observedAt || undefined,
-      userId: userId || undefined,
-      userIds: userIds.length ? userIds : undefined,
-      userName: userName || undefined,
-      addressName: addressName || undefined,
-      sourceWorkingMemoryIds: sourceWorkingMemoryIds.length ? sourceWorkingMemoryIds : undefined,
-      sourceCandidateIds: sourceCandidateIds.length ? sourceCandidateIds : undefined,
-      eventType: eventType || undefined,
-      subjectKey: subjectKey || undefined,
-      eventKey: eventKey || undefined,
-      eventFingerprint: eventFingerprint || undefined,
-      longTermId: longTermId || undefined,
-      batchId: batchId || undefined,
-      promoteToLongTerm: record.promoteToLongTerm === true || record.promote_to_long_term === true
-    });
-  }
-  return facts;
-}
-export function attachUsersToMemoryFacts(facts: MemoryFactInput[], participants: BatchUserInfo[]) {
-  return facts.map((fact) => {
-    const relatedUsers = resolveFactUsers(fact, participants);
-    if (!relatedUsers.length) return fact;
-
-    const factText = relatedUsers.some((user) => fact.fact.includes(user.userId))
-      ? fact.fact
-      : `相关用户：${relatedUsers.map(formatBatchUserLabel).join("；")}。${fact.fact}`;
-    return {
-      ...fact,
-      fact: factText,
-      userId: fact.userId ?? (relatedUsers.length === 1 ? relatedUsers[0]!.userId : undefined),
-      userIds: uniqueStrings([
-        ...(fact.userIds ?? []),
-        ...relatedUsers.map((user) => user.userId)
-      ]),
-      userName: fact.userName ?? (relatedUsers.length === 1 ? relatedUsers[0]!.addressName : undefined)
-    };
-  });
-}
-export function normalizeUserProfileFacts(facts: MemoryFactInput[], participants: BatchUserInfo[]) {
-  return facts.flatMap((fact) => {
-    const relatedUsers = resolveFactUsers(fact, participants);
-    if (!relatedUsers.length) return [];
-    return relatedUsers.map((user) => {
-      const userName = fact.userName || user.currentName || user.userId;
-      const addressName = user.isAdmin ? user.addressName : fact.addressName || user.addressName;
-      return {
-        ...fact,
-        fact: stripUserProfilePrefix(fact.fact, user.userId, userName),
-        userId: user.userId,
-        userIds: [user.userId],
-        userName,
-        addressName
-      };
-    });
-  });
-}
-export function stripUserProfilePrefix(text: string, userId: string, userName: string) {
-  const idPattern = escapeRegExp(userId);
-  const namePattern = userName ? `(?:[（(]${escapeRegExp(userName)}[）)])?` : "(?:[（(][^）)]*[）)])?";
-  const exactPrefix = new RegExp(`^\\s*(?:QQ\\s*)?${idPattern}\\s*${namePattern}\\s*[:：]\\s*`);
-  const genericPrefix = /^\s*QQ\s*\d{5,}\s*(?:[（(][^）)]*[）)])?\s*[:：]\s*/;
-  return stringValue(text)
-    .split(/\r?\n/)
-    .map((line) => line.replace(exactPrefix, "").replace(genericPrefix, "").trim())
-    .filter(Boolean)
-    .join("\n");
-}
-export function resolveFactUsers(fact: MemoryFactInput, participants: BatchUserInfo[]) {
-  if (!participants.length) return [];
-  const participantById = new Map(participants.map((user) => [user.userId, user]));
-  const explicitIds = uniqueStrings([
-    ...normalizeQqIds(fact.userIds),
-    ...normalizeQqIds(fact.userId)
-  ]);
-  const explicitUsers = explicitIds.flatMap((id) => {
-    const user = participantById.get(id);
-    return user ? [user] : [];
-  });
-  if (explicitUsers.length) return explicitUsers;
-
-  const matchedUsers = participants.filter((user) => {
-    if (fact.fact.includes(user.userId)) return true;
-    return user.names.some((name) => name && fact.fact.includes(name));
-  });
-  if (matchedUsers.length) return matchedUsers;
-  return participants;
-}
-export function parseModelJson(text: string): unknown {
-  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-  const direct = tryParseJson(trimmed);
-  if (direct !== undefined) return direct;
-
-  const objectStart = trimmed.indexOf("{");
-  const objectEnd = trimmed.lastIndexOf("}");
-  if (objectStart >= 0 && objectEnd > objectStart) {
-    const parsed = tryParseJson(trimmed.slice(objectStart, objectEnd + 1));
-    if (parsed !== undefined) return parsed;
-  }
-
-  const arrayStart = trimmed.indexOf("[");
-  const arrayEnd = trimmed.lastIndexOf("]");
-  if (arrayStart >= 0 && arrayEnd > arrayStart) {
-    const parsed = tryParseJson(trimmed.slice(arrayStart, arrayEnd + 1));
-    if (parsed !== undefined) return parsed;
-  }
-
-  return undefined;
-}
-export function tryParseJson(text: string) {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return undefined;
-  }
-}
 export function stringValue(value: unknown) {
   return String(value ?? "").trim();
-}
-export function normalizeQqId(value: unknown) {
-  const text = stringValue(value);
-  if (!text) return "";
-  const match = text.match(/\d{5,}/);
-  return match?.[0] ?? text;
-}
-export function normalizeQqIds(value: unknown) {
-  const values = Array.isArray(value)
-    ? value
-    : stringValue(value)
-      .split(/[,\s，、/]+/)
-      .filter(Boolean);
-  return uniqueStrings(values.map(normalizeQqId).filter(Boolean));
-}
-export function normalizeStringIds(value: unknown) {
-  const values = Array.isArray(value)
-    ? value
-    : stringValue(value)
-      .split(/[\s,，、]+/)
-      .filter(Boolean);
-  return uniqueStrings(values.map(stringValue).filter(Boolean));
 }
 export function adminIdentityFromBot(bot: AppConfig["bot"]): AdminIdentity {
   return {

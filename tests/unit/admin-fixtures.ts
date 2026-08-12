@@ -48,13 +48,25 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
     bot: {
       adminQq: "171419991",
       adminName: "Test Admin",
+      replyModel: "gpt-5.5",
+      replyReasoningEffort: "medium",
+      imageReader: {
+        enabled: true,
+        providerId: "test-provider",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low"
+      },
       replyDebounceMs: 5_000,
       pokeOnNoReply: false,
       quoteGroupReplies: true,
       quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
+      emojiSendSize: 512,
+      emojiSendSeparately: false,
       tone: {
         enabled: false,
+        segmentedReply: false,
+        followMainModel: false,
         providerId: "",
         model: "gpt-5.4-mini",
         reasoningEffort: "low",
@@ -65,16 +77,14 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
       memory: {
         memoryModel: "gpt-5.4-mini",
         reasoningEffort: "medium",
-        messageThreshold: 48,
-        workingMemoryMaxEntries: 100,
-        workMemoryCompressInPrompt: "work_memory_compress_in.json",
-        workMemoryCompressOutPrompt: "work_memory_compress_out.json",
-        userProfilePrompt: "user_profile_prompt.json"
+        dreamRecentWindowHours: 24,
+        dreamRecentMemoryLimit: 24,
+        dreamOlderMemoryLimit: 12,
+        workMemoryCompressOutPrompt: "work_memory_compress_out.json"
       },
       orchestrator: {
         enabled: false,
         userGroupchatOrchestratorModel: "gpt-5.4-mini",
-        groupThreadModel: "gpt-5.4-mini",
         reasoningEffort: "medium",
         promptFile: "user_groupchat_orchestrator.json",
         messageThreshold: 10,
@@ -104,7 +114,6 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
       },
       bash: {
         enabled: true,
-        adminPrivateBackend: "native",
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         allowGroup: false,

@@ -13,6 +13,7 @@ import {
   type PromptVariableValue
 } from "../../services/agent/promptSystem.js";
 import { defaultConfig } from "../../src/config.js";
+import { defaultVoiceProfile, voicePromptVariables } from "../../services/voice/public.js";
 
 let root = "";
 let workspace = "";
@@ -38,6 +39,14 @@ afterAll(async () => {
 });
 
 describe("workspace prompt runtime", () => {
+  it("includes cron in the default group reply tools without exposing system_config", () => {
+    const template = parseFinalPromptTemplate(defaultPromptContent("conversation.group-reply"));
+    const names = template.tools?.map((tool) => tool.function.name);
+
+    expect(names).toContain("cron");
+    expect(names).not.toContain("system_config");
+  });
+
   it("parses and resolves every final request template without leftover variables", async () => {
     const fragmentValues = await readFragments();
 
@@ -52,6 +61,8 @@ describe("workspace prompt runtime", () => {
           ? [{ role: "assistant", content: "历史回复" }]
           : variable.type === "json"
             ? { fixture: definition.id }
+            : variable.type === "boolean"
+              ? false
             : `fixture:${variable.name}`;
       }
 
@@ -76,42 +87,62 @@ describe("workspace prompt runtime", () => {
       "runtime.address_rules": "称呼用户为老师。",
       "runtime.scope_rules": "识别会话范围。",
       "runtime.tool_rules": "按需调用工具。",
-      "messages_64": [
+      "runtime.current_time": "2026-07-19T22:43:55.000+08:00 [system_timezone=Asia/Shanghai]",
+      "message_32": [
         { role: "user", content: "上一条问题" },
         { role: "assistant", content: "上一条回复" }
       ],
+      "messages_64": [{ role: "user", content: "旧模板兼容历史" }],
       "memory.working": "工作记忆 A",
       "memory.long_term": "长期记忆 B",
       "memory.user_profile": "画像 C",
       "conversation.emoji.keys": ["开心", "认真"],
       "conversation.emoji.syntax": "需要发送表情时输出 [/表情key]。",
+      "conversation.director.schedule": "{}",
+      ...voicePromptVariables(defaultVoiceProfile()),
       "user.input": "当前问题"
     });
 
-    expect(rendered.messages.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"]);
+    expect(rendered.messages.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+      "developer",
+      "developer",
+      "developer",
+      "user"
+    ]);
     expect(rendered.messages[0]?.content).toContain("<soul>");
     expect(rendered.messages[0]?.content).toContain("<output_rules>只输出正文。</output_rules>");
+    expect(rendered.messages[0]?.content).not.toContain("<air_knowledge>");
+    expect(rendered.messages.at(-1)?.content).toContain("<air_knowledge>");
     expect(rendered.messages.at(-1)?.content).toContain("<working_memory>工作记忆 A</working_memory>");
     expect(rendered.messages.at(-1)?.content).toContain("<long_term_memory>长期记忆 B</long_term_memory>");
     expect(rendered.messages.at(-1)?.content).toContain("<user_profile>画像 C</user_profile>");
-    expect(rendered.messages[0]?.content).toContain("<emoji_keys>[");
-    expect(rendered.messages[0]?.content).toContain('"开心"');
-    expect(rendered.messages[0]?.content).toContain('"认真"');
-    expect(rendered.messages[0]?.content).toContain("<emoji_syntax>需要发送表情时输出 [/表情key]。</emoji_syntax>");
+    expect(rendered.messages[3]?.content).toContain("<emoji_keys>[");
+    expect(rendered.messages[3]?.content).toContain('"开心"');
+    expect(rendered.messages[3]?.content).toContain('"认真"');
+    expect(rendered.messages[3]?.content).toContain("<emoji_syntax>需要发送表情时输出 [/表情key]。</emoji_syntax>");
     expect(rendered.messages.at(-1)?.content).toContain("<current_input>当前问题</current_input>");
+    expect(JSON.stringify(rendered.messages)).not.toContain("旧模板兼容历史");
     expect(rendered.tools?.map((tool) => tool.function.name)).toEqual([
       "assistant_text",
       "no_reply",
       "read_file",
       "write_file",
-      "workspace_bash",
+      "native_bash",
       "websearch",
+      "webfetch",
       "generate_img",
       "selfie",
       "send_file",
+      "send_voice_message",
       "memory_recall",
+      "read_air",
       "codex",
-      "system_config"
+      "system_config",
+      "cron",
+      "call_director"
     ]);
     expect(rendered.tools?.every((tool) => tool.function.description.trim().length > 0)).toBe(true);
     for (const name of ["generate_img", "selfie", "codex"]) {
@@ -133,13 +164,16 @@ describe("workspace prompt runtime", () => {
       "persona.preference",
       "persona.dialogue_style_examples",
       "persona.user",
-      "persona.relation"
+      "persona.relation",
+      "persona.air"
     ];
     for (const definition of PROMPT_FILE_DEFINITIONS.filter((item) => item.kind === "final")) {
       expect(definition.variables.map((item) => item.name), definition.id).toEqual(expect.arrayContaining(personaNames));
     }
     const conversation = PROMPT_FILE_DEFINITIONS.find((item) => item.id === "conversation.private-reply")!;
     expect(conversation.variables.map((item) => item.name)).toEqual(expect.arrayContaining([
+      "message_32",
+      "messages_64",
       "memory.working",
       "memory.long_term",
       "memory.user_profile"
@@ -159,7 +193,11 @@ describe("workspace prompt runtime", () => {
       "persona.dialogue_style_examples",
       "persona.user",
       "persona.relation",
-      "tone.input"
+      "persona.air",
+      "tone.input",
+      "tone_mode",
+      "tone.output_contract",
+      "tone.available_assets"
     ]));
     const template = parseFinalPromptTemplate(
       await fs.readFile(path.join(systemWorkspace, definition.fileName(config)), "utf8")
@@ -170,11 +208,15 @@ describe("workspace prompt runtime", () => {
       "user.name": "猫老师",
       "runtime.current_time": "2026-07-18T08:00:00.000Z",
       "utils.roll": 42,
-      "tone.input": "保留字面量 @{persona.soul}"
+      "tone.input": "保留字面量 @{persona.soul}",
+      tone_mode: false,
+      "tone.output_contract": "只输出正文",
+      "tone.available_assets": "[]"
     }, { opaqueVariables: ["tone.input"] });
 
     expect(rendered.messages[0]?.content).toContain("<soul>persona.soul fixture");
-    expect(rendered.messages[1]?.content).toContain("保留字面量 @{persona.soul}");
+    expect(rendered.messages[0]?.content).not.toContain("<xml-check>");
+    expect(rendered.messages.at(-1)?.content).toContain("保留字面量 @{persona.soul}");
     expect(rendered.tools).toEqual([]);
     expect(rendered.response_format).toEqual({ type: "text" });
   });
@@ -186,7 +228,8 @@ describe("workspace prompt runtime", () => {
       "persona.preference": "preference",
       "persona.dialogue_style_examples": "dialogue_style_examples",
       "persona.user": "user_context",
-      "persona.relation": "relation"
+      "persona.relation": "relation",
+      "persona.air": "air_knowledge"
     };
     for (const definition of PROMPT_FILE_DEFINITIONS.filter((item) => item.kind === "fragment")) {
       const content = await fs.readFile(path.join(workspace, definition.fileName(config)), "utf8");
@@ -198,9 +241,11 @@ describe("workspace prompt runtime", () => {
       await fs.readFile(path.join(systemWorkspace, "conversation_private_reply.json"), "utf8")
     );
     const system = conversation.messages[0] as Record<string, unknown>;
-    for (const [id, tag] of Object.entries(outerTags)) {
+    for (const [id, tag] of Object.entries(outerTags).filter(([id]) => id !== "persona.air")) {
       expect(system.content).toContain(`<${tag}>@{${id}}</${tag}>`);
     }
+    const user = conversation.messages.at(-1) as Record<string, unknown>;
+    expect(user.content).toContain("<air_knowledge>@{persona.air}</air_knowledge>");
   });
 });
 

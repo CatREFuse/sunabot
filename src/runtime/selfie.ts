@@ -1,116 +1,14 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
 import crypto from "node:crypto";
+import fsp from "node:fs/promises";
 import path from "node:path";
-import { nanoid } from "nanoid";
+import { AGENT_RESOURCE_LAYOUT } from "../../packages/platform/agentResourceLayout.js";
 import {
-  AppConfig,
-  ChatMessage,
-  ConversationMessageQuote,
-  ConversationRecord,
-  ImageResult,
-  ParsedIncomingMessage,
-  ReasoningEffort
-} from "../types.js";
-import { resolveModelReasoningEffort } from "../admin/models.js";
-import { AttachmentService } from "../../services/media/attachments/service.js";
-import type {
-  AttachmentExtractionContext,
-  ParsedAttachment
-} from "../../services/media/attachments/types.js";
-import { CommandRouter, type CommandMatch } from "../../services/messaging/commandRouter.js";
-import { isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
-import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
-import {
-  assistantReplyEnvelope,
-  decodeAssistantReply,
-  decodeIncomingReply,
-  decodeToolCompletion,
-  incomingReplyEnvelope,
-  type AssistantReplyOutboxEnvelope,
-  type AssistantReplyOutboxPayload,
-  type AsyncToolCompletionPayload,
-  type RuntimeIncomingReplyEventPayload
-} from "../../packages/contracts/session/runtimeMessages.js";
-import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
-import { configureMemoryPersistence } from "../../services/memory/persistence.js";
-import {
-  ReplyGateEpochs,
-  isOrchestratorReplyRateLimited,
-  resolveUserGroupReplyRoute,
-  type ReplyGateSnapshot
-} from "../../services/orchestration/groupReplyPolicy.js";
-import { HookBus } from "../../services/messaging/hookBus.js";
-import {
-  applyMemoryBatchTransaction,
-  ensureAgentTextFile,
-  formatMemoryMatchesForPrompt,
-  isMemoryBatchCommitted,
-  mergeUserProfileMemory,
-  normalizeEventMemorySchema,
-  readAgentTextFile,
-  readMemorySourceEntries,
-  readUserProfileForUser,
-  readWorkingMemorySnapshot,
-  recallMemory,
-  recoverMemoryTransactions,
-  replaceWorkingMemoryFacts,
-  resolveUserAddressName,
-  type MemoryEntry,
-  type MemoryFactInput
-} from "../../services/memory/memoryService.js";
-import {
-  MemorySchedulerStore,
-  type MemoryClaim,
-  type MemoryQueuedMessage
-} from "../../services/memory/memoryScheduler.js";
-import {
-  OpenAIProvider,
-  type ProviderBashOptions,
-  type ProviderCompleteOptions,
-  type ProviderDeferredTurn
+  OpenAIProvider
 } from "../../adapters/model/openaiProvider.js";
-import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 import {
-  inboundImageUrls,
-  replaceInboundImageUrls,
-  type MessageDetailsV1,
-  type MessagingPort,
-  type OutboundMessageV1
+  inboundImageUrls
 } from "../../packages/contracts/messaging/messages.js";
-import {
-  generatedImageMediaAsset,
-  imageMediaAsset,
-  type AttachmentSourcePort
-} from "../../packages/contracts/media/media.js";
-import { loadPersona, AgentPersona } from "../../services/agent/persona.js";
-import { appendRequestLog } from "../requestLog.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
-import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
-import {
-  resolveGenerateImgReferences,
-  type GenerateImgReferenceContext
-} from "../../services/tools/generateImgTool.js";
-import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
-import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
-import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
-import {
-  OutboxDisconnectedError,
-  SessionCoordinator,
-  type SessionHandleResult
-} from "../../services/sessions/sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
-import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
-import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
-import {
-  parseFinalPromptTemplate,
-  renderFinalPromptTemplate,
-  type PromptVariableValue,
-  type RenderedPromptRequest
-} from "../../services/agent/promptSystem.js";
-import { buildConversationPromptVariables } from "../../services/agent/persona.js";
+import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 import {
   MAX_SELFIE_REFERENCE_BYTES,
   MAX_SELFIE_STORED_REFERENCE_IMAGES,
@@ -119,10 +17,24 @@ import {
   readSelfieReferenceImageFile,
   readSelfieReferenceManifest
 } from "../../services/media/selfieReferenceCatalog.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { isMemoryEntryRelatedToUsers } from "./conversationMemoryHelpers.js";
-import { isSelfieImageFile, normalizeSelfiePrompt, normalizeSelfieQuality, normalizeSelfieReferenceImageUrls, normalizeSelfieResolution, normalizeSelfieSize, selfieMimeType } from "./selfieHelpers.js";
+import {
+  readMemorySourceEntries
+} from "../../services/memory/memoryService.js";
+import {
+  resolveGenerateImgReferencesForRun,
+  type GenerateImgReferenceContext,
+  type WorkbenchImagePathResolver
+} from "../../services/tools/generateImgTool.js";
+import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
+import { resolveProjectPath } from "../config.js";
+import {
+  ParsedIncomingMessage
+} from "../types.js";
+import { isMemoryEntryRelatedToUsers, resolveRuntimePersonaName } from "./conversationMemoryHelpers.js";
+import { auxiliaryModelSignal, auxiliaryProviderCompleteOptions } from "./auxiliaryModelBudget.js";
 import { conversationRecordId, uniqueStrings } from "./messagingAttachmentHelpers.js";
+import { MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES } from "./runtimeContracts.js";
+import { isSelfieImageFile, normalizeSelfiePrompt, normalizeSelfieQuality, normalizeSelfieReferenceImageUrls, normalizeSelfieResolution, normalizeSelfieSize, selfieMimeType } from "./selfieHelpers.js";
 
 import type { SunaRuntime } from "../runtime.js";
 type RuntimeHost = SunaRuntime;
@@ -141,7 +53,10 @@ interface RewrittenSelfiePrompt {
   selectedSelfieReferenceIds: string[];
 }
 
-export async function runtime_readRelevantUserProfiles(this: RuntimeHost, participants: BatchUserInfo[]) {
+export async function runtime_readRelevantUserProfiles(
+  this: RuntimeHost,
+  participants: Array<{ userId: string }>
+) {
     const userIds = new Set(participants.map((item) => item.userId));
     const entries = await readMemorySourceEntries(this.config, "user_profile");
     return entries
@@ -152,7 +67,7 @@ export async function runtime_readRelevantUserProfiles(this: RuntimeHost, partic
         userId: entry.userId,
         userIds: entry.userIds,
         userName: entry.userName,
-        addressName: entry.addressName,
+        addressNames: entry.addressNames,
         fact: entry.text,
         occurredAt: entry.occurredAt,
         occurredEndAt: entry.occurredEndAt,
@@ -168,7 +83,9 @@ export async function runtime_runSelfie(this: RuntimeHost,
     options: {
       chatReferenceImageUrls?: string[];
       imageReferences?: GenerateImgReferenceContext;
+      resolveWorkbenchImagePaths?: WorkbenchImagePathResolver;
       logContext?: ProviderLogContext;
+      signal?: AbortSignal;
     } = {}
   ): Promise<SelfieRunResult> {
     if (this.config.bot.tools.generateImg.provider === "custom") {
@@ -179,30 +96,46 @@ export async function runtime_runSelfie(this: RuntimeHost,
     if (!prompt) {
       return { ok: false, error: "Selfie prompt is empty." };
     }
+    const taskSignal = auxiliaryModelSignal(options.signal);
+    taskSignal.throwIfAborted();
 
     const workspaceReferences = await loadRuntimeSelfieReferences(this);
+    taskSignal.throwIfAborted();
     if (!workspaceReferences.length) {
       return { ok: false, error: "Selfie reference images are not configured." };
     }
 
     const defaultChatReferenceImageUrls = normalizeSelfieReferenceImageUrls(options.chatReferenceImageUrls);
-    const chatReferenceImageUrls = resolveGenerateImgReferences(input, {
+    const chatReferenceImageUrls = (await resolveGenerateImgReferencesForRun(input, {
       referenceImageUrls: defaultChatReferenceImageUrls,
-      imageReferences: options.imageReferences
-    }).referenceImageUrls.slice(0, MAX_SELFIE_REFERENCE_IMAGES - MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES);
+      imageReferences: options.imageReferences,
+      resolveWorkbenchImagePaths: options.resolveWorkbenchImagePaths,
+      signal: taskSignal
+    })).referenceImageUrls.slice(0, MAX_SELFIE_REFERENCE_IMAGES - MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES);
+    taskSignal.throwIfAborted();
     const resolution = normalizeSelfieResolution(input.resolution, this.config.bot.tools.generateImg.resolution);
     const size = normalizeSelfieSize(input.size, this.config.bot.tools.generateImg.size, resolution);
     const quality = normalizeSelfieQuality(input.quality, this.config.bot.tools.generateImg.quality);
     const rewrittenPrompt = await this.rewriteSelfiePrompt(provider, prompt, size, {
       workspaceSelfies: workspaceReferences.map(({ id, note }) => ({ id, note })),
       chatReferenceImageCount: chatReferenceImageUrls.length
-    }, options.logContext);
+    }, options.logContext, taskSignal);
+    taskSignal.throwIfAborted();
     const workspaceReferencesById = new Map(workspaceReferences.map((reference) => [reference.id, reference]));
     const workspaceReferenceImageUrls = await Promise.all(rewrittenPrompt.selectedSelfieReferenceIds.map((id) =>
-      readRuntimeSelfieReference(workspaceReferencesById.get(id)!)
+      readRuntimeSelfieReference(workspaceReferencesById.get(id)!, taskSignal)
     ));
+    taskSignal.throwIfAborted();
     const referenceImageUrls = [...workspaceReferenceImageUrls, ...chatReferenceImageUrls];
-    const image = await provider.generateImage(rewrittenPrompt.prompt, size, quality, referenceImageUrls, options.logContext);
+    const image = await provider.generateImage(
+      rewrittenPrompt.prompt,
+      size,
+      quality,
+      referenceImageUrls,
+      options.logContext,
+      taskSignal
+    );
+    taskSignal.throwIfAborted();
     return {
       ok: true,
       provider: "codex-image-gen",
@@ -225,8 +158,10 @@ export async function runtime_rewriteSelfiePrompt(this: RuntimeHost,
       workspaceSelfies: Array<{ id: string; note: string }>;
       chatReferenceImageCount: number;
     },
-    logContext?: ProviderLogContext
+    logContext?: ProviderLogContext,
+    signal?: AbortSignal
   ): Promise<RewrittenSelfiePrompt> {
+    signal?.throwIfAborted();
     const payload = {
           request: prompt,
           size,
@@ -239,24 +174,38 @@ export async function runtime_rewriteSelfiePrompt(this: RuntimeHost,
               : "从 workspaceSelfies 中选择 1 至 3 张最合适的自拍素材。"
           },
           persona: {
-            name: this.persona?.name ?? "普拉娜"
+            name: resolveRuntimePersonaName(this.persona?.name, this.config.persona.name)
           }
         };
     const promptRequest = await this.renderPromptRequest("image.selfie-rewrite", {
       "selfie.payload": payload
     });
-    const rewritten = await this.completePrompt(provider, promptRequest, {
+    signal?.throwIfAborted();
+    const rewritten = await this.completePrompt(provider, promptRequest, auxiliaryProviderCompleteOptions({
+      signal,
       logContext: { ...logContext, promptFamily: "image.selfie-rewrite" }
-    });
+    }));
+    signal?.throwIfAborted();
     return parseRewrittenSelfiePrompt(rewritten, new Set(references.workspaceSelfies.map(({ id }) => id)));
   }
-export function runtime_collectSelfieChatReferenceImages(this: RuntimeHost, incoming: ParsedIncomingMessage, captureSequence?: number) {
+export function runtime_collectSelfieChatReferenceImages(
+  this: RuntimeHost,
+  incoming: ParsedIncomingMessage,
+  captureSequence?: number,
+  currentBatchFromSequence?: number
+) {
     const record = this.conversationRecords.get(conversationRecordId(incoming));
     const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
     const recentImages = record?.messages
       .filter((message) => message.role === "user")
       .filter((message) => !currentMessageId || message.id !== currentMessageId)
       .filter((message) => captureSequence == null || Number(message.sequence ?? 0) < captureSequence)
+      .filter((message) => (
+        currentBatchFromSequence == null ||
+        Number(message.sequence ?? 0) < currentBatchFromSequence ||
+        incoming.scope === "private" ||
+        message.userId === incoming.userId
+      ))
       .slice(-this.contextMessageLimit())
       .reverse()
       .flatMap((message) => [
@@ -272,14 +221,17 @@ export async function runtime_loadSelfieReferenceImages(this: RuntimeHost) {
     const references = await loadRuntimeSelfieReferences(this);
     return Promise.all(references
       .slice(0, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES)
-      .map(readRuntimeSelfieReference));
+      .map((reference) => readRuntimeSelfieReference(reference)));
   }
 
 async function loadRuntimeSelfieReferences(runtime: RuntimeHost): Promise<RuntimeSelfieReference[]> {
   const workspace = resolveProjectPath(runtime.config.persona.agentWorkspace);
   if (!workspace) return [];
 
-  const selfieDir = path.join(workspace, "selfie");
+  return loadRuntimeSelfieDirectory(path.join(workspace, AGENT_RESOURCE_LAYOUT.selfie));
+}
+
+async function loadRuntimeSelfieDirectory(selfieDir: string): Promise<RuntimeSelfieReference[]> {
   let selfieDirectoryStats;
   try {
     selfieDirectoryStats = await fsp.lstat(selfieDir);
@@ -355,10 +307,17 @@ async function loadRuntimeSelfieReferences(runtime: RuntimeHost): Promise<Runtim
   }));
 }
 
-async function readRuntimeSelfieReference(reference: RuntimeSelfieReference) {
+async function readRuntimeSelfieReference(
+  reference: RuntimeSelfieReference,
+  signal?: AbortSignal
+) {
+  signal?.throwIfAborted();
   await assertRuntimeSelfieDirectory(reference);
+  signal?.throwIfAborted();
   const { bytes } = await readSelfieReferenceImageFile(reference.filePath);
+  signal?.throwIfAborted();
   await assertRuntimeSelfieDirectory(reference);
+  signal?.throwIfAborted();
   if (!bytes.length) throw new Error("Selfie reference image is empty.");
   const actualId = crypto.createHash("sha256").update(bytes).digest("hex");
   if (actualId !== reference.id) {

@@ -1,6 +1,5 @@
 import { readonly, shallowRef } from "vue";
 import type { SelfieReferenceImage, SelfieReferencePayload } from "../types";
-import { agentScopedPath } from "./agentScope";
 import { apiRequest } from "./useAdminApi";
 
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
@@ -30,7 +29,7 @@ export function useSelfieReferences() {
   let loadGeneration = 0;
   let loadController: AbortController | undefined;
 
-  async function load(agentId: string) {
+  async function loadAll(agentId: string) {
     const normalizedAgentId = activate(agentId);
     const context = contextGeneration;
     const generation = ++loadGeneration;
@@ -38,7 +37,10 @@ export function useSelfieReferences() {
     loadController = new AbortController();
     loading.value = true;
     try {
-      const payload = await apiRequest<SelfieReferencePayload>(agentScopedPath("/api/selfie-references", normalizedAgentId), {
+      const payload = await apiRequest<SelfieReferencePayload>(resourcePath(
+        "/api/selfie-references",
+        normalizedAgentId
+      ), {
         signal: loadController.signal
       });
       if (!isCurrent(normalizedAgentId, context) || generation !== loadGeneration) return false;
@@ -91,7 +93,10 @@ export function useSelfieReferences() {
       for (const { file, note } of normalizedEntries) {
         const dataBase64 = await fileToBase64(file);
         if (!isCurrent(normalizedAgentId, context)) return false;
-        const payload = await apiRequest<SelfieReferencePayload>(agentScopedPath("/api/selfie-references", normalizedAgentId), {
+        const payload = await apiRequest<SelfieReferencePayload>(resourcePath(
+          "/api/selfie-references",
+          normalizedAgentId
+        ), {
           method: "POST",
           body: JSON.stringify({ fileName: file.name, dataBase64, note })
         });
@@ -110,7 +115,11 @@ export function useSelfieReferences() {
     }
   }
 
-  async function updateNote(agentId: string, id: string, note: string) {
+  async function updateNote(
+    agentId: string,
+    id: string,
+    note: string
+  ) {
     const normalizedAgentId = activate(agentId);
     const context = contextGeneration;
     if (!id || updatingId.value) return false;
@@ -126,7 +135,10 @@ export function useSelfieReferences() {
     updatingId.value = id;
     status.value = { kind: "idle", message: "" };
     try {
-      const payload = await apiRequest<SelfieReferencePayload>(agentScopedPath(`/api/selfie-references/${encodeURIComponent(id)}`, normalizedAgentId), {
+      const payload = await apiRequest<SelfieReferencePayload>(resourcePath(
+        `/api/selfie-references/${encodeURIComponent(id)}`,
+        normalizedAgentId
+      ), {
         method: "PATCH",
         body: JSON.stringify({ note: normalized })
       });
@@ -143,7 +155,10 @@ export function useSelfieReferences() {
     }
   }
 
-  async function remove(agentId: string, id: string) {
+  async function remove(
+    agentId: string,
+    id: string
+  ) {
     const normalizedAgentId = activate(agentId);
     const context = contextGeneration;
     if (!id || deletingId.value) return false;
@@ -151,7 +166,10 @@ export function useSelfieReferences() {
     deletingId.value = id;
     status.value = { kind: "idle", message: "" };
     try {
-      await apiRequest<void>(agentScopedPath(`/api/selfie-references/${encodeURIComponent(id)}`, normalizedAgentId), { method: "DELETE" });
+      await apiRequest<void>(resourcePath(
+        `/api/selfie-references/${encodeURIComponent(id)}`,
+        normalizedAgentId
+      ), { method: "DELETE" });
       if (!isCurrent(normalizedAgentId, context)) return false;
       images.value = images.value.filter((image) => image.id !== id);
       status.value = { kind: "success", message: "参考图已删除" };
@@ -210,7 +228,7 @@ export function useSelfieReferences() {
     updatingId: readonly(updatingId),
     deletingId: readonly(deletingId),
     status: readonly(status),
-    load,
+    load: loadAll,
     upload,
     updateNote,
     remove,
@@ -266,4 +284,12 @@ function errorMessage(error: unknown, fallback: string) {
 
 function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function resourcePath(
+  path: string,
+  agentId: string
+) {
+  const search = new URLSearchParams({ agentId });
+  return `${path}?${search.toString()}`;
 }

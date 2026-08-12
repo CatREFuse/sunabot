@@ -21,7 +21,7 @@ const emit = defineEmits<{
       <span class="font-mono text-[10px] text-mute">{{ images.length.toLocaleString("zh-CN") }} 张</span>
     </div>
 
-    <div class="mt-6 grid grid-cols-1 gap-x-5 gap-y-10 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+    <div data-slot="image-history-grid" class="mt-6 grid grid-cols-2 gap-x-3 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
       <article v-for="image in images" :key="image.id" class="group min-w-0 overflow-hidden border-b border-line pb-4">
         <div class="relative aspect-square overflow-hidden bg-raised">
           <button class="block h-full w-full" type="button" :aria-label="`预览 ${image.prompt || '历史图像'}`" @click="emit('preview', image)">

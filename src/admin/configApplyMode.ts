@@ -9,6 +9,7 @@ export const CONFIG_SECTIONS = [
   "bot",
   "tone",
   "memory",
+  "director",
   "orchestrator",
   "tools",
   "bash",

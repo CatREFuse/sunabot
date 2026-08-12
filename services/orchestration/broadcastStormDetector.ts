@@ -1,4 +1,4 @@
-import type { BroadcastStormConfig } from "../../src/types.js";
+import type { BroadcastStormConfig } from "../../packages/contracts/admin/public.js";
 
 export interface CrossAccountReplyObservation {
   messageKey: string;

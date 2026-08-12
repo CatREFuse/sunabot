@@ -24,29 +24,39 @@ const PARTIAL_OWNER_FILE = ".recovery-owner.json";
 const LOCK_FILE = ".sqlite-recovery.lock";
 const DEFAULT_AGENT_ID = "plana";
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
-const LEGACY_APPLICATION_REQUIRED_TABLES = [
+const APPLICATION_REQUIRED_TABLES = [
   "app_metadata",
   "conversations",
   "image_history",
-  "memory_batches",
   "memory_records",
-  "memory_scheduler",
   "request_logs"
 ];
+const LEGACY_APPLICATION_REQUIRED_TABLES = [
+  ...APPLICATION_REQUIRED_TABLES
+];
 const CURRENT_APPLICATION_REQUIRED_TABLES = [
-  ...LEGACY_APPLICATION_REQUIRED_TABLES,
+  ...APPLICATION_REQUIRED_TABLES,
   "admin_sessions",
   "agent_accounts",
   "agents",
-  "conversation_thread_states",
+  "director_daily_schedule_revisions",
+  "director_daily_schedules",
+  "director_schedule_task_links",
+  "dream_memory_archive",
+  "dream_runs",
   "emojis",
+  "emoji_versions",
+  "memory_recall_receipts",
+  "memory_recall_stats",
+  "memory_source_revisions",
   "model_call_aggregates",
-  "model_call_model_aggregates"
+  "model_call_model_aggregates",
+  "outbox_local_effects",
+  "scheduled_task_runs",
+  "scheduled_tasks"
 ];
-const PRE_THREAD_APPLICATION_STORAGE_SCHEMA_VERSION = 9;
-const PRE_THREAD_APPLICATION_REQUIRED_TABLES = CURRENT_APPLICATION_REQUIRED_TABLES.filter(
-  (table) => table !== "conversation_thread_states" && table !== "emojis"
-);
+const CURRENT_APPLICATION_STORAGE_SCHEMA_VERSION = 17;
+const LEGACY_CURRENT_APPLICATION_STORAGE_SCHEMA_VERSION = 9;
 const PRE_EMOJI_APPLICATION_STORAGE_SCHEMA_VERSION = 10;
 const PRE_EMOJI_APPLICATION_REQUIRED_TABLES = CURRENT_APPLICATION_REQUIRED_TABLES.filter(
   (table) => table !== "emojis"
@@ -194,6 +204,9 @@ export async function createRecoveryPoint(options) {
           agentId: source.definition.agentId,
           kind: source.definition.kind,
           schemaProfile: source.definition.schemaProfile,
+          ...(source.definition.kind === "application"
+            ? { storageSchemaVersion: source.definition.expectedStorageSchemaVersion }
+            : {}),
           source: source.definition.source,
           file: source.definition.file,
           bytes: fileStat.size,
@@ -411,6 +424,7 @@ export async function verifyRecoveryPoint(backupDirectoryInput, options = {}) {
     const inspection = verifyDatabaseFile(databasePath, definition, expected, {
       databaseInspectionExtension: options.databaseInspectionExtension
     });
+    await options.databaseClosedObserver?.({ databasePath, id: definition.id });
     const afterOpen = await fs.lstat(databasePath);
     assertRecoveryFileIdentity(afterOpen, identity, definition.id);
     inspections.push({
@@ -1355,10 +1369,7 @@ async function discoverWorkspaceDatabaseDefinitions(workspace, options = {}) {
       }
       return databaseDefinitionsForAgent(agentId, {
         legacyApplicationSchema,
-        preThreadApplicationSchema:
-          storageSchemaVersion === PRE_THREAD_APPLICATION_STORAGE_SCHEMA_VERSION,
-        preEmojiApplicationSchema:
-          storageSchemaVersion === PRE_EMOJI_APPLICATION_STORAGE_SCHEMA_VERSION
+        applicationStorageSchemaVersion: storageSchemaVersion
       });
     });
   assertWorkspaceDatabaseDefinitionsMatchSnapshot(definitions, identitySnapshot);
@@ -1515,18 +1526,14 @@ function databaseDefinitionsForAgent(agentId, options = {}) {
       agentId,
       kind: "application",
       schemaProfile: options.legacyApplicationSchema ? "legacy-single-agent" : "current",
-      expectedStorageSchemaVersion: options.preThreadApplicationSchema
-        ? PRE_THREAD_APPLICATION_STORAGE_SCHEMA_VERSION
-        : options.preEmojiApplicationSchema
-          ? PRE_EMOJI_APPLICATION_STORAGE_SCHEMA_VERSION
-        : undefined,
+      expectedStorageSchemaVersion: options.applicationStorageSchemaVersion
+        ?? CURRENT_APPLICATION_STORAGE_SCHEMA_VERSION,
       source: `${dataRoot}/sunabot.sqlite`,
       file: `agent-${agentId}-application.sqlite`,
       requiredTables: options.legacyApplicationSchema
         ? LEGACY_APPLICATION_REQUIRED_TABLES
-        : options.preThreadApplicationSchema
-          ? PRE_THREAD_APPLICATION_REQUIRED_TABLES
-          : options.preEmojiApplicationSchema
+        : options.applicationStorageSchemaVersion === LEGACY_CURRENT_APPLICATION_STORAGE_SCHEMA_VERSION
+          || options.applicationStorageSchemaVersion === PRE_EMOJI_APPLICATION_STORAGE_SCHEMA_VERSION
             ? PRE_EMOJI_APPLICATION_REQUIRED_TABLES
           : CURRENT_APPLICATION_REQUIRED_TABLES
     },
@@ -1553,23 +1560,21 @@ function databaseDefinitionsForManifest(manifest) {
     );
     return databaseDefinitionsForAgent(agentId, {
       legacyApplicationSchema: application?.schemaProfile === "legacy-single-agent",
-      preThreadApplicationSchema: isPreThreadCurrentApplicationEntry(application),
-      preEmojiApplicationSchema: isPreEmojiCurrentApplicationEntry(application)
+      applicationStorageSchemaVersion: applicationStorageSchemaVersion(application)
     });
   });
 }
 
-function isPreThreadCurrentApplicationEntry(entry) {
-  return entry?.schemaProfile === "current"
-    && entry.tables
-    && !Object.hasOwn(entry.tables, "conversation_thread_states");
-}
-
-function isPreEmojiCurrentApplicationEntry(entry) {
-  return entry?.schemaProfile === "current"
-    && entry.tables
-    && Object.hasOwn(entry.tables, "conversation_thread_states")
-    && !Object.hasOwn(entry.tables, "emojis");
+function applicationStorageSchemaVersion(entry) {
+  if (Number.isInteger(entry?.storageSchemaVersion)) return entry.storageSchemaVersion;
+  if (entry?.schemaProfile !== "current" || !Number.isInteger(entry.userVersion)) return undefined;
+  return [
+    LEGACY_CURRENT_APPLICATION_STORAGE_SCHEMA_VERSION,
+    PRE_EMOJI_APPLICATION_STORAGE_SCHEMA_VERSION,
+    CURRENT_APPLICATION_STORAGE_SCHEMA_VERSION
+  ].includes(entry.userVersion)
+    ? entry.userVersion
+    : undefined;
 }
 
 function verifyV2ManifestAgentSet(backupDirectory, manifest, options = {}, databaseFiles = []) {
@@ -2044,10 +2049,7 @@ function validateV2AgentDatabaseEntries(entries) {
   }
   return [...agentIds].sort(compareAgentIds).flatMap((agentId) => databaseDefinitionsForAgent(agentId, {
     legacyApplicationSchema: legacyApplication?.agentId === agentId,
-    preThreadApplicationSchema: isPreThreadCurrentApplicationEntry(entries.find((entry) =>
-      entry.agentId === agentId && entry.kind === "application"
-    )),
-    preEmojiApplicationSchema: isPreEmojiCurrentApplicationEntry(entries.find((entry) =>
+    applicationStorageSchemaVersion: applicationStorageSchemaVersion(entries.find((entry) =>
       entry.agentId === agentId && entry.kind === "application"
     ))
   }));
@@ -2068,6 +2070,11 @@ function validateManifestDatabaseEntry(entry, definition) {
   }
   if (definition.schemaProfile !== entry.schemaProfile && entry.schemaProfile !== undefined) {
     throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `${definition.id} 的 schema profile 无效。`);
+  }
+  if (definition.kind === "application" && definition.expectedStorageSchemaVersion !== undefined
+    && entry.storageSchemaVersion !== undefined
+    && entry.storageSchemaVersion !== definition.expectedStorageSchemaVersion) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `${definition.id} 的 storage schema version 无效。`);
   }
   if (!Number.isInteger(entry.bytes) || entry.bytes <= 0 || !/^[a-f0-9]{64}$/.test(entry.sha256 ?? "")) {
     throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `${definition.id} 的文件校验信息无效。`);

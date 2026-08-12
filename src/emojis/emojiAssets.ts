@@ -4,10 +4,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import {
-  applicationDataStore,
   type EmojiRecord
 } from "../../adapters/sqlite/applicationDataStore.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import {
   isEmojiFileName,
   isValidEmojiKey,
@@ -17,12 +15,16 @@ import {
 } from "../../services/emojis/emojiCatalog.js";
 import { getWorkspacePath } from "../config.js";
 import type { AppConfig } from "../types.js";
+import { emojiMediaLocation, emojiStore } from "./emojiStore.js";
+
+export { emojiMediaLocation };
 
 const NORMALIZED_EMOJI_SIZE = 1024;
 const MAX_STORED_EMOJI_BYTES = 16 * 1024 * 1024;
 const MAX_EMOJI_INPUT_PIXELS = 64_000_000;
 const PNG_HEADER_BYTES = 33;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const GIF_HEADER_BYTES = 13;
 const READ_CHUNK_BYTES = 64 * 1024;
 const MAX_INTEGRITY_CONCURRENCY = 2;
 const MAX_INTEGRITY_WAITING = 2;
@@ -45,6 +47,13 @@ interface EmojiAssetIdentity {
 interface EmojiIntegrityResult {
   identity: EmojiAssetIdentity;
   bytes?: Buffer;
+}
+
+export interface VerifiedPlannedEmojiAsset {
+  key: string;
+  record: EmojiRecord;
+  image: EmojiMarkerPlan["expectedImages"][number];
+  bytes: Buffer;
 }
 
 export class EmojiAssetIntegrityBusyError extends Error {
@@ -86,19 +95,12 @@ export class EmojiAssetIntegrityGate {
 
 const integrityGate = new EmojiAssetIntegrityGate();
 
-export function emojiMediaLocation(config: Pick<AppConfig, "persona">, fileName: string) {
-  if (!isEmojiFileName(fileName)) throw new Error("Emoji image file name is invalid.");
-  const agentId = config.persona.defaultAgentId.trim() || "plana";
-  const relativePath = agentId === "plana"
-    ? fileName
-    : path.join("agents", agentId, fileName);
-  const filePath = path.join(getWorkspacePath(WORKSPACE_LAYOUT.mediaImages), relativePath);
-  const urlPath = relativePath.split(path.sep).map(encodeURIComponent).join("/");
-  return { filePath, url: `/generated-images/${urlPath}` };
+interface ResolvedEmojiRecord {
+  record: EmojiRecord;
 }
 
 export function availableEmojiRecords(config: AppConfig) {
-  return applicationDataStore(config).readEmojis().filter((record) => emojiRecordFileIsCandidate(config, record));
+  return resolvedAvailableEmojiRecords(config).map(({ record }) => record);
 }
 
 export function availableEmojiKeys(config: AppConfig) {
@@ -107,7 +109,7 @@ export function availableEmojiKeys(config: AppConfig) {
 
 export function agentEmojiCatalogPort(config: AppConfig): EmojiCatalogPort {
   return {
-    listAvailable: () => availableEmojiRecords(config).map((record) => {
+    listAvailable: () => resolvedAvailableEmojiRecords(config).map(({ record }) => {
       const location = emojiMediaLocation(config, record.fileName);
       return { key: record.key, image: { url: location.url, filePath: location.filePath } };
     })
@@ -119,29 +121,61 @@ export function planAgentEmojiMarkers(text: string, config: AppConfig) {
 }
 
 export async function assertPlannedEmojiAssetsIntegrity(config: AppConfig, plan: EmojiMarkerPlan) {
-  const records = new Map<string, EmojiRecord>();
-  const store = applicationDataStore(config);
-  for (let index = 0; index < plan.expectedKeys.length; index += 1) {
-    const key = plan.expectedKeys[index];
-    const image = plan.expectedImages[index];
-    if (!key) throw emojiAssetUnavailable();
-    const record = store.readEmoji(key);
-    if (!record || !image?.filePath) throw emojiAssetUnavailable();
-    const location = emojiMediaLocation(config, record.fileName);
-    if (path.resolve(image.filePath) !== path.resolve(location.filePath) || image.url !== location.url) {
-      throw emojiAssetUnavailable();
-    }
-    records.set(emojiIntegrityOperationKey(config, record), record);
+  const assets = plannedEmojiAssets(config, plan);
+  const records = new Map<string, ResolvedEmojiRecord>();
+  for (const asset of assets) {
+    records.set(
+      emojiIntegrityOperationKey(config, asset.record),
+      { record: asset.record }
+    );
   }
   await assertEmojiRecordsInBatches(config, [...records.values()]);
 }
 
+export async function readPlannedEmojiAssets(
+  config: AppConfig,
+  plan: EmojiMarkerPlan
+): Promise<VerifiedPlannedEmojiAsset[]> {
+  const assets = plannedEmojiAssets(config, plan);
+  const bytesByRecord = new Map<string, Buffer>();
+  for (const asset of assets) {
+    const operationKey = emojiIntegrityOperationKey(config, asset.record);
+    if (!bytesByRecord.has(operationKey)) {
+      bytesByRecord.set(operationKey, await readVerifiedEmojiRecordFile(config, asset.record));
+    }
+  }
+  return assets.map((asset) => ({
+    ...asset,
+    bytes: bytesByRecord.get(emojiIntegrityOperationKey(config, asset.record))!
+  }));
+}
+
+function plannedEmojiAssets(config: AppConfig, plan: EmojiMarkerPlan) {
+  const assets: Array<Omit<VerifiedPlannedEmojiAsset, "bytes">> = [];
+  const records = new Map(resolvedAvailableEmojiRecords(config).map((resolved) => [resolved.record.key, resolved]));
+  for (let index = 0; index < plan.expectedKeys.length; index += 1) {
+    const key = plan.expectedKeys[index];
+    const image = plan.expectedImages[index];
+    if (!key) throw emojiAssetUnavailable();
+    const resolved = records.get(key);
+    if (!resolved || !image?.filePath) throw emojiAssetUnavailable();
+    const { record } = resolved;
+    const location = emojiMediaLocation(config, record.fileName);
+    if (path.resolve(image.filePath) !== path.resolve(location.filePath) || image.url !== location.url) {
+      throw emojiAssetUnavailable();
+    }
+    assets.push({ key, record, image });
+  }
+  return assets;
+}
+
 export async function filterVerifiedEmojiRecords(
   config: AppConfig,
-  records: readonly EmojiRecord[] = availableEmojiRecords(config)
+  records?: readonly EmojiRecord[]
 ) {
+  const selectedRecords = records ?? emojiStore(config).readAll();
   const unique = new Map<string, EmojiRecord>();
-  const candidates = records.flatMap((record) => {
+  const candidates = selectedRecords.flatMap((record) => {
     try {
       const key = emojiIntegrityOperationKey(config, record);
       unique.set(key, record);
@@ -166,7 +200,10 @@ export async function filterVerifiedEmojiRecords(
   return candidates.flatMap(({ key, record }) => verifiedKeys.has(key) ? [record] : []);
 }
 
-export async function readVerifiedEmojiRecordFile(config: AppConfig, record: EmojiRecord) {
+export async function readVerifiedEmojiRecordFile(
+  config: AppConfig,
+  record: EmojiRecord
+) {
   try {
     const result = await runEmojiIntegrityOperation(config, record, true);
     if (!result.bytes) throw emojiAssetUnavailable();
@@ -176,7 +213,10 @@ export async function readVerifiedEmojiRecordFile(config: AppConfig, record: Emo
   }
 }
 
-async function assertEmojiRecordFileIntegrity(config: AppConfig, record: EmojiRecord) {
+async function assertEmojiRecordFileIntegrity(
+  config: AppConfig,
+  record: EmojiRecord
+) {
   try {
     await runEmojiIntegrityOperation(config, record, false);
   } catch {
@@ -184,10 +224,10 @@ async function assertEmojiRecordFileIntegrity(config: AppConfig, record: EmojiRe
   }
 }
 
-async function assertEmojiRecordsInBatches(config: AppConfig, records: readonly EmojiRecord[]) {
+async function assertEmojiRecordsInBatches(config: AppConfig, records: readonly ResolvedEmojiRecord[]) {
   for (let index = 0; index < records.length; index += MAX_INTEGRITY_CONCURRENCY) {
     await Promise.all(records.slice(index, index + MAX_INTEGRITY_CONCURRENCY)
-      .map((record) => assertEmojiRecordFileIntegrity(config, record)));
+      .map(({ record }) => assertEmojiRecordFileIntegrity(config, record)));
   }
 }
 
@@ -232,13 +272,19 @@ async function runEmojiIntegrityOperation(
     : result;
 }
 
-function emojiIntegrityOperationKey(config: AppConfig, record: EmojiRecord) {
+function emojiIntegrityOperationKey(
+  config: AppConfig,
+  record: EmojiRecord
+) {
   assertEmojiRecordMetadata(record);
   const filePath = emojiMediaLocation(config, record.fileName).filePath;
   return [path.resolve(filePath), record.fileName, record.sizeBytes, record.width, record.height].join("\0");
 }
 
-function emojiRecordFileIsCandidate(config: AppConfig, record: EmojiRecord) {
+function emojiRecordFileIsCandidate(
+  config: AppConfig,
+  record: EmojiRecord
+) {
   try {
     assertEmojiRecordMetadata(record);
     const filePath = emojiMediaLocation(config, record.fileName).filePath;
@@ -251,12 +297,21 @@ function emojiRecordFileIsCandidate(config: AppConfig, record: EmojiRecord) {
   }
 }
 
+function resolvedAvailableEmojiRecords(config: AppConfig): ResolvedEmojiRecord[] {
+  const records: ResolvedEmojiRecord[] = [];
+  for (const record of emojiStore(config).readAll()) {
+    if (!emojiRecordFileIsCandidate(config, record)) continue;
+    records.push({ record });
+  }
+  return records;
+}
+
 function assertEmojiRecordMetadata(record: EmojiRecord) {
   if (
     !isValidEmojiKey(record.key)
     || !isEmojiFileName(record.fileName)
     || !Number.isSafeInteger(record.sizeBytes)
-    || record.sizeBytes < PNG_HEADER_BYTES
+    || record.sizeBytes < (record.fileName.endsWith(".gif") ? GIF_HEADER_BYTES : PNG_HEADER_BYTES)
     || record.sizeBytes > MAX_STORED_EMOJI_BYTES
     || record.width !== NORMALIZED_EMOJI_SIZE
     || record.height !== NORMALIZED_EMOJI_SIZE
@@ -294,9 +349,10 @@ async function scanEmojiFile(
     }
     const trailing = Buffer.allocUnsafe(1);
     if ((await handle.read(trailing, 0, 1, totalSize)).bytesRead !== 0) throw emojiAssetUnavailable();
-    assertNormalizedPngHeader(header);
-    if (record.fileName !== `emoji-${hash.digest("hex")}.png`) throw emojiAssetUnavailable();
-    await assertDecodableNormalizedPng(output);
+    const extension = record.fileName.endsWith(".gif") ? "gif" : "png";
+    assertNormalizedImageHeader(header, extension);
+    if (record.fileName !== `emoji-${hash.digest("hex")}.${extension}`) throw emojiAssetUnavailable();
+    await assertDecodableNormalizedImage(output, extension);
     const afterReadIdentity = fileIdentity(await handle.stat({ bigint: true }));
     const afterPathIdentity = await lstatEmojiAsset(filePath, record);
     if (
@@ -323,8 +379,8 @@ async function lstatEmojiAsset(filePath: string, record: EmojiRecord): Promise<E
 
 async function lstatEmojiDirectoryChain(filePath: string) {
   const workspaceRoot = path.resolve(getWorkspacePath());
-  const mediaRoot = path.resolve(getWorkspacePath(WORKSPACE_LAYOUT.mediaImages));
   const directory = path.dirname(path.resolve(filePath));
+  const mediaRoot = directory;
   const mediaRelative = path.relative(workspaceRoot, mediaRoot);
   const directoryRelative = path.relative(workspaceRoot, directory);
   if (
@@ -399,18 +455,18 @@ function cacheIntegrity(filePath: string, identity: EmojiAssetIdentity, valid: b
   if (integrityCache.size > 256) integrityCache.delete(integrityCache.keys().next().value ?? "");
 }
 
-async function assertDecodableNormalizedPng(bytes: Buffer) {
+async function assertDecodableNormalizedImage(bytes: Buffer, extension: "png" | "gif") {
   try {
     const decoded = await sharp(bytes, {
-      animated: false,
-      page: 0,
-      pages: 1,
+      ...(extension === "gif"
+        ? { animated: true }
+        : { animated: false, page: 0, pages: 1 }),
       failOn: "error",
       limitInputPixels: MAX_EMOJI_INPUT_PIXELS
     }).raw().toBuffer({ resolveWithObject: true });
     if (
       decoded.info.width !== NORMALIZED_EMOJI_SIZE
-      || decoded.info.height !== NORMALIZED_EMOJI_SIZE
+      || (decoded.info.pageHeight ?? decoded.info.height) !== NORMALIZED_EMOJI_SIZE
       || decoded.info.channels < 1
       || decoded.info.channels > 4
     ) {
@@ -421,7 +477,18 @@ async function assertDecodableNormalizedPng(bytes: Buffer) {
   }
 }
 
-function assertNormalizedPngHeader(header: Buffer) {
+function assertNormalizedImageHeader(header: Buffer, extension: "png" | "gif") {
+  if (extension === "gif") {
+    if (
+      header.length < GIF_HEADER_BYTES
+      || !["GIF87a", "GIF89a"].includes(header.toString("ascii", 0, 6))
+      || header.readUInt16LE(6) !== NORMALIZED_EMOJI_SIZE
+      || header.readUInt16LE(8) !== NORMALIZED_EMOJI_SIZE
+    ) {
+      throw emojiAssetUnavailable();
+    }
+    return;
+  }
   if (
     header.length < PNG_HEADER_BYTES
     || !header.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)

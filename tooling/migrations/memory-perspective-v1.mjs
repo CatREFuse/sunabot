@@ -51,12 +51,14 @@ const TARGET_LIMITS = {
 };
 const MUTABLE_METADATA_FIELDS = new Set([
   "userIds",
+  "userName",
   "sourceWorkingMemoryIds",
   "sourceCandidateIds",
   "longTermId",
   "eventFingerprint",
   "eventKey"
 ]);
+const DERIVED_EVENT_TIME_FIELDS = new Set(["occurredAt", "occurredEndAt"]);
 const IMMUTABLE_METADATA_FIELDS = new Set([
   "userId",
   "addressName",
@@ -66,8 +68,6 @@ const IMMUTABLE_METADATA_FIELDS = new Set([
   "conversationId",
   "conversation_id",
   "createdAt",
-  "occurredAt",
-  "occurredEndAt",
   "observedAt",
   "time"
 ]);
@@ -250,7 +250,7 @@ export function generateProposals(options) {
         action: "unresolved",
         targetId: null,
         originalSummary: input.originalSummary,
-        reason: "待按第一人称、情绪与认知、高压缩标准重整"
+        reason: "待按角色第一人称直接重整，禁止“我记得”，保证昵称与 QQ 同时存在，并把相近、重复或因果信息压成一条且保留最早至最新时间关系"
       })),
       unresolved: inputs.map((input) => input.stableKey)
     }, SIGNATURE_FIELDS.proposal);
@@ -1037,7 +1037,11 @@ function buildReplacements(plan, rows, timestamp) {
       const base = rowsById.get(target.baseRowId);
       const data = structuredClone(base.effectiveData);
       validatePatchedReferences(plan.agentId, target, idMaps, targetIds);
-      mergeControlledMetadata(data, evidence.map((row) => row.effectiveData));
+      mergeControlledMetadata(
+        data,
+        evidence.map((row) => row.effectiveData),
+        `${plan.agentId}: ${source}/${target.id}`
+      );
       applyMetadataPatch(data, target.metadataPatch ?? emptyMetadataPatch(), base.effectiveData);
       data.id = target.id;
       data.fact = normalizeText(target.targetFact);
@@ -1114,29 +1118,12 @@ function validateMemoryFact(agentId, source, record) {
   const fact = normalizeText(record.fact ?? record.value);
   const maximumLength = source === "user_profile" ? 300 : 360;
   if (!fact || fact.length > maximumLength) throw migrationError("TARGET_FACT_LENGTH_INVALID", `${agentId}: ${source}/${record.id} 正文为空或过长`);
-  if (!/^(?:我|I\b)/i.test(fact)) throw migrationError("TARGET_FIRST_PERSON_MISSING", `${agentId}: ${source}/${record.id} 未用第一人称开头`);
-  if (!/(?:^|[。！？，；,.!?;\s])(?:我(?:也)?(?:觉得|认为|判断|意识到|理解|相信|推测|在意|希望|担心|期待|认可|反感|偏好|看重|记得|注意到)|I\s+(?:think|believe|judge|understand|realize|remember|notice|prefer|care|hope|worry|expect)\b)/i.test(fact)) {
-    throw migrationError("TARGET_COGNITION_MISSING", `${agentId}: ${source}/${record.id} 缺少认知或感知`);
-  }
-  if (!/(?:^|[。！？，；,.!?;\s])(?:我(?:也)?(?:(?:感到|感觉)(?:很|有些|有点)?(?:开心|安心|欣慰|不安|难过|好奇|警惕|亲近|感激|满意|遗憾|温暖)|(?:很|有些|有点)(?:喜欢|开心|安心|担心|在意|欣慰|不安|难过|期待|好奇|警惕|亲近|敬佩|感激|厌恶|反感|偏爱|满意|遗憾|温暖|介意|重视)|喜欢|担心|在意|期待|敬佩|感激|厌恶|反感|偏爱|愿意|乐意|介意|重视)|I\s+(?:feel|am|like|love|worry|care|hope|appreciate|dislike|prefer|respect)\b)/i.test(fact)) {
-    throw migrationError("TARGET_EMOTION_MISSING", `${agentId}: ${source}/${record.id} 缺少情绪或态度`);
-  }
-  if (/^\s*(?:[-*#]|\d+[.)、])\s/m.test(fact)
-    || /(?:事实|情绪|认知|相关用户|用户画像|工作记忆|长期记忆)[:：]/.test(fact)) {
-    throw migrationError("TARGET_FORMATTED_PROSE", `${agentId}: ${source}/${record.id} 使用了列表或字段标签`);
-  }
-  if (source !== "user_profile") {
-    const userIds = normalizeUserIdsStrict(record.userIds ?? record.userId, `${agentId}: ${source}/${record.id}`);
-    if (userIds.length === 0) {
-      throw migrationError("TARGET_USER_IDS_MISSING", `${agentId}: ${source}/${record.id} 缺少有效 QQ userIds`);
-    }
-    for (const userId of userIds) {
-      const escaped = escapeRegExp(userId);
-      const qqContext = new RegExp(`(?:QQ(?:号)?\\s*[:：#]?\\s*(?:[（(]\\s*)?${escaped}(?!\\d)(?:\\s*[）)])?|[（(]\\s*${escaped}(?!\\d)\\s*[）)])`, "i");
-      if (!qqContext.test(fact)) {
-        throw migrationError("TARGET_USER_ID_NOT_NATURAL", `${agentId}: ${source}/${record.id} 未自然写入 QQ ${userId}`);
-      }
-    }
+  const context = `${agentId}: ${source}/${record.id}`;
+  const userIds = source === "user_profile"
+    ? [normalizeProfileUserId(record.userId, context).normalized]
+    : normalizeUserIdsStrict(record.userIds ?? record.userId, context);
+  if (userIds.length === 0) {
+    throw migrationError("TARGET_USER_IDS_MISSING", `${context} 缺少有效 QQ userIds`);
   }
 }
 
@@ -1171,13 +1158,20 @@ function validateMetadataPatch(agentId, targetId, patch) {
       throw migrationError("METADATA_PATCH_FIELD_FORBIDDEN", `${agentId}: ${targetId} 禁止修改 metadata 字段 ${field}`);
     }
   }
+  if (remove.includes("userName")) {
+    throw migrationError("METADATA_PATCH_VALUE_INVALID", `${agentId}: ${targetId} 禁止删除 userName`);
+  }
   for (const field of preserve) {
-    if (typeof field !== "string" || MUTABLE_METADATA_FIELDS.has(field)) {
+    if (typeof field !== "string"
+      || MUTABLE_METADATA_FIELDS.has(field)
+      || DERIVED_EVENT_TIME_FIELDS.has(field)) {
       throw migrationError("METADATA_PATCH_PRESERVE_INVALID", `${agentId}: ${targetId} preserveFromBase 字段无效`);
     }
   }
   for (const [field, value] of Object.entries(set)) {
-    if (field === "userIds") {
+    if (field === "userName") {
+      normalizeRequiredUserName(value, `${agentId}: ${targetId} metadataPatch.userName`);
+    } else if (field === "userIds") {
       if (!Array.isArray(value) || value.length === 0) {
         throw migrationError("METADATA_PATCH_VALUE_INVALID", `${agentId}: ${targetId} userIds 必须是非空 QQ 数组`);
       }
@@ -1222,7 +1216,7 @@ function validatePatchedReferences(agentId, target, idMaps, targetIds) {
   }
 }
 
-function mergeControlledMetadata(target, sources) {
+function mergeControlledMetadata(target, sources, context) {
   for (const field of ["userIds", "sourceWorkingMemoryIds", "sourceCandidateIds"]) {
     const values = field === "userIds"
       ? unique(sources.flatMap((source) => [
@@ -1231,6 +1225,34 @@ function mergeControlledMetadata(target, sources) {
       ].map(String)))
       : unique(sources.flatMap((source) => Array.isArray(source[field]) ? source[field].map(String) : []));
     if (values.length) target[field] = values;
+  }
+  mergeControlledEventTimeRange(target, sources, context);
+}
+
+function mergeControlledEventTimeRange(target, sources, context) {
+  const ranges = sources.flatMap((source, index) => {
+    const rawStart = normalizeText(source.occurredAt);
+    const rawEnd = normalizeText(source.occurredEndAt);
+    if (!rawStart && !rawEnd) return [];
+    const start = normalizeIso(rawStart);
+    const end = normalizeIso(rawEnd);
+    if (!start || (rawEnd && !end)) {
+      throw migrationError("TARGET_TIME_INVALID", `${context} evidence ${index + 1} 含无效事件时间`);
+    }
+    if (end && Date.parse(end) < Date.parse(start)) {
+      throw migrationError("TARGET_TIME_INVALID", `${context} evidence ${index + 1} 的结束时间早于开始时间`);
+    }
+    return [{ start, end }];
+  });
+  if (!ranges.length) return;
+
+  const starts = ranges.map((range) => range.start).sort();
+  const endpoints = ranges.map((range) => range.end || range.start).sort();
+  const earliest = starts[0];
+  const latest = endpoints.at(-1);
+  target.occurredAt = earliest;
+  if (ranges.length > 1 || ranges.some((range) => range.end)) {
+    target.occurredEndAt = latest;
   }
 }
 
@@ -1477,7 +1499,7 @@ function inspectProtectedDatabaseState(workspace, definition) {
   const queuePath = safeWorkspaceChild(workspace, definition.queue);
   return {
     applicationLogicalSha256: databaseLogicalSha256(applicationPath),
-    applicationWithoutMemorySha256: databaseLogicalSha256(applicationPath, { excludeTables: new Set(["memory_records"]) }),
+    applicationWithoutMemorySha256: databaseLogicalSha256(applicationPath, { excludeTables: memoryMutationTables() }),
     applicationFileSha256: sha256File(applicationPath),
     queueLogicalSha256: databaseLogicalSha256(queuePath),
     queueFileSha256: sha256File(queuePath)
@@ -2206,6 +2228,10 @@ async function installStagedMigrationUnlocked(options) {
   return withMigrationDatabaseOpenPolicy(policyEntries, options.databaseOpenObserver, async () => {
     try {
     const definitions = definitionsFromIntent(intent);
+    if (!rollbackMode) {
+      const planDir = resolveWorkspaceInput(workspace, intent.planDirectory, "plan-dir");
+      assertIntentPlanArtifacts(workspace, planDir, definitions, intent);
+    }
     await assertStoppedHandlesAndPaths(workspace, options.quiesced, options.portProbe, options.handleProbe, definitions, {
       allowMissingCurrent: true
     });
@@ -2896,7 +2922,7 @@ function inspectDatabaseBinding(workspace, agentId, kind, relative) {
     fileSha256: sha256File(absolute),
     logicalSha256: databaseLogicalSha256(absolute),
     withoutMemorySha256: kind === "application"
-      ? databaseLogicalSha256(absolute, { excludeTables: new Set(["memory_records"]) })
+      ? databaseLogicalSha256(absolute, { excludeTables: memoryMutationTables() })
       : null,
     memoryBaselineSha256: kind === "application"
       ? applicationMemoryBaselineSha256(absolute)
@@ -3006,12 +3032,16 @@ function migrationRecoveryInspectionExtension({ database, definition }) {
   return {
     logicalSha256: databaseLogicalSha256FromOpenDatabase(database),
     withoutMemorySha256: definition.kind === "application"
-      ? databaseLogicalSha256FromOpenDatabase(database, { excludeTables: new Set(["memory_records"]) })
+      ? databaseLogicalSha256FromOpenDatabase(database, { excludeTables: memoryMutationTables() })
       : null,
     memoryBaselineSha256: definition.kind === "application"
       ? applicationMemoryBaselineSha256FromOpenDatabase(database)
       : null
   };
+}
+
+function memoryMutationTables() {
+  return new Set(["memory_records", "memory_source_revisions"]);
 }
 
 function recoveryDatabaseBindingsFromVerification(verified) {
@@ -5257,6 +5287,14 @@ function normalizeProfileUserId(value, context) {
     : type === "string" ? value.trim() : "";
   if (!/^\d{5,20}$/.test(normalized)) throw migrationError("PROFILE_USER_ID_INVALID", `${context} 缺少有效 userId`);
   return { normalized, type };
+}
+
+function normalizeRequiredUserName(value, context) {
+  const userName = normalizeText(value);
+  if (!userName || /^(?:QQ(?:号)?\s*[:：#]?\s*)?\d{5,20}$/i.test(userName)) {
+    throw migrationError("TARGET_USER_NAME_INVALID", `${context} 缺少非 QQ 的有效昵称`);
+  }
+  return userName;
 }
 
 function escapeRegExp(value) {

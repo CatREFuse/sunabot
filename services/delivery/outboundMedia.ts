@@ -6,6 +6,7 @@ import { MAX_EMOJI_MARKERS_PER_REPLY } from "../emojis/public.js";
 
 export interface OutboundMediaDeliveryOptions {
   rootDir: string;
+  workspaceRoot?: string;
   referenceMode?: "shared-path" | "inline-base64";
   maxInlineBytes?: number;
 }
@@ -46,11 +47,13 @@ export function outboundMediaMaxInlineBytes(
 
 export class OutboundMediaDelivery {
   private readonly rootDir: string;
+  private readonly workspaceRoot?: string;
   private readonly referenceMode: OutboundMediaReferenceMode;
   private readonly maxInlineBytes: number;
 
   constructor(options: OutboundMediaDeliveryOptions) {
     this.rootDir = path.resolve(options.rootDir);
+    this.workspaceRoot = options.workspaceRoot ? path.resolve(options.workspaceRoot) : undefined;
     this.referenceMode = options.referenceMode ?? "inline-base64";
     this.maxInlineBytes = options.maxInlineBytes ?? DEFAULT_OUTBOUND_MEDIA_MAX_INLINE_BYTES;
     if (!Number.isSafeInteger(this.maxInlineBytes) || this.maxInlineBytes < 1) {
@@ -60,21 +63,29 @@ export class OutboundMediaDelivery {
 
   async createReference(filePath: string) {
     const resolvedPath = path.resolve(filePath);
-    const relativePath = path.relative(this.rootDir, resolvedPath);
-    if (!relativePath || relativePath.startsWith(`..${path.sep}`) || relativePath === ".." || path.isAbsolute(relativePath)) {
+    const boundary = resolveOutboundMediaBoundary(this.rootDir, this.workspaceRoot, resolvedPath);
+    if (!boundary) {
       throw new Error("Outbound media file is outside the outbound media root.");
     }
-    const fileName = generatedImageFileName(relativePath);
+    const fileName = generatedImageFileName(boundary.relativePath);
     if (!fileName) {
       throw new Error("Outbound media file must be a direct child of the outbound media root.");
     }
-    if (!isSafePngFileName(fileName)) {
+    if (boundary.emojiWorkbench) {
+      if (!contentAddressedEmojiDigest(fileName)) {
+        throw new Error("Outbound workbench emoji must use a content-addressed PNG or GIF file name.");
+      }
+    } else if (!isSafePngFileName(fileName)) {
       throw new Error("Outbound media file must be a PNG image.");
     }
 
     const stats = await regularFileStats(resolvedPath);
-    if (!stats) throw new Error("Outbound media file is not a regular file.");
-    await assertUnredirectedPath(this.rootDir, resolvedPath, relativePath);
+    if (!stats) {
+      throw new Error(
+        "OUTBOUND_MEDIA_SOURCE_MISSING: Generated image file is unavailable before send."
+      );
+    }
+    await assertUnredirectedPath(boundary.rootDir, resolvedPath, boundary.relativePath);
     if (this.referenceMode === "inline-base64") {
       if (stats.size > this.maxInlineBytes) {
         throw new Error(
@@ -101,6 +112,42 @@ export class OutboundMediaDelivery {
     }
     return resolvedPath;
   }
+}
+
+function resolveOutboundMediaBoundary(
+  rootDir: string,
+  workspaceRoot: string | undefined,
+  filePath: string
+) {
+  const generatedRelative = safeRelative(rootDir, filePath);
+  if (generatedRelative) {
+    return { rootDir, relativePath: generatedRelative, emojiWorkbench: false };
+  }
+  if (!workspaceRoot) return undefined;
+  const relative = safeRelative(workspaceRoot, filePath);
+  if (!relative) return undefined;
+  const segments = relative.split(path.sep);
+  if (
+    segments.length !== 6
+    || segments[0] !== "business"
+    || segments[1] !== "agents"
+    || !isSafeAgentId(segments[2] ?? "")
+    || segments[3] !== "workbench"
+    || segments[4] !== "emoji"
+  ) return undefined;
+  const emojiRoot = path.join(workspaceRoot, ...segments.slice(0, 5));
+  return { rootDir: emojiRoot, relativePath: segments[5]!, emojiWorkbench: true };
+}
+
+function safeRelative(rootDir: string, filePath: string) {
+  const relative = path.relative(rootDir, filePath);
+  if (
+    !relative
+    || relative.startsWith(`..${path.sep}`)
+    || relative === ".."
+    || path.isAbsolute(relative)
+  ) return undefined;
+  return relative;
 }
 
 export async function prepareOutboundImageSources(
@@ -189,7 +236,7 @@ function emittedImageIndexes(
   if (!contentSegments?.length) return images.map((_, index) => index);
   const indexes: number[] = [];
   for (const segment of contentSegments) {
-    if (segment.type !== "image") continue;
+    if (segment.type === "text") continue;
     if (!Number.isSafeInteger(segment.imageIndex) || segment.imageIndex < 0 || segment.imageIndex >= images.length) {
       throw new Error("Outbound image segment index is invalid.");
     }
@@ -241,7 +288,7 @@ function isSafePngFileName(fileName: string) {
 }
 
 function contentAddressedEmojiDigest(fileName: string) {
-  return /^emoji-([a-f0-9]{64})\.png$/u.exec(fileName)?.[1];
+  return /^emoji-([a-f0-9]{64})\.(?:png|gif)$/u.exec(fileName)?.[1];
 }
 
 function pathLikeBaseName(value: string) {

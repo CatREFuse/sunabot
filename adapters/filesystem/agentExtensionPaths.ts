@@ -1,6 +1,7 @@
 import path from "node:path";
 import { assertAgentId } from "../../packages/contracts/extensions/agentExtensions.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
+import { AGENT_RESOURCE_LAYOUT } from "../../packages/platform/agentResourceLayout.js";
 import {
   assertExistingChain,
   assertOptionalChain,
@@ -57,13 +58,14 @@ export class AgentExtensionPathGuard {
     const agentRoot = path.dirname(agent);
     await assertExistingChain(workspace, path.relative(workspace, agent));
     const agentIdentity = await pinPrivateDirectoryIdentity(agent, agent);
+    const skills = path.join(agent, AGENT_RESOURCE_LAYOUT.skills);
     const extensions = path.join(agent, "extensions");
-    const skills = path.join(extensions, "skills");
-    const mcp = path.join(extensions, "mcp");
+    const mcp = path.join(agent, AGENT_RESOURCE_LAYOUT.mcp);
     await assertOptionalChain(workspace, path.relative(workspace, skills));
     await assertOptionalChain(workspace, path.relative(workspace, mcp));
     const controlledDirectories = await Promise.all([
       agentRoot,
+      path.join(agent, AGENT_RESOURCE_LAYOUT.workbench),
       extensions,
       skills,
       mcp
@@ -158,7 +160,7 @@ export class AgentExtensionPathGuard {
       );
       return this.workspaceIdentity;
     }
-    await verifyPinnedDirectory(this.workspaceRoot, this.workspaceIdentity);
+    this.workspaceIdentity = await refreshPinnedDirectory(this.workspaceRoot, this.workspaceIdentity);
     return this.workspaceIdentity;
   }
 }

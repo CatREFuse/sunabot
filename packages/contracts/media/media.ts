@@ -5,6 +5,7 @@ export interface IncomingAttachment {
   source: AttachmentSource;
   name: string;
   fileId?: string;
+  fileToken?: string;
   sizeBytes?: number;
   url?: string;
   busId?: number;
@@ -20,8 +21,31 @@ export type AttachmentStatus =
   | "too_large"
   | "failed";
 
+export interface AttachmentBlobRefV1 {
+  schemaVersion: 1;
+  cacheKey: string;
+  sha256: string;
+  sizeBytes: number;
+  detectedMimeType?: string;
+}
+
+export type AttachmentAcquisitionState =
+  | { status: "pending" }
+  | { status: "acquired"; blob: AttachmentBlobRefV1 }
+  | { status: "failed"; errorCode?: string };
+
+export type AttachmentParseStatus =
+  | "not_started"
+  | "pending"
+  | "ready"
+  | "partial"
+  | "unsupported"
+  | "parse_failed";
+
 export interface ParsedAttachment extends IncomingAttachment {
   status: AttachmentStatus;
+  acquisition?: AttachmentAcquisitionState;
+  parseStatus?: AttachmentParseStatus;
   mimeType?: string;
   format?: string;
   sha256?: string;
@@ -51,6 +75,7 @@ export interface AttachmentExtractionContext {
 }
 
 export interface AttachmentResolutionInput {
+  accountId?: string;
   fileId?: string;
   file?: string;
   url?: string;
@@ -97,7 +122,7 @@ export interface AttachmentSourcePort {
     options?: AttachmentResolverOptions
   ): Promise<ResolvedAttachmentSource>;
   resolveAttachmentFallback(
-    input: Pick<AttachmentResolutionInput, "fileId" | "file">,
+    input: Pick<AttachmentResolutionInput, "accountId" | "fileId" | "file">,
     options?: AttachmentResolverOptions
   ): Promise<ResolvedAttachmentSource | undefined>;
 }
@@ -108,6 +133,7 @@ export type MediaAssetRefV1 =
       kind: "image";
       source: "remote_url" | "inline_data";
       url: string;
+      altText?: string;
       filePath?: never;
     }
   | {
@@ -116,6 +142,7 @@ export type MediaAssetRefV1 =
       source: "shared_file";
       filePath: string;
       url?: string;
+      altText?: string;
     };
 
 export interface ImageResult {
@@ -124,12 +151,13 @@ export interface ImageResult {
   revisedPrompt?: string;
 }
 
-export function imageMediaAsset(url: string): MediaAssetRefV1 {
+export function imageMediaAsset(url: string, altText?: string): MediaAssetRefV1 {
   return {
     schemaVersion: 1,
     kind: "image",
     source: /^data:image\//i.test(url) ? "inline_data" : "remote_url",
-    url
+    url,
+    ...(altText?.trim() ? { altText: altText.trim() } : {})
   };
 }
 
@@ -144,8 +172,4 @@ export function generatedImageMediaAsset(image: Pick<ImageResult, "url" | "fileP
     };
   }
   return image.url ? imageMediaAsset(image.url) : undefined;
-}
-
-export function mediaAssetUrl(asset: MediaAssetRefV1) {
-  return asset.url;
 }

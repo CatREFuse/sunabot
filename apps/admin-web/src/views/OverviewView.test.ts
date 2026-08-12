@@ -53,6 +53,7 @@ describe("OverviewView", () => {
       if (path === "/api/onebot/login-info") return Promise.resolve({ connected: false });
       if (path === "/api/conversations") return Promise.resolve({ conversations: [] });
       if (path === "/api/images") return Promise.resolve({ images: [] });
+      if (path === "/api/overview/summary") return Promise.resolve({ conversations: 0, images: 0 });
       if (path.startsWith("/api/token-usage?")) return Promise.resolve({
         today: { date: "2026-07-10", input: 0, output: 0, cachedInput: 0, total: 0, cacheRate: null, requests: 0 },
         days: [],
@@ -77,6 +78,7 @@ describe("OverviewView", () => {
       if (path === "/api/agents/plana/accounts/secondary/napcat-webui-url") return Promise.resolve({ url: "http://127.0.0.1:6100" });
       if (path === "/api/conversations") return Promise.resolve({ conversations: [] });
       if (path === "/api/images") return Promise.resolve({ images: [] });
+      if (path === "/api/overview/summary") return Promise.resolve({ conversations: 0, images: 0 });
       if (path.startsWith("/api/token-usage?")) return Promise.resolve(emptyTokenUsage());
       throw new Error(`Unexpected request: ${path}`);
     });
@@ -137,6 +139,7 @@ describe("OverviewView", () => {
       if (path === "/api/onebot/login-info") return Promise.resolve({ connected: true, error: "登录查询失败" });
       if (path === "/api/conversations") return Promise.resolve({ conversations: [] });
       if (path === "/api/images") return Promise.resolve({ images: [] });
+      if (path === "/api/overview/summary") return Promise.resolve({ conversations: 0, images: 0 });
       if (path.startsWith("/api/token-usage?")) return Promise.resolve({
         today: { date: "2026-07-10", input: 0, output: 0, cachedInput: 0, total: 0, cacheRate: null, requests: 0 },
         days: [],

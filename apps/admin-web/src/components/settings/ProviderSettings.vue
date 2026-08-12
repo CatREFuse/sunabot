@@ -7,9 +7,11 @@ import ModelSelect from "./ModelSelect.vue";
 import ReasoningEffortSelect from "./ReasoningEffortSelect.vue";
 import CodexSubscriptionAuth from "./CodexSubscriptionAuth.vue";
 import ProviderCreateDialog from "./ProviderCreateDialog.vue";
+import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 import { compatibleProvider, providerPreset, providerType, type ProviderKind } from "./providerPresets";
 
 const draft = defineModel<ConfigSectionValueMap["providers"]>({ required: true });
+const emit = defineEmits<{ commit: [] }>();
 const props = defineProps<{ models: readonly ModelCatalogItem[]; fieldStates?: Record<string, { secretConfigured?: boolean }> }>();
 const selectedIndex = shallowRef(0);
 const status = shallowRef("");
@@ -25,16 +27,10 @@ const currentType = computed(() => current.value ? providerType(current.value.ki
 const currentIsDefault = computed(() => Boolean(current.value && draft.value.defaultProviderId === current.value.id));
 const currentEnabledDescription = computed(() => currentIsDefault.value ? "默认" : "");
 const enabledProviders = computed(() => draft.value.items.filter((provider) => provider.enabled));
-const visionProviders = computed(() => draft.value.items.filter((provider) => provider.enabled
-  && provider.id !== current.value?.id
-  && provider.multimodal !== "disabled"
-  && !(provider.multimodal === "auto" && provider.detectedMultimodal === false)));
 const secretConfigured = computed(() => {
   const provider = current.value;
   return provider ? props.fieldStates?.[`providers.items.${provider.id}.apiKeyEnv`]?.secretConfigured : undefined;
 });
-const effectiveNonVision = computed(() => current.value?.multimodal === "disabled"
-  || (current.value?.multimodal === "auto" && current.value.detectedMultimodal === false));
 const remoteModelItems = computed<ModelCatalogItem[]>(() => {
   const provider = current.value;
   if (!provider) return [];
@@ -82,6 +78,7 @@ function createProvider(kind: ProviderKind) {
   if (!draft.value.defaultProviderId) draft.value.defaultProviderId = id;
   createOpen.value = false;
   setStatus("Provider 已添加", "success");
+  emit("commit");
 }
 
 function copyProvider() {
@@ -93,6 +90,7 @@ function copyProvider() {
   draft.value.items.push(copy);
   selectedIndex.value = draft.value.items.length - 1;
   setStatus("Provider 已复制", "success");
+  emit("commit");
 }
 
 function deleteProvider() {
@@ -102,12 +100,14 @@ function deleteProvider() {
   if (draft.value.defaultProviderId === provider.id) return setStatus("请先选择新的默认 Provider", "warning");
   draft.value.items.splice(selectedIndex.value, 1);
   setStatus("Provider 已删除", "success");
+  emit("commit");
 }
 
 function chooseModelSource(source: "remote" | "custom") {
   if (!current.value) return;
   current.value.modelSource = source;
   if (source === "remote" && !discoveredModels[current.value.id] && current.value.kind !== "codex-responses") void loadModels();
+  emit("commit");
 }
 
 async function loadModels() {
@@ -123,6 +123,7 @@ async function loadModels() {
     discoveredModels[provider.id] = result.models;
     if (!result.models.includes(provider.model) && result.models[0]) provider.model = result.models[0];
     setStatus(`已读取 ${result.models.length} 个模型`, "success");
+    emit("commit");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "模型读取失败", "error");
   } finally {
@@ -142,6 +143,7 @@ async function probeVision() {
     });
     provider.detectedMultimodal = result.multimodal;
     setStatus(result.multimodal ? "支持图片" : `仅文本${result.reason ? ` · ${result.reason}` : ""}`, result.multimodal ? "success" : "warning");
+    emit("commit");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "探测失败", "error");
   } finally {
@@ -162,6 +164,7 @@ async function testProvider() {
     if (provider.multimodal === "auto" && result.multimodal != null) provider.detectedMultimodal = result.multimodal;
     const duration = result.durationMs ?? result.elapsedMs;
     setStatus(`连接成功 · ${result.model ?? provider.model}${duration != null ? ` · ${duration} ms` : ""}`, "success");
+    emit("commit");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "连接失败", "error");
   } finally {
@@ -189,7 +192,10 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
 
 <template>
   <section class="grid gap-8">
-    <div><h2 class="section-title">模型服务</h2></div>
+    <div>
+      <h2 class="section-title">模型服务</h2>
+      <p class="mt-2 text-sm leading-6 text-mute">管理默认 Provider、连接、模型能力与生成参数。</p>
+    </div>
 
     <label class="field max-w-xl">
       <span class="field-label">默认 Provider</span>
@@ -222,7 +228,7 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
           <header><i class="bx bx-id-card" aria-hidden="true"></i><div><strong>身份</strong><span>名称与 ID</span></div></header>
           <div class="grid gap-5 sm:grid-cols-2">
             <label class="field"><span class="field-label">ID</span><input :value="current.id" class="control" type="text" readonly></label>
-            <label class="field"><span class="field-label">名称</span><input v-model.trim="current.label" class="control" type="text" autocomplete="off"></label>
+            <label class="field"><span class="field-label">名称</span><SettingsConfirmInput v-model.trim="current.label" type="text" autocomplete="off" confirm-label="确认 Provider 名称" /></label>
           </div>
           <ToggleSwitch v-model="current.enabled" label="启用" :disabled="currentIsDefault" :description="currentEnabledDescription" />
         </section>
@@ -231,8 +237,8 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
           <header><i class="bx bx-link" aria-hidden="true"></i><div><strong>连接</strong><span>{{ currentType?.description }}</span></div></header>
           <div class="grid gap-5 sm:grid-cols-2">
             <label class="field"><span class="field-label">类型</span><span class="control flex items-center gap-2 !bg-raised" aria-label="Provider 类型"><i class="bx" :class="currentType?.icon" aria-hidden="true"></i>{{ currentType?.label }}</span></label>
-            <label class="field"><span class="field-label flex items-center justify-between gap-3"><span>API Key 环境变量</span><small v-if="secretConfigured != null" class="font-mono text-[10px]" :class="secretConfigured ? 'text-success' : 'text-warning'">{{ secretConfigured ? "已配置" : "未配置" }}</small></span><input v-model.trim="current.apiKeyEnv" class="control" type="text" autocomplete="off"></label>
-            <label class="field sm:col-span-2"><span class="field-label flex items-center justify-between gap-3"><span>Base URL</span><small v-if="!compatibleProvider(current.kind)" class="font-mono text-[10px] text-mute">固定</small></span><input v-model.trim="current.baseUrl" class="control" type="url" :readonly="!compatibleProvider(current.kind)" autocomplete="off"></label>
+            <label class="field"><span class="field-label flex items-center justify-between gap-3"><span>API Key 环境变量</span><small v-if="secretConfigured != null" class="font-mono text-[10px]" :class="secretConfigured ? 'text-success' : 'text-warning'">{{ secretConfigured ? "已配置" : "未配置" }}</small></span><SettingsConfirmInput v-model.trim="current.apiKeyEnv" type="text" autocomplete="off" confirm-label="确认 API Key 环境变量" /></label>
+            <label class="field sm:col-span-2"><span class="field-label flex items-center justify-between gap-3"><span>Base URL</span><small v-if="!compatibleProvider(current.kind)" class="font-mono text-[10px] text-mute">固定</small></span><SettingsConfirmInput v-model.trim="current.baseUrl" type="url" :readonly="!compatibleProvider(current.kind)" autocomplete="off" confirm-label="确认 Base URL" /></label>
           </div>
         </section>
 
@@ -244,9 +250,9 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
           </div>
           <div class="grid gap-5 sm:grid-cols-2">
             <ModelSelect v-if="current.modelSource !== 'custom'" v-model="current.model" :models="remoteModelItems" />
-            <label v-else class="field"><span class="field-label">模型</span><input v-model.trim="current.model" class="control" type="text" aria-label="模型" autocomplete="off"></label>
+            <label v-else class="field"><span class="field-label">模型</span><SettingsConfirmInput v-model.trim="current.model" type="text" aria-label="模型" autocomplete="off" confirm-label="确认模型" /></label>
             <ReasoningEffortSelect v-if="supportsReasoningEffort(current.kind)" v-model="current.reasoningEffort" :model="current.model" :models="props.models" />
-            <label v-if="current.kind === 'codex-responses' || current.kind === 'openai-official'" class="field"><span class="field-label">图像模型</span><input v-model.trim="current.imageModel" class="control" type="text" autocomplete="off"></label>
+            <label v-if="current.kind === 'codex-responses' || current.kind === 'openai-official'" class="field"><span class="field-label">图像模型</span><SettingsConfirmInput v-model.trim="current.imageModel" type="text" autocomplete="off" confirm-label="确认图像模型" /></label>
           </div>
         </section>
 
@@ -255,16 +261,12 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
           <div class="grid gap-5 sm:grid-cols-2">
             <label class="field"><span class="field-label">图片能力</span><select v-model="current.multimodal" class="control"><option value="auto">自动探测</option><option value="enabled">支持图片</option><option value="disabled">仅文本</option></select></label>
             <div class="field"><span class="field-label">探测结果</span><button class="btn justify-self-start" type="button" :disabled="probingVision" @click="probeVision"><i class="bx bx-scan" aria-hidden="true"></i>{{ probingVision ? "探测中" : "探测多模态" }}</button><small v-if="current.detectedMultimodal != null" class="font-mono text-[10px]" :class="current.detectedMultimodal ? 'text-success' : 'text-warning'">{{ current.detectedMultimodal ? "支持图片" : "仅文本" }}</small></div>
-            <template v-if="effectiveNonVision">
-              <label class="field"><span class="field-label">读图辅助 Provider</span><select v-model="current.visionProviderId" class="control"><option value="">选择 Provider</option><option v-for="provider in visionProviders" :key="provider.id" :value="provider.id">{{ provider.label }}</option></select></label>
-              <label class="field"><span class="field-label">读图模型</span><input v-model.trim="current.visionModel" class="control" type="text" placeholder="留空使用默认模型"></label>
-            </template>
           </div>
         </section>
 
         <section class="provider-group">
           <header><i class="bx bx-slider-alt" aria-hidden="true"></i><div><strong>生成参数</strong><span>输出参数</span></div></header>
-          <div class="grid gap-5 sm:grid-cols-2"><label class="field"><span class="field-label">随机性（Temperature）</span><input v-model.number="current.temperature" class="control" type="number" min="0" max="2" step="0.1"></label><label class="field"><span class="field-label">最大输出 Token</span><input v-model.number="current.maxOutputTokens" class="control" type="number" min="1" max="1000000" step="1"></label></div>
+          <div class="grid gap-5 sm:grid-cols-2"><label class="field"><span class="field-label">随机性（Temperature）</span><SettingsConfirmInput v-model.number="current.temperature" type="number" min="0" max="2" step="0.1" confirm-label="确认随机性" /></label><label class="field"><span class="field-label">最大输出 Token</span><SettingsConfirmInput v-model.number="current.maxOutputTokens" type="number" min="1" max="1000000" step="1" confirm-label="确认最大输出 Token" /></label></div>
         </section>
 
         <footer class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5"><span class="inline-state max-w-full break-words" :data-kind="statusKind || undefined">{{ status }}</span><button class="btn" type="button" :disabled="testing" @click="testProvider"><i class="bx bx-plug" aria-hidden="true"></i>{{ testing ? "测试中" : "测试连接" }}</button></footer>
@@ -278,7 +280,7 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
 <style scoped>
 .provider-group { display: grid; gap: 20px; border-bottom: 1px solid rgb(var(--color-line)); padding: 28px 0; }
 .provider-group > header { display: flex; align-items: center; gap: 12px; }
-.provider-group > header > i { width: 40px; flex: none; color: rgb(var(--color-interactive)); font-size: 28px; line-height: 40px; text-align: center; }
+.provider-group > header > i { width: 40px; flex: none; color: rgb(var(--color-mute)); font-size: 28px; line-height: 40px; text-align: center; }
 .provider-group > header strong { display: block; color: rgb(var(--color-display)); font-size: 15px; font-weight: 500; }
 .provider-group > header span { display: block; margin-top: 2px; color: rgb(var(--color-mute)); font-size: 12px; }
 </style>

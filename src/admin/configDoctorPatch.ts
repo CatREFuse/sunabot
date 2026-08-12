@@ -6,7 +6,7 @@ export type ConfigDoctorPatchOperation = {
   value?: unknown;
 };
 
-const MAX_OPERATIONS = 64;
+const MAX_OPERATIONS = 256;
 const MAX_POINTER_DEPTH = 12;
 const MAX_VALUE_BYTES = 32_768;
 const FORBIDDEN_POINTER_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
@@ -23,10 +23,7 @@ const RULE_REPAIRABLE_PATHS = new Set([
   "/bot/quoteGroupReplies",
   "/bot/contextMessageLimit",
   "/bot/memory/reasoningEffort",
-  "/bot/memory/messageThreshold",
-  "/bot/memory/workingMemoryMaxEntries",
   "/bot/orchestrator/enabled",
-  "/bot/orchestrator/groupThreadModel",
   "/bot/orchestrator/reasoningEffort",
   "/bot/orchestrator/messageThreshold",
   "/bot/orchestrator/recentMessageWindowMs",
@@ -43,44 +40,6 @@ const RULE_REPAIRABLE_PATHS = new Set([
 const AI_REPAIRABLE_PATHS = new Set([...RULE_REPAIRABLE_PATHS].filter((path) => (
   path !== "/schemaVersion" && path !== "/onebot/quoteGroupReplies"
 )));
-const BOOLEAN_REPAIR_PATHS = new Set([
-  "/broadcastStorm/enabled",
-  "/bot/pokeOnNoReply",
-  "/bot/quoteGroupReplies",
-  "/bot/orchestrator/enabled",
-  "/onebot/quoteGroupReplies"
-]);
-const NUMBER_REPAIR_PATHS = new Set([
-  "/broadcastStorm/windowMinutes",
-  "/broadcastStorm/replyThreshold",
-  "/broadcastStorm/cooldownMinutes",
-  "/normalReply/maxRetries",
-  "/bot/replyDebounceMs",
-  "/bot/contextMessageLimit",
-  "/bot/memory/messageThreshold",
-  "/bot/memory/workingMemoryMaxEntries",
-  "/bot/orchestrator/messageThreshold",
-  "/bot/orchestrator/recentMessageWindowMs",
-  "/bot/tools/maxCalls",
-  "/bot/tools/websearch/maxResults",
-  "/bot/tools/codex/timeoutMs"
-]);
-const STRING_REPAIR_PATHS = new Set([
-  "/bot/memory/reasoningEffort",
-  "/bot/orchestrator/groupThreadModel",
-  "/bot/orchestrator/reasoningEffort",
-  "/bot/tools/generateImg/provider",
-  "/bot/tools/generateImg/size",
-  "/bot/tools/generateImg/resolution",
-  "/bot/tools/generateImg/quality"
-]);
-
-const RETIRED_PATHS = new Set([
-  "/persona/memoryLimit",
-  "/bot/tools/websearch/model",
-  "/bot/tools/websearch/codexExecutable"
-]);
-
 const IGNORED_NORMALIZATION_PATHS = [
   /^\/providers\/items\/\d+\/(modelSource|multimodal|reasoningEffort)$/
 ];
@@ -95,16 +54,6 @@ export function diffConfigDocuments(
   return options.ignoreNormalizationArtifacts === false
     ? operations
     : operations.filter((operation) => !IGNORED_NORMALIZATION_PATHS.some((pattern) => pattern.test(operation.path)));
-}
-
-export function isRuleRepairableOperation(operation: ConfigDoctorPatchOperation) {
-  if (operation.op === "remove") return RETIRED_PATHS.has(operation.path);
-  if (!RULE_REPAIRABLE_PATHS.has(operation.path)) return false;
-  if (operation.path === "/schemaVersion") return operation.value === 1;
-  if (BOOLEAN_REPAIR_PATHS.has(operation.path)) return typeof operation.value === "boolean";
-  if (NUMBER_REPAIR_PATHS.has(operation.path)) return Number.isSafeInteger(operation.value);
-  if (STRING_REPAIR_PATHS.has(operation.path)) return typeof operation.value === "string";
-  return false;
 }
 
 export function isAiRepairableOperation(operation: ConfigDoctorPatchOperation) {

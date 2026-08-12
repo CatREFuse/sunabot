@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
+import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 import type { ConfigSectionValueMap } from "../../types";
 
 const draft = defineModel<ConfigSectionValueMap["broadcastStorm"]>({ required: true });
@@ -16,55 +17,59 @@ const additionalQqIds = computed({
 
 <template>
   <section class="grid gap-8">
-    <h2 class="section-title">广播风暴</h2>
+    <div>
+      <h2 class="section-title">广播风暴</h2>
+      <p class="mt-2 text-sm leading-6 text-mute">识别短时间内的重复回复并临时静默。</p>
+    </div>
 
-    <div class="divide-y divide-line border-y border-line">
+    <div class="settings-group divide-y divide-line border-y border-line py-0">
       <ToggleSwitch v-model="draft.enabled" label="广播风暴嗅探" />
     </div>
 
-    <fieldset class="grid gap-5 sm:grid-cols-3" :disabled="!draft.enabled">
+    <fieldset class="settings-group grid gap-5 sm:grid-cols-3" :disabled="!draft.enabled">
+      <legend class="settings-group-title mb-5">判定与静默</legend>
       <label class="field">
         <span class="field-label">检测窗口（分钟）</span>
-        <input
+        <SettingsConfirmInput
           v-model.number="draft.windowMinutes"
-          class="control"
           type="number"
           min="1"
           max="1440"
           step="1"
-        >
+          confirm-label="确认检测窗口"
+        />
       </label>
       <label class="field">
         <span class="field-label">回复次数</span>
-        <input
+        <SettingsConfirmInput
           v-model.number="draft.replyThreshold"
-          class="control"
           type="number"
           min="1"
           max="100"
           step="1"
-        >
+          confirm-label="确认回复次数"
+        />
       </label>
       <label class="field">
         <span class="field-label">静默时长（分钟）</span>
-        <input
+        <SettingsConfirmInput
           v-model.number="draft.cooldownMinutes"
-          class="control"
           type="number"
           min="1"
           max="1440"
           step="1"
-        >
+          confirm-label="确认静默时长"
+        />
       </label>
-      <label class="field sm:col-span-3">
+      <label class="field border-t border-line pt-5 sm:col-span-3">
         <span class="field-label">补充嗅探账号</span>
-        <input
+        <SettingsConfirmInput
           v-model="additionalQqIds"
-          class="control"
           type="text"
           autocomplete="off"
           placeholder="123456789, 987654321"
-        >
+          confirm-label="确认补充嗅探账号"
+        />
         <span class="text-xs leading-5 text-mute">用逗号或空格分隔 QQ</span>
       </label>
     </fieldset>

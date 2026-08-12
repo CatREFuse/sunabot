@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, ProviderKind } from "../../src/types.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
+vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog }));
 
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 
@@ -32,6 +32,15 @@ describe("no_reply provider termination", () => {
 
     expect(onAssistantText).not.toHaveBeenCalled();
     expect(onToolCall).toHaveBeenCalledWith("no_reply");
+    expect(appendRequestLog).toHaveBeenCalledWith(expect.objectContaining({
+      category: "tool.call",
+      action: "no_reply",
+      request: {
+        callId: "call-openai-no-reply",
+        arguments: {}
+      },
+      response: { ok: true }
+    }));
     expect((create.mock.calls[0]?.[0] as Record<string, any>).tools)
       .toEqual(expect.arrayContaining([expect.objectContaining({ name: "no_reply" })]));
   });
@@ -67,7 +76,7 @@ describe("no_reply provider termination", () => {
 
   it("terminates Codex Responses without delivering sibling assistant text", async () => {
     const provider = new OpenAIProvider(providerConfig("codex-responses"));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("codex-token");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("codex-token");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(codexResponse([
       responseMessage("这段正文不应发送"),
       responseFunctionCall("call-codex-no-reply")
@@ -134,8 +143,8 @@ describe("no_reply provider termination", () => {
   });
 });
 
-describe("send_file provider response exclusivity", () => {
-  it("rejects OpenAI Responses sibling text before text or file callbacks", async () => {
+describe("send_file provider composition", () => {
+  it("allows OpenAI Responses sibling text and file callbacks", async () => {
     const provider = new OpenAIProvider(providerConfig("openai-official"));
     const create = vi.fn()
       .mockResolvedValueOnce({ output: [
@@ -148,12 +157,12 @@ describe("send_file provider response exclusivity", () => {
 
     await expect(provider.completeTurn("system", [{ role: "user", content: "发送报告" }], callbacks.options))
       .resolves.toEqual({ kind: "completed", text: "已取消冲突调用" });
-    assertSendFileCallbacksWereNotCalled(callbacks);
+    assertSendFileCallbacksWereCalled(callbacks);
   });
 
-  it("rejects Codex Responses sibling text before text or file callbacks", async () => {
+  it("allows Codex Responses sibling text and file callbacks", async () => {
     const provider = new OpenAIProvider(providerConfig("codex-responses"));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("codex-token");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("codex-token");
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(codexResponse([
         responseMessage("这段正文不应发送"),
@@ -164,10 +173,10 @@ describe("send_file provider response exclusivity", () => {
 
     await expect(provider.completeTurn("system", [{ role: "user", content: "发送报告" }], callbacks.options))
       .resolves.toEqual({ kind: "completed", text: "已取消冲突调用" });
-    assertSendFileCallbacksWereNotCalled(callbacks);
+    assertSendFileCallbacksWereCalled(callbacks);
   });
 
-  it("rejects Chat Completions sibling text before text or file callbacks", async () => {
+  it("allows Chat Completions sibling text and file callbacks", async () => {
     const provider = new OpenAIProvider(providerConfig("openai-compatible"));
     const create = vi.fn()
       .mockResolvedValueOnce({
@@ -190,10 +199,10 @@ describe("send_file provider response exclusivity", () => {
 
     await expect(provider.completeTurn("system", [{ role: "user", content: "发送报告" }], callbacks.options))
       .resolves.toEqual({ kind: "completed", text: "已取消冲突调用" });
-    assertSendFileCallbacksWereNotCalled(callbacks);
+    assertSendFileCallbacksWereCalled(callbacks);
   });
 
-  it("rejects Anthropic sibling text before text or file callbacks", async () => {
+  it("allows Anthropic sibling text and file callbacks", async () => {
     const provider = new OpenAIProvider(providerConfig("anthropic-official"));
     vi.spyOn(provider as never, "getApiKey").mockReturnValue("anthropic-key");
     vi.spyOn(globalThis, "fetch")
@@ -212,10 +221,10 @@ describe("send_file provider response exclusivity", () => {
 
     await expect(provider.completeTurn("system", [{ role: "user", content: "发送报告" }], callbacks.options))
       .resolves.toEqual({ kind: "completed", text: "已取消冲突调用" });
-    assertSendFileCallbacksWereNotCalled(callbacks);
+    assertSendFileCallbacksWereCalled(callbacks);
   });
 
-  it("rejects Gemini sibling text before text or file callbacks", async () => {
+  it("allows Gemini sibling text and file callbacks", async () => {
     const provider = new OpenAIProvider(providerConfig("gemini-official"));
     vi.spyOn(provider as never, "getApiKey").mockReturnValue("gemini-key");
     vi.spyOn(globalThis, "fetch")
@@ -230,12 +239,12 @@ describe("send_file provider response exclusivity", () => {
 
     await expect(provider.completeTurn("system", [{ role: "user", content: "发送报告" }], callbacks.options))
       .resolves.toEqual({ kind: "completed", text: "已取消冲突调用" });
-    assertSendFileCallbacksWereNotCalled(callbacks);
+    assertSendFileCallbacksWereCalled(callbacks);
   });
 });
 
 describe("cross-round no_reply ordering", () => {
-  it("returns a tool error after OpenAI Responses already delivered assistant_text", async () => {
+  it("allows no_reply after OpenAI Responses already delivered assistant_text", async () => {
     const provider = new OpenAIProvider(providerConfig("openai-official"));
     const create = vi.fn()
       .mockResolvedValueOnce({ output: [responseFunctionCall("call-progress", "assistant_text", { text: "处理中" })] })
@@ -247,15 +256,13 @@ describe("cross-round no_reply ordering", () => {
     await expect(provider.completeTurn("system", [{ role: "user", content: "执行任务" }], {
       allowNoReply: true,
       onAssistantText
-    })).resolves.toEqual({ kind: "completed", text: "处理完成" });
+    })).resolves.toEqual({ kind: "no_reply" });
 
     expect(onAssistantText).toHaveBeenCalledWith("处理中", "assistant_text");
-    expect(create).toHaveBeenCalledTimes(3);
-    expect(readResponsesToolError(create.mock.calls[2]?.[0], "call-late-no-reply"))
-      .toContain("before assistant text or any other tool");
+    expect(create).toHaveBeenCalledTimes(2);
   });
 
-  it("returns a tool error after Chat Completions already delivered assistant_text", async () => {
+  it("allows no_reply after Chat Completions already delivered assistant_text", async () => {
     const provider = new OpenAIProvider(providerConfig("openai-compatible"));
     const create = vi.fn()
       .mockResolvedValueOnce(chatToolResponse("call-progress", "assistant_text", { text: "处理中" }))
@@ -266,17 +273,13 @@ describe("cross-round no_reply ordering", () => {
     await expect(provider.completeTurn("system", [{ role: "user", content: "执行任务" }], {
       allowNoReply: true,
       onAssistantText: vi.fn()
-    })).resolves.toEqual({ kind: "completed", text: "处理完成" });
-
-    const thirdBody = create.mock.calls[2]?.[0] as Record<string, any>;
-    expect(JSON.parse(String(thirdBody.messages.find((message: Record<string, unknown>) => (
-      message.role === "tool" && message.tool_call_id === "call-late-no-reply"
-    ))?.content)).error).toContain("before assistant text or any other tool");
+    })).resolves.toEqual({ kind: "no_reply" });
+    expect(create).toHaveBeenCalledTimes(2);
   });
 
-  it("returns a tool error after Codex Responses already delivered assistant_text", async () => {
+  it("allows no_reply after Codex Responses already delivered assistant_text", async () => {
     const provider = new OpenAIProvider(providerConfig("codex-responses"));
-    vi.spyOn(provider as never, "getApiKey").mockReturnValue("codex-token");
+    vi.spyOn(provider as never, "getApiKeyAsync").mockResolvedValue("codex-token");
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(codexResponse([responseFunctionCall("call-progress", "assistant_text", { text: "处理中" })]))
       .mockResolvedValueOnce(codexResponse([responseFunctionCall("call-late-no-reply")]))
@@ -285,14 +288,11 @@ describe("cross-round no_reply ordering", () => {
     await expect(provider.completeTurn("system", [{ role: "user", content: "执行任务" }], {
       allowNoReply: true,
       onAssistantText: vi.fn()
-    })).resolves.toEqual({ kind: "completed", text: "处理完成" });
-
-    const thirdBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body));
-    expect(readResponsesToolError(thirdBody, "call-late-no-reply"))
-      .toContain("before assistant text or any other tool");
+    })).resolves.toEqual({ kind: "no_reply" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("returns a tool error after Anthropic already delivered assistant_text", async () => {
+  it("allows no_reply after Anthropic already delivered assistant_text", async () => {
     const provider = new OpenAIProvider(providerConfig("anthropic-official"));
     vi.spyOn(provider as never, "getApiKey").mockReturnValue("anthropic-key");
     const fetchMock = vi.spyOn(globalThis, "fetch")
@@ -309,16 +309,11 @@ describe("cross-round no_reply ordering", () => {
     await expect(provider.completeTurn("system", [{ role: "user", content: "执行任务" }], {
       allowNoReply: true,
       onAssistantText: vi.fn()
-    })).resolves.toEqual({ kind: "completed", text: "处理完成" });
-
-    const thirdBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body)) as Record<string, any>;
-    const toolResult = thirdBody.messages.flatMap((message: Record<string, any>) => (
-      Array.isArray(message.content) ? message.content : []
-    )).find((block: Record<string, unknown>) => block.tool_use_id === "call-late-no-reply");
-    expect(JSON.parse(String(toolResult?.content)).error).toContain("before assistant text or any other tool");
+    })).resolves.toEqual({ kind: "no_reply" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("returns a tool error after Gemini already delivered assistant_text", async () => {
+  it("allows no_reply after Gemini already delivered assistant_text", async () => {
     const provider = new OpenAIProvider(providerConfig("gemini-official"));
     vi.spyOn(provider as never, "getApiKey").mockReturnValue("gemini-key");
     const fetchMock = vi.spyOn(globalThis, "fetch")
@@ -333,13 +328,8 @@ describe("cross-round no_reply ordering", () => {
     await expect(provider.completeTurn("system", [{ role: "user", content: "执行任务" }], {
       allowNoReply: true,
       onAssistantText: vi.fn()
-    })).resolves.toEqual({ kind: "completed", text: "处理完成" });
-
-    const thirdBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body)) as Record<string, any>;
-    const response = thirdBody.contents.flatMap((content: Record<string, any>) => content.parts ?? [])
-      .map((part: Record<string, any>) => part.functionResponse)
-      .find((item: Record<string, unknown> | undefined) => item?.name === "no_reply");
-    expect(response.response.error).toContain("before assistant text or any other tool");
+    })).resolves.toEqual({ kind: "no_reply" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -408,18 +398,10 @@ function sendFileCallbacks() {
   };
 }
 
-function assertSendFileCallbacksWereNotCalled(callbacks: ReturnType<typeof sendFileCallbacks>) {
-  expect(callbacks.onAssistantText).not.toHaveBeenCalled();
-  expect(callbacks.onToolCall).not.toHaveBeenCalled();
-  expect(callbacks.send).not.toHaveBeenCalled();
-}
-
-function readResponsesToolError(body: unknown, callId: string) {
-  const input = (body as Record<string, any>)?.input;
-  const output = Array.isArray(input)
-    ? input.find((item: Record<string, unknown>) => item.type === "function_call_output" && item.call_id === callId)
-    : undefined;
-  return String(JSON.parse(String(output?.output)).error ?? "");
+function assertSendFileCallbacksWereCalled(callbacks: ReturnType<typeof sendFileCallbacks>) {
+  expect(callbacks.onAssistantText).toHaveBeenCalledWith("这段正文不应发送", "text");
+  expect(callbacks.onToolCall).toHaveBeenCalledWith("send_file");
+  expect(callbacks.send).toHaveBeenCalledOnce();
 }
 
 function chatToolResponse(callId: string, name: string, args: Record<string, unknown>) {

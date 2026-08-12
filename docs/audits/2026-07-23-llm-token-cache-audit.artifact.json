@@ -1,0 +1,877 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "Sunabot LLM Token 与 Prompt Cache 审计",
+    "description": "真实请求抽样、Provider 缓存验证与代码路径复核 · 数据截止 2026-07-22 17:50 UTC",
+    "generatedAt": "2026-07-23T01:44:45Z",
+    "cards": [
+      {
+        "id": "attempts_card",
+        "description": "固定截止点内三套业务库的物理模型响应尝试。",
+        "dataset": "overview",
+        "sourceId": "request_logs_snapshot",
+        "metrics": [
+          { "label": "模型响应尝试", "field": "attempts", "format": "number" },
+          { "label": "具备 usage", "field": "usage_n", "format": "number" }
+        ]
+      },
+      {
+        "id": "total_tokens_card",
+        "description": "仅统计 Provider 返回可归一化 usage 的响应。",
+        "dataset": "overview",
+        "sourceId": "request_logs_snapshot",
+        "metrics": [
+          { "label": "可计量总 Token", "field": "total_tokens", "format": "compact" },
+          { "label": "输入 Token", "field": "input_tokens", "format": "compact" }
+        ]
+      },
+      {
+        "id": "cache_rate_card",
+        "description": "按总缓存输入除以总输入计算；20% 是首轮实验门槛。",
+        "dataset": "overview",
+        "sourceId": "request_logs_snapshot",
+        "metrics": [
+          { "label": "API 缓存率", "field": "cache_rate", "format": "percent" },
+          { "label": "实验门槛", "field": "cache_target", "format": "percent" }
+        ]
+      },
+      {
+        "id": "missing_usage_card",
+        "description": "请求已经发生，但本地日志无法确认其 Token 消耗。",
+        "dataset": "overview",
+        "sourceId": "request_logs_snapshot",
+        "metrics": [
+          { "label": "usage 未知请求", "field": "missing_usage", "format": "number" },
+          { "label": "占全部尝试", "field": "missing_share", "format": "percent" }
+        ]
+      },
+      {
+        "id": "concentration_card",
+        "description": "群聊主回复、用户群聊编排、记忆合并和用户画像的合计占比。",
+        "dataset": "overview",
+        "sourceId": "request_logs_snapshot",
+        "metrics": [
+          { "label": "前四链路占比", "field": "top4_share", "format": "percent" }
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "token_contribution_chart",
+        "title": "可计量 Token 构成",
+        "subtitle": "三套业务库，固定截止点；按 prompt family 的总 Token 加权",
+        "type": "horizontalBar",
+        "dataset": "family_contribution",
+        "sourceId": "request_logs_snapshot",
+        "encodings": {
+          "x": { "field": "family", "type": "nominal", "label": "功能链路" },
+          "y": { "field": "share", "type": "quantitative", "label": "总 Token 占比", "format": "percent" },
+          "tooltip": [
+            { "field": "total_tokens", "type": "quantitative", "label": "总 Token", "format": "compact" },
+            { "field": "usage_n", "type": "quantitative", "label": "有 usage 请求", "format": "number" }
+          ]
+        },
+        "valueFormat": "percent",
+        "layout": "full"
+      },
+      {
+        "id": "node_cost_chart",
+        "title": "主要节点的单次平均 Token",
+        "subtitle": "仅统计具备 usage 的请求；低样本节点保留在明细表中",
+        "type": "horizontalBar",
+        "dataset": "node_cost_chart",
+        "sourceId": "request_logs_snapshot",
+        "encodings": {
+          "x": { "field": "node", "type": "nominal", "label": "功能节点" },
+          "y": { "field": "avg_total", "type": "quantitative", "label": "平均总 Token", "format": "compact" },
+          "tooltip": [
+            { "field": "usage_n", "type": "quantitative", "label": "样本 N", "format": "number" },
+            { "field": "cache_rate", "type": "quantitative", "label": "API 缓存率", "format": "percent" }
+          ]
+        },
+        "valueFormat": "compact",
+        "layout": "full"
+      },
+      {
+        "id": "cache_rate_chart",
+        "title": "主要节点的 API 缓存率",
+        "subtitle": "加权口径为总 cached input ÷ 总 input；零值可能同时包含小样本或未实现控制",
+        "type": "horizontalBar",
+        "dataset": "cache_rate_nodes",
+        "sourceId": "request_logs_snapshot",
+        "encodings": {
+          "x": { "field": "node", "type": "nominal", "label": "功能节点" },
+          "y": { "field": "cache_rate", "type": "quantitative", "label": "API 缓存率", "format": "percent" },
+          "tooltip": [
+            { "field": "usage_n", "type": "quantitative", "label": "样本 N", "format": "number" },
+            { "field": "avg_total", "type": "quantitative", "label": "平均总 Token", "format": "compact" }
+          ]
+        },
+        "valueFormat": "percent",
+        "layout": "full"
+      },
+      {
+        "id": "prefix_variants_chart",
+        "title": "群聊 system 前缀变体",
+        "subtitle": "仅覆盖可分析的 developer-first 请求；长期记忆固定后变体显著收敛",
+        "type": "bar",
+        "dataset": "prefix_variants_chart",
+        "sourceId": "prefix_analysis",
+        "encodings": {
+          "x": { "field": "agent", "type": "nominal", "label": "Agent" },
+          "y": { "field": "variants", "type": "quantitative", "label": "前缀变体数", "format": "number" },
+          "color": { "field": "scenario", "type": "nominal", "label": "口径" },
+          "tooltip": [
+            { "field": "eligible_requests", "type": "quantitative", "label": "可分析请求", "format": "number" }
+          ]
+        },
+        "valueFormat": "number",
+        "layout": "full"
+      },
+      {
+        "id": "cache_smoke_chart",
+        "title": "合成 Cache Smoke 的输入 Token 构成",
+        "subtitle": "同一 cache key 的 cold、两次 warm 与首段扰动；共 4 次隔离请求",
+        "type": "stackedBar",
+        "dataset": "cache_smoke_parts",
+        "sourceId": "cache_smoke",
+        "encodings": {
+          "x": { "field": "phase", "type": "ordinal", "label": "请求阶段" },
+          "y": { "field": "tokens", "type": "quantitative", "label": "输入 Token", "format": "number" },
+          "color": { "field": "component", "type": "nominal", "label": "输入构成" }
+        },
+        "valueFormat": "number",
+        "layout": "full"
+      },
+      {
+        "id": "failure_rate_chart",
+        "title": "高风险节点的明确错误率",
+        "subtitle": "错误次数 ÷ response attempts；usage 缺失仍保留为未知消耗",
+        "type": "horizontalBar",
+        "dataset": "failure_nodes",
+        "sourceId": "request_logs_snapshot",
+        "encodings": {
+          "x": { "field": "node", "type": "nominal", "label": "功能节点" },
+          "y": { "field": "error_rate", "type": "quantitative", "label": "明确错误率", "format": "percent" },
+          "tooltip": [
+            { "field": "attempts", "type": "quantitative", "label": "响应尝试", "format": "number" },
+            { "field": "errors", "type": "quantitative", "label": "明确错误", "format": "number" },
+            { "field": "missing_usage", "type": "quantitative", "label": "usage 未知", "format": "number" }
+          ]
+        },
+        "valueFormat": "percent",
+        "layout": "full"
+      }
+    ],
+    "tables": [
+      {
+        "id": "node_metrics_table",
+        "title": "功能节点请求级明细",
+        "subtitle": "平均值只覆盖带 usage 的请求；低样本结果需结合 N 解读",
+        "dataset": "node_metrics",
+        "sourceId": "request_logs_snapshot",
+        "defaultSort": { "field": "avg_total", "direction": "desc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "node", "label": "功能节点", "type": "text" },
+          { "field": "attempts", "label": "尝试", "format": "number" },
+          { "field": "usage_n", "label": "usage N", "format": "number" },
+          { "field": "avg_input", "label": "平均输入", "format": "number" },
+          { "field": "avg_output", "label": "平均输出", "format": "number" },
+          { "field": "avg_total", "label": "平均总量", "format": "number" },
+          { "field": "cache_rate", "label": "API 缓存率", "format": "percent" },
+          { "field": "note", "label": "边界", "type": "text" }
+        ]
+      },
+      {
+        "id": "business_flows_table",
+        "title": "单次业务事件的条件成本",
+        "subtitle": "已知文本请求级成本；未计入部分单独列出",
+        "dataset": "business_flows",
+        "sourceId": "audit_report",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "#", "format": "number" },
+          { "field": "flow", "label": "业务流程", "type": "text" },
+          { "field": "known_cost", "label": "已知请求级成本", "type": "text" },
+          { "field": "not_counted", "label": "未计入部分", "type": "text" }
+        ]
+      },
+      {
+        "id": "prefix_proxy_table",
+        "title": "Prefix 复算与 API 缓存对照",
+        "subtitle": "精确首前缀重复是命中的必要条件，仍会受 key、长度、QPS 与后端容量影响",
+        "dataset": "prefix_proxy",
+        "sourceId": "prefix_analysis",
+        "defaultSort": { "field": "developer_requests", "direction": "desc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "node", "label": "节点", "type": "text" },
+          { "field": "developer_requests", "label": "首 developer 请求", "format": "number" },
+          { "field": "distinct_prefixes", "label": "不同精确前缀", "format": "number" },
+          { "field": "repeated_share", "label": "落在重复前缀", "format": "percent" },
+          { "field": "api_cache_rate", "label": "API 缓存率", "format": "percent" }
+        ]
+      },
+      {
+        "id": "agent_variants_table",
+        "title": "三 Agent 群聊缓存身份",
+        "subtitle": "Developer-first 可分析请求、system 前缀、cache key 与工具/schema identity",
+        "dataset": "agent_variants",
+        "sourceId": "prefix_analysis",
+        "defaultSort": { "field": "eligible_requests", "direction": "desc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "agent", "label": "Agent", "type": "text" },
+          { "field": "eligible_requests", "label": "可分析请求", "format": "number" },
+          { "field": "system_variants", "label": "system 变体", "format": "number" },
+          { "field": "cache_key_variants", "label": "cache key 变体", "format": "number" },
+          { "field": "normalized_variants", "label": "固定长期记忆后", "format": "number" },
+          { "field": "identity_variants", "label": "再计工具/schema", "format": "number" }
+        ]
+      },
+      {
+        "id": "cache_smoke_table",
+        "title": "Cache Smoke 请求明细",
+        "subtitle": "隔离合成文本、无工具、无业务内容、无 QQ I/O",
+        "dataset": "cache_smoke_summary",
+        "sourceId": "cache_smoke",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "#", "format": "number" },
+          { "field": "phase", "label": "请求", "type": "text" },
+          { "field": "input", "label": "输入", "format": "number" },
+          { "field": "cached", "label": "缓存输入", "format": "number" },
+          { "field": "cache_rate", "label": "命中率", "format": "percent" },
+          { "field": "output", "label": "输出", "format": "number" },
+          { "field": "latency_sec", "label": "延迟（秒）", "format": "number" },
+          { "field": "result", "label": "结果", "type": "text" }
+        ]
+      },
+      {
+        "id": "provider_cache_table",
+        "title": "Provider 缓存控制覆盖",
+        "subtitle": "当前代码路径的主动控制、可观测字段与已知限制",
+        "dataset": "provider_cache",
+        "sourceId": "code_inventory",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "#", "format": "number" },
+          { "field": "provider", "label": "Provider", "type": "text" },
+          { "field": "active_control", "label": "主动控制", "type": "text" },
+          { "field": "usage_visibility", "label": "usage 可见性", "type": "text" },
+          { "field": "gap", "label": "当前 Gap", "type": "text" }
+        ]
+      },
+      {
+        "id": "failure_table",
+        "title": "失败、usage 缺失与主要原因",
+        "subtitle": "响应尝试和 Token 可计量样本使用不同分母",
+        "dataset": "failure_nodes",
+        "sourceId": "request_logs_snapshot",
+        "defaultSort": { "field": "error_rate", "direction": "desc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "node", "label": "节点", "type": "text" },
+          { "field": "attempts", "label": "响应尝试", "format": "number" },
+          { "field": "usage_n", "label": "usage N", "format": "number" },
+          { "field": "errors", "label": "明确错误", "format": "number" },
+          { "field": "error_rate", "label": "错误率", "format": "percent" },
+          { "field": "missing_usage", "label": "usage 未知", "format": "number" },
+          { "field": "cause", "label": "主要原因", "type": "text" }
+        ]
+      },
+      {
+        "id": "inventory_table",
+        "title": "全部模型与 Provider 功能节点",
+        "subtitle": "覆盖文本 completion、图像、TTS、异步 Codex、探针与外部工具边界",
+        "dataset": "node_inventory",
+        "sourceId": "code_inventory",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "#", "format": "number" },
+          { "field": "node", "label": "功能节点", "type": "text" },
+          { "field": "request_shape", "label": "一次业务事件的请求形态", "type": "text" },
+          { "field": "measurement", "label": "当前统计状态", "type": "text" }
+        ]
+      },
+      {
+        "id": "immediate_actions_table",
+        "title": "代码层改进与验收信号",
+        "subtitle": "P0 先修结构和止损，P1 再压缩输入与工具身份",
+        "dataset": "immediate_actions",
+        "sourceId": "audit_report",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "#", "format": "number" },
+          { "field": "priority", "label": "优先级", "type": "text" },
+          { "field": "change", "label": "改动", "type": "text" },
+          { "field": "validation", "label": "验证", "type": "text" },
+          { "field": "signal", "label": "预期观测", "type": "text" }
+        ]
+      },
+      {
+        "id": "product_decisions_table",
+        "title": "需要产品决策的流程",
+        "subtitle": "成本指标与质量指标必须在同一实验中评估",
+        "dataset": "product_decisions",
+        "sourceId": "audit_report",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "#", "format": "number" },
+          { "field": "decision", "label": "决策", "type": "text" },
+          { "field": "cost_issue", "label": "成本问题", "type": "text" },
+          { "field": "quality_metrics", "label": "质量指标", "type": "text" }
+        ]
+      },
+      {
+        "id": "roadmap_table",
+        "title": "实施阶段与验收",
+        "subtitle": "先修缓存边界和可观测性，再运行流程 A/B",
+        "dataset": "roadmap",
+        "sourceId": "audit_report",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "#", "format": "number" },
+          { "field": "phase", "label": "阶段", "type": "text" },
+          { "field": "duration", "label": "周期", "type": "text" },
+          { "field": "delivery", "label": "交付", "type": "text" },
+          { "field": "acceptance", "label": "验收", "type": "text" }
+        ]
+      },
+      {
+        "id": "verification_table",
+        "title": "本轮验证记录",
+        "subtitle": "代码夹具、仓库检查、真实合成请求与只读数据边界",
+        "dataset": "verification",
+        "sourceId": "audit_report",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "#", "format": "number" },
+          { "field": "check", "label": "验证项", "type": "text" },
+          { "field": "result", "label": "结果", "type": "text" },
+          { "field": "scope", "label": "边界", "type": "text" }
+        ]
+      },
+      {
+        "id": "code_locations_table",
+        "title": "实施入口",
+        "subtitle": "缓存、usage、统计与主要运行时节点的当前代码位置",
+        "dataset": "code_locations",
+        "sourceId": "code_inventory",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "#", "format": "number" },
+          { "field": "area", "label": "模块", "type": "text" },
+          { "field": "path", "label": "代码位置", "type": "text" }
+        ]
+      }
+    ],
+    "sources": [
+      { "id": "request_logs_snapshot", "label": "三 Agent request_logs 只读快照" },
+      { "id": "prefix_analysis", "label": "生产请求 Prefix 精确复算" },
+      { "id": "cache_smoke", "label": "gpt-5.6-luna 隔离 Cache Smoke", "path": "docs/audits/2026-07-23-llm-token-cache-audit.md" },
+      { "id": "code_inventory", "label": "Sunabot 模型调用代码路径复核", "path": "docs/audits/2026-07-23-llm-token-cache-audit.md" },
+      { "id": "audit_report", "label": "LLM Token 与 Prompt Cache 审计源报告", "path": "docs/audits/2026-07-23-llm-token-cache-audit.md" },
+      { "id": "openai_prompt_cache", "label": "OpenAI Prompt Caching", "href": "https://developers.openai.com/api/docs/guides/prompt-caching" }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# Sunabot LLM Token 与 Prompt Cache 审计"
+      },
+      {
+        "id": "technical_summary",
+        "type": "markdown",
+        "body": "## 技术摘要：成本高度集中，缓存后端有效，生产前缀结构限制命中\n\n固定截止点内共有 **8,613** 次模型响应尝试，其中 **5,629** 次具备可归一化 usage。可计量样本累计 **4,898 万 Token**，Provider 实测缓存率为 **10.0%**；其余 **2,984** 次响应的消耗未知。\n\n群聊主回复、用户群聊编排、工作/长期记忆合并和用户画像贡献 **85.6%** 的可计量 Token。隔离的 `gpt-5.6-luna` 实验在第二次 warm 请求达到 **89.17%** 命中，说明后端缓存能力可用；生产低命中与动态长期记忆进入最前缓存段、cache key 变体过多、工具/schema 身份变化和请求密度有关。\n\n当前最紧迫的动作是修复群聊稳定前缀、补齐逻辑调用与 cache write 观测、熔断高失败节点，并为每次业务调用建立累计请求与 Token 预算。"
+      },
+      {
+        "id": "metrics",
+        "type": "metric-strip",
+        "cardIds": ["attempts_card", "total_tokens_card", "cache_rate_card", "missing_usage_card", "concentration_card"]
+      },
+      {
+        "id": "concentration_intro",
+        "type": "markdown",
+        "sourceId": "request_logs_snapshot",
+        "body": "## 四条链路贡献 85.6% 的可计量 Token\n\n群聊主回复占 **36.4%**，用户群聊编排占 **30.4%**，工作/长期记忆合并占 **12.9%**，用户画像占 **6.0%**。优化这些链路能直接改变总体成本；低频节点应优先处理确定性失败和统计缺口。"
+      },
+      { "id": "contribution_chart_block", "type": "chart", "chartId": "token_contribution_chart", "layout": "full" },
+      {
+        "id": "cost_intro",
+        "type": "markdown",
+        "sourceId": "request_logs_snapshot",
+        "body": "## 记忆调用单次最重，群聊回复和编排器构成高频主成本\n\n工作/长期记忆合并平均 **20.4K Token**，群聊回复约 **15.1K–19.2K**，用户群聊编排约 **5.2K**，Tone 约 **3.1K**。图中只展示样本量足以比较的主要节点；Dream、AIR、Config Doctor 等低样本结果保留在明细表。"
+      },
+      { "id": "node_cost_chart_block", "type": "chart", "chartId": "node_cost_chart", "layout": "full" },
+      { "id": "node_metrics_table_block", "type": "table", "tableId": "node_metrics_table", "layout": "full" },
+      {
+        "id": "flows_intro",
+        "type": "markdown",
+        "sourceId": "audit_report",
+        "body": "## 一次用户可见事件会展开为多次模型请求\n\n一条经过群聊编排、主回复和 Tone 的普通群聊回复约 **23.5K Token**；一次成功记忆批次约 **30.0K Token**。工具续轮、CAS 重做、图片、AIR、Bash 审计和 Tone 会继续增加请求，因此主模型单次均值无法代表完整业务成本。"
+      },
+      { "id": "business_flows_table_block", "type": "table", "tableId": "business_flows_table", "layout": "full" },
+      {
+        "id": "cache_intro",
+        "type": "markdown",
+        "body": "## 缓存后端已验证，生产请求结构仍在限制命中\n\n生产 API 缓存率为 **10.0%**。主要节点中，用户群聊编排 mini 为 **17.6%**、私聊 terra 为 **15.1%**、Tone terra 为 **14.4%**；工作/长期记忆只有 **3.7%**。缓存会改变计费输入类型与延迟，输入 Token 和 TPM 仍然存在，真正的 Token 缩减需要同时压缩提示词和业务流程。"
+      },
+      { "id": "cache_rate_chart_block", "type": "chart", "chartId": "cache_rate_chart", "layout": "full" },
+      {
+        "id": "prefix_intro",
+        "type": "markdown",
+        "sourceId": "prefix_analysis",
+        "body": "## 精确前缀重复只表示潜力，不能替代 API 命中率\n\nPrefix 复算按 Provider、模型、prompt family、工具 digest 和 schema digest 分桶，从第 0 段开始比较连续完全相同内容。memory、Tone 和编排器的首前缀高度重复，实际 API 缓存仍明显偏低，说明 cache key、资格长度、请求到达时间、后端容量和机会性建缓存都会影响结果。"
+      },
+      { "id": "prefix_proxy_table_block", "type": "table", "tableId": "prefix_proxy_table", "layout": "full" },
+      {
+        "id": "memory_boundary_intro",
+        "type": "markdown",
+        "sourceId": "prefix_analysis",
+        "body": "## 群聊长期记忆把缓存身份切碎\n\n公共群聊模板和 Arona、Koharu override 将 `memory.long_term` 放入 system。Codex GPT-5.6 会把全部 system 合成首个 developer input，并用完整 system 文本参与 cache key；长期记忆变化会同步改变请求前缀和 key。\n\nPlana、Arona、Koharu 的可分析请求中，system 前缀变体分别为 **180、397、142**；将长期记忆替换为固定占位后降至 **15、21、10**。修复需要移动动态内容，并让 cache key 描述与实际发送前缀保持一致。\n\n**修复状态 · 2026-07-23：**公共模板、Agent override、源默认模板和幂等迁移已完成同步，长期记忆、AIR 与其他高频上下文均已移到稳定 system 之后。图表继续保留审计截止点数据，修复后的缓存率将在新请求窗口中重新统计。"
+      },
+      { "id": "prefix_variants_chart_block", "type": "chart", "chartId": "prefix_variants_chart", "layout": "full" },
+      { "id": "agent_variants_table_block", "type": "table", "tableId": "agent_variants_table", "layout": "full" },
+      {
+        "id": "smoke_intro",
+        "type": "markdown",
+        "sourceId": "cache_smoke",
+        "body": "## 第二次 warm 命中 89.17%，首段扰动后归零\n\n隔离实验使用相同随机审计 key、约 5.4K Token 的稳定 developer 前缀和变化的短 user 尾部。cold 与 warm-1 均为 0 cached；warm-2 回报 **4,864 cached Token**；只改变首个 developer 前缀后再次回到 0。四个点只能验证机制和机会性建缓存，不能推断稳定延迟收益。"
+      },
+      { "id": "cache_smoke_chart_block", "type": "chart", "chartId": "cache_smoke_chart", "layout": "full" },
+      { "id": "cache_smoke_table_block", "type": "table", "tableId": "cache_smoke_table", "layout": "full" },
+      {
+        "id": "provider_intro",
+        "type": "markdown",
+        "sourceId": "code_inventory",
+        "body": "## Provider 缓存控制覆盖不完整\n\nOpenAI 官方 Responses 与 Codex Responses 会发送 `prompt_cache_key`；GPT-5.6 路径允许跨 conversation 复用。OpenAI 官方支持显式 breakpoint，当前 Codex 后端拒绝 breakpoint/options 并依赖隐式缓存。Anthropic、Gemini 与 compatible adapter 尚未实现各自的主动缓存控制。"
+      },
+      { "id": "provider_cache_table_block", "type": "table", "tableId": "provider_cache_table", "layout": "full" },
+      {
+        "id": "failure_intro",
+        "type": "markdown",
+        "sourceId": "request_logs_snapshot",
+        "body": "## 高失败节点制造未计量成本与延迟\n\nThread 分类明确错误率 **99.5%**，Director 为 **80.8%**，memory 为 **61.4%**。大量错误响应没有 usage，但请求已经发送；当前仪表盘只能确认请求次数，无法从本地日志还原服务端实际账单。"
+      },
+      { "id": "failure_rate_chart_block", "type": "chart", "chartId": "failure_rate_chart", "layout": "full" },
+      { "id": "failure_table_block", "type": "table", "tableId": "failure_table", "layout": "full" },
+      {
+        "id": "retry_context",
+        "type": "markdown",
+        "sourceId": "request_logs_snapshot",
+        "body": "### 可识别的调用级放大\n\n用户编排器可还原 **2,978** 个逻辑 run 与 **3,847** 次尝试，平均 **1.29 response/run**；文本 reply 可还原 **1,107** 个 run 与 **1,475** 次尝试，平均 **1.33 response/run**。memory 大部分记录没有完整 runId，暂时无法可靠计算重试后的每任务成本和最终成功率。"
+      },
+      {
+        "id": "coverage_intro",
+        "type": "markdown",
+        "sourceId": "code_inventory",
+        "body": "## 审计覆盖全部文本、图像、语音与外部工具边界\n\n代码盘点追踪了所有 `completePrompt`、`completeRequest`、`completeRequestTurn`、`generateImage`、异步 Codex 和 Provider 探针入口。图像按模型、尺寸和质量计费，TTS 按字符或音频计费，外部 MCP/Skill 的内部模型调用需要由外部服务提供账单与 trace。"
+      },
+      { "id": "inventory_table_block", "type": "table", "tableId": "inventory_table", "layout": "full" },
+      {
+        "id": "definitions",
+        "type": "markdown",
+        "sourceId": "audit_report",
+        "body": "## 指标口径保证描述性结论可复算\n\n- **单次请求**：一条 `model.response`；transport retry 分开计数。\n- **单次业务调用**：同一功能入口的一次逻辑运行；当前只有部分节点完整携带 runId。\n- **API 缓存率**：`Σ cached input / Σ input`；缓存输入已经包含在 input 中。\n- **Prefix 复算**：比较实际 Provider 请求从第 0 段开始的连续精确相等段，并同时检查 key、工具与 schema identity。\n- **Token 均值**：只使用 Provider 返回 usage 的请求；usage 缺失显示为未知。\n\n样本窗口在三套业务库中分别从 7 月 11、13、17 日开始，统一截止到 2026 年 7 月 22 日 17:50 UTC。运行中的 Core 在审计期间继续写日志，因此全部数字均按该截止点冻结。"
+      },
+      {
+        "id": "methodology",
+        "type": "markdown",
+        "sourceId": "audit_report",
+        "body": "## 方法同时覆盖代码机制、真实 API 与生产抽样\n\n1. **代码与夹具**：复核模型调用入口、cache key、usage 归一化和现有测试。\n2. **真实低价请求**：使用 `gpt-5.6-luna` 执行 cold、warm、warm、首段扰动矩阵，无工具、无业务内容、无 QQ I/O。\n3. **真实请求抽样**：对 Plana、Arona、Koharu 三套 `sunabot.sqlite` 执行只读查询，按 stage、prompt family、memory kind、模型和 runId 聚合。\n4. **Prefix 算法**：以实际 Provider 请求表面为准，使用严格 LCP；缺少匹配 tokenizer 时只报告段数、字节和 digest，不把字符比例换算成缓存 Token。"
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "body": "## 当前结论的边界\n\n- usage 覆盖率为 **65.4%**，成功样本均值会低估高失败节点的实际消耗。\n- 三套库的起始日期不同，本报告没有用不等长窗口制造时间趋势。\n- 图像、TTS 和外部 MCP 成本没有进入文本 Token 总量。\n- 只有 Codex 订阅 Provider 可用于真实合成 smoke；OpenAI 官方 Responses 的显式 breakpoint 与 cache-write 成本仍需独立实测。\n- `sol` 与 `terra` 样本对应不同 Agent 和场景，当前数据不能直接支持质量排名。\n- Prefix counterfactual 属于结构潜力分析，无法单独证明缓存率提升幅度。"
+      },
+      {
+        "id": "observability",
+        "type": "markdown",
+        "sourceId": "code_inventory",
+        "body": "## 可观测性缺口阻碍业务级成本归因\n\n现有聚合只能稳定区分 reply、orchestrator、两类 memory 和 other。Tone、Dream、Director、AIR、Bash 审计、Config Doctor、自拍改写、视觉探测、Provider 探针与图片请求会被折叠或继承父 stage。`cache_write_tokens` 没有进入公开 usage、SQLite 聚合和管理台；图片日志的顶层 model 仍可能是文本路由模型。\n\n建议统一增加 `nodeId`、`logicalInvocationId`、`parentInvocationId`、`runId`、`round`、`transportAttempt`、`finalOutcome`、cache read/write、prefix/tool/schema digest 和失败前本地 input 估算。图像与语音应使用独立计量口径。"
+      },
+      {
+        "id": "immediate_intro",
+        "type": "markdown",
+        "sourceId": "audit_report",
+        "body": "## P0 先修缓存边界、统计模型和失败放大\n\n群聊动态记忆应迁移到稳定 system 之后的动态 developer 区域，并同步公共 source default、持久模板和 Agent override。迁移必须保留管理员编辑并保持幂等。随后补齐业务调用链观测，为 Thread、memory、Director/Dream 的确定性错误增加熔断，并为每次逻辑调用设置最大轮次、累计输入、累计输出和截止时间。"
+      },
+      { "id": "immediate_actions_table_block", "type": "table", "tableId": "immediate_actions_table", "layout": "full" },
+      {
+        "id": "scenario",
+        "type": "markdown",
+        "sourceId": "audit_report",
+        "body": "### 输入压缩的结构性情景\n\n若群聊回复 input 降低 **20%**、用户编排器降低 **35%**、两类 memory 降低 **25%**，按当前构成估算可减少约 **22%** 的总 Token。该结果属于结构性情景，需要通过离线 replay 和线上 A/B 验证质量。缓存率达到 20% 只表示更多输入进入缓存计费类别，不能视为总 Token 同比例下降。"
+      },
+      {
+        "id": "product_intro",
+        "type": "markdown",
+        "sourceId": "audit_report",
+        "body": "## 产品需要决定哪些模型节点继续作为固定流程\n\n群聊当前可能连续执行 Thread 分类、是否回复编排、主回复和 Tone；记忆批次通常固定执行记忆合并与画像；Director 主动分享按目标会话线性 fan-out。流程调整需要同时评估人格、误回复、漏回复、记忆质量、工具成功率和延迟。"
+      },
+      { "id": "product_decisions_table_block", "type": "table", "tableId": "product_decisions_table", "layout": "full" },
+      {
+        "id": "roadmap_intro",
+        "type": "markdown",
+        "sourceId": "audit_report",
+        "body": "## 三阶段推进：先止损和测量，再做业务流程 A/B\n\n阶段 A 完成缓存边界、统计维度、失败熔断和真实 cache smoke；阶段 B 建立 section 级预算、管理台业务成本和 7 日观测；阶段 C 对编排、Tone、memory 和模型路由做质量—成本联合实验。群聊缓存率 **≥20%** 是首轮实验门槛，不能作为预先承诺。"
+      },
+      { "id": "roadmap_table_block", "type": "table", "tableId": "roadmap_table", "layout": "full" },
+      {
+        "id": "verification_intro",
+        "type": "markdown",
+        "sourceId": "audit_report",
+        "body": "## 验证覆盖缓存合同、usage 归一化和仓库约束\n\n本轮没有修改运行时代码、数据库、提示词、服务状态或 outbox。真实合成请求使用隔离 key 和合成文本，临时脚本已删除。"
+      },
+      { "id": "verification_table_block", "type": "table", "tableId": "verification_table", "layout": "full" },
+      {
+        "id": "code_intro",
+        "type": "markdown",
+        "sourceId": "code_inventory",
+        "body": "## 实施入口集中在 Provider、统计合同和运行时节点\n\n缓存 key、Provider 工具循环、usage 归一化、行为分类、请求日志和 SQLite 聚合构成第一批修改范围；业务流程改动再进入群聊编排、memory、Tone、Director、AIR 与自拍模块。"
+      },
+      { "id": "code_locations_table_block", "type": "table", "tableId": "code_locations_table", "layout": "full" },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "body": "## 下一轮需要回答的问题\n\n- OpenAI 官方 GPT-5.6 的显式 breakpoint、cache write 与净成本表现如何？\n- 群聊长期记忆迁移后，7 日 key 复用、缓存率、P50/P90 延迟会变化多少？\n- Thread 分类合并或熔断后，误回复、漏回复与 thread 准确率能否维持？\n- Tone 条件调用和 memory 单次抽取能否在质量门槛内减少固定调用？\n- 图像、TTS 与外部 MCP 如何进入统一的业务调用成本预算？"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-07-23T01:44:45Z",
+    "status": "ready",
+    "datasets": {
+      "overview": [
+        {
+          "attempts": 8613,
+          "usage_n": 5629,
+          "usage_coverage": 0.6535,
+          "input_tokens": 46861152,
+          "output_tokens": 2120303,
+          "total_tokens": 48981455,
+          "cached_tokens": 4680960,
+          "cache_rate": 0.0999,
+          "cache_target": 0.2,
+          "missing_usage": 2984,
+          "missing_share": 0.3465,
+          "top4_share": 0.8556
+        }
+      ],
+      "family_contribution": [
+        { "family": "群聊主回复", "total_tokens": 17806237, "share": 0.36353, "usage_n": 1151 },
+        { "family": "用户群聊编排", "total_tokens": 14870050, "share": 0.303585, "usage_n": 2822 },
+        { "family": "其他节点", "total_tokens": 7074785, "share": 0.144438, "usage_n": 1041 },
+        { "family": "工作/长期记忆", "total_tokens": 6312606, "share": 0.128877, "usage_n": 309 },
+        { "family": "用户画像", "total_tokens": 2917777, "share": 0.059569, "usage_n": 306 }
+      ],
+      "node_cost_chart": [
+        { "node": "工作/长期记忆", "avg_total": 20429, "usage_n": 309, "cache_rate": 0.0371 },
+        { "node": "群聊回复 · sol", "avg_total": 19154, "usage_n": 110, "cache_rate": 0.0186 },
+        { "node": "私聊回复 · sol", "avg_total": 15587, "usage_n": 27, "cache_rate": 0 },
+        { "node": "群聊回复 · terra", "avg_total": 15081, "usage_n": 1041, "cache_rate": 0.0809 },
+        { "node": "私聊回复 · terra", "avg_total": 14598, "usage_n": 146, "cache_rate": 0.1507 },
+        { "node": "用户画像", "avg_total": 9535, "usage_n": 306, "cache_rate": 0.0354 },
+        { "node": "异步图片链路 · terra", "avg_total": 7061, "usage_n": 122, "cache_rate": 0.0132 },
+        { "node": "用户群聊编排 · mini", "avg_total": 5274, "usage_n": 2712, "cache_rate": 0.1756 },
+        { "node": "用户群聊编排 · luna", "avg_total": 5153, "usage_n": 110, "cache_rate": 0.0747 },
+        { "node": "Director 每日计划", "avg_total": 4580, "usage_n": 10, "cache_rate": 0 },
+        { "node": "Tone · terra", "avg_total": 3081, "usage_n": 263, "cache_rate": 0.1443 }
+      ],
+      "cache_rate_nodes": [
+        { "node": "用户群聊编排 · mini", "cache_rate": 0.1756, "usage_n": 2712, "avg_total": 5274 },
+        { "node": "私聊回复 · terra", "cache_rate": 0.1507, "usage_n": 146, "avg_total": 14598 },
+        { "node": "Tone · terra", "cache_rate": 0.1443, "usage_n": 263, "avg_total": 3081 },
+        { "node": "自拍改写 · async", "cache_rate": 0.1236, "usage_n": 41, "avg_total": 2562 },
+        { "node": "自拍改写 · reply", "cache_rate": 0.0898, "usage_n": 39, "avg_total": 2934 },
+        { "node": "群聊回复 · terra", "cache_rate": 0.0809, "usage_n": 1041, "avg_total": 15081 },
+        { "node": "用户群聊编排 · luna", "cache_rate": 0.0747, "usage_n": 110, "avg_total": 5153 },
+        { "node": "工作/长期记忆", "cache_rate": 0.0371, "usage_n": 309, "avg_total": 20429 },
+        { "node": "用户画像", "cache_rate": 0.0354, "usage_n": 306, "avg_total": 9535 },
+        { "node": "群聊回复 · sol", "cache_rate": 0.0186, "usage_n": 110, "avg_total": 19154 },
+        { "node": "异步图片链路 · terra", "cache_rate": 0.0132, "usage_n": 122, "avg_total": 7061 },
+        { "node": "私聊回复 · sol", "cache_rate": 0, "usage_n": 27, "avg_total": 15587 }
+      ],
+      "node_metrics": [
+        { "node": "Dream · luna", "attempts": 23, "usage_n": 3, "avg_input": 34162, "avg_output": 1621, "avg_total": 35783, "cache_rate": 0, "note": "仅 3 条 usage；20 次错误" },
+        { "node": "工作/长期记忆 · luna", "attempts": 1348, "usage_n": 309, "avg_input": 17809, "avg_output": 2620, "avg_total": 20429, "cache_rate": 0.0371, "note": "1,039 次错误" },
+        { "node": "群聊回复 · sol", "attempts": 112, "usage_n": 110, "avg_input": 18925, "avg_output": 229, "avg_total": 19154, "cache_rate": 0.0186, "note": "样本场景与 terra 不同" },
+        { "node": "私聊回复 · sol", "attempts": 28, "usage_n": 27, "avg_input": 15328, "avg_output": 259, "avg_total": 15587, "cache_rate": 0, "note": "小样本" },
+        { "node": "群聊回复 · terra", "attempts": 1075, "usage_n": 1041, "avg_input": 14949, "avg_output": 132, "avg_total": 15081, "cache_rate": 0.0809, "note": "总 Token 占 32.0%" },
+        { "node": "私聊回复 · terra", "attempts": 152, "usage_n": 146, "avg_input": 14465, "avg_output": 132, "avg_total": 14598, "cache_rate": 0.1507, "note": "记忆位于末端 user 消息" },
+        { "node": "用户画像 · luna", "attempts": 308, "usage_n": 306, "avg_input": 8926, "avg_output": 609, "avg_total": 9535, "cache_rate": 0.0354, "note": "通常与记忆合并成对执行" },
+        { "node": "异步图片链路 · terra", "attempts": 144, "usage_n": 122, "avg_input": 6653, "avg_output": 408, "avg_total": 7061, "cache_rate": 0.0132, "note": "图片价格未进入文本 Token" },
+        { "node": "用户群聊编排 · mini", "attempts": 3631, "usage_n": 2712, "avg_input": 5054, "avg_output": 220, "avg_total": 5274, "cache_rate": 0.1756, "note": "总 Token 占 29.2%" },
+        { "node": "用户群聊编排 · luna", "attempts": 113, "usage_n": 110, "avg_input": 5014, "avg_output": 139, "avg_total": 5153, "cache_rate": 0.0747, "note": "小样本" },
+        { "node": "read_air · terra", "attempts": 2, "usage_n": 2, "avg_input": 3542, "avg_output": 1130, "avg_total": 4671, "cache_rate": 0, "note": "CAS 冲突可完整重做" },
+        { "node": "Director 每日计划 · terra", "attempts": 52, "usage_n": 10, "avg_input": 2399, "avg_output": 2182, "avg_total": 4580, "cache_rate": 0, "note": "42 次 schema 错误" },
+        { "node": "Tone · terra", "attempts": 272, "usage_n": 263, "avg_input": 3010, "avg_output": 72, "avg_total": 3081, "cache_rate": 0.1443, "note": "非空外发文本的条件乘数" },
+        { "node": "自拍改写 · reply/terra", "attempts": 39, "usage_n": 39, "avg_input": 2485, "avg_output": 449, "avg_total": 2934, "cache_rate": 0.0898, "note": "后续还有图像请求和续轮" },
+        { "node": "自拍改写 · async/terra", "attempts": 51, "usage_n": 41, "avg_input": 2122, "avg_output": 441, "avg_total": 2562, "cache_rate": 0.1236, "note": "10 次错误" },
+        { "node": "群聊 Thread 分类 · luna/mini", "attempts": 547, "usage_n": 2, "avg_input": 916, "avg_output": 159, "avg_total": 1075, "cache_rate": 0, "note": "544 次错误；均值仅来自 2 条 luna usage" },
+        { "node": "Bash 审计 · mini", "attempts": 20, "usage_n": 20, "avg_input": 577, "avg_output": 339, "avg_total": 915, "cache_rate": 0, "note": "每次 Bash 工具调用的附加请求" },
+        { "node": "Config Doctor · terra", "attempts": 3, "usage_n": 3, "avg_input": 463, "avg_output": 33, "avg_total": 496, "cache_rate": 0, "note": "管理员显式触发" }
+      ],
+      "business_flows": [
+        { "order": 1, "flow": "用户群聊编排 + 群聊回复 + Tone", "known_cost": "约 23.5K Token", "not_counted": "Thread、工具续轮、图片、AIR、Bash、记忆" },
+        { "order": 2, "flow": "成功 memory batch", "known_cost": "约 30.0K Token", "not_counted": "CAS 重做、失败未知消耗" },
+        { "order": 3, "flow": "自拍回复", "known_cost": "改写约 2.6K–2.9K + 主回复", "not_counted": "图像价格、视觉输入、续轮、Tone" },
+        { "order": 4, "flow": "read_air", "known_cost": "AIR 约 4.7K + 两侧主回复轮次", "not_counted": "CAS 重做、Tone" },
+        { "order": 5, "flow": "Director 主动分享", "known_cost": "每个目标会话一套完整链路", "not_counted": "fan-out 目标数决定总量" }
+      ],
+      "prefix_proxy": [
+        { "node": "orchestrator · mini", "developer_requests": 3381, "distinct_prefixes": 10, "repeated_share": 0.999, "api_cache_rate": 0.174 },
+        { "node": "memory · luna", "developer_requests": 1702, "distinct_prefixes": 33, "repeated_share": 0.997, "api_cache_rate": 0.036 },
+        { "node": "reply · terra", "developer_requests": 1262, "distinct_prefixes": 716, "repeated_share": 0.552, "api_cache_rate": 0.088 },
+        { "node": "orchestrator · luna", "developer_requests": 618, "distinct_prefixes": 4, "repeated_share": 1, "api_cache_rate": 0.074 },
+        { "node": "Tone · terra", "developer_requests": 272, "distinct_prefixes": 10, "repeated_share": 0.996, "api_cache_rate": 0.144 }
+      ],
+      "prefix_variants_chart": [
+        { "agent": "Plana", "scenario": "当前 system 前缀", "variants": 180, "eligible_requests": 261 },
+        { "agent": "Plana", "scenario": "固定长期记忆后", "variants": 15, "eligible_requests": 261 },
+        { "agent": "Arona", "scenario": "当前 system 前缀", "variants": 397, "eligible_requests": 659 },
+        { "agent": "Arona", "scenario": "固定长期记忆后", "variants": 21, "eligible_requests": 659 },
+        { "agent": "Koharu", "scenario": "当前 system 前缀", "variants": 142, "eligible_requests": 224 },
+        { "agent": "Koharu", "scenario": "固定长期记忆后", "variants": 10, "eligible_requests": 224 }
+      ],
+      "agent_variants": [
+        { "agent": "Arona", "eligible_requests": 659, "system_variants": 397, "cache_key_variants": 403, "normalized_variants": 21, "identity_variants": 47 },
+        { "agent": "Plana", "eligible_requests": 261, "system_variants": 180, "cache_key_variants": 178, "normalized_variants": 15, "identity_variants": 33 },
+        { "agent": "Koharu", "eligible_requests": 224, "system_variants": 142, "cache_key_variants": 148, "normalized_variants": 10, "identity_variants": 23 }
+      ],
+      "cache_smoke_parts": [
+        { "phase": "cold", "component": "未缓存输入", "tokens": 5455 },
+        { "phase": "cold", "component": "缓存输入", "tokens": 0 },
+        { "phase": "warm-1", "component": "未缓存输入", "tokens": 5455 },
+        { "phase": "warm-1", "component": "缓存输入", "tokens": 0 },
+        { "phase": "warm-2", "component": "未缓存输入", "tokens": 591 },
+        { "phase": "warm-2", "component": "缓存输入", "tokens": 4864 },
+        { "phase": "首段扰动", "component": "未缓存输入", "tokens": 5462 },
+        { "phase": "首段扰动", "component": "缓存输入", "tokens": 0 }
+      ],
+      "cache_smoke_summary": [
+        { "order": 1, "phase": "cold", "input": 5455, "cached": 0, "cache_rate": 0, "output": 204, "latency_sec": 5.9, "result": "未命中" },
+        { "order": 2, "phase": "warm-1", "input": 5455, "cached": 0, "cache_rate": 0, "output": 341, "latency_sec": 8.6, "result": "仍未命中" },
+        { "order": 3, "phase": "warm-2", "input": 5455, "cached": 4864, "cache_rate": 0.8917, "output": 152, "latency_sec": 4.5, "result": "命中" },
+        { "order": 4, "phase": "首段扰动", "input": 5462, "cached": 0, "cache_rate": 0, "output": 92, "latency_sec": 3.3, "result": "精确前缀失配" }
+      ],
+      "provider_cache": [
+        { "order": 1, "provider": "OpenAI 官方 Responses", "active_control": "prompt_cache_key；GPT-5.6 显式 breakpoint", "usage_visibility": "cache read/write 可由 Provider 回报", "gap": "cache write 尚未进入公开 usage 与 SQLite" },
+        { "order": 2, "provider": "Codex Responses", "active_control": "prompt_cache_key；GPT-5.6 跨 conversation", "usage_visibility": "真实 smoke 已观测 cache read", "gap": "后端拒绝 breakpoint/options，依赖隐式缓存" },
+        { "order": 3, "provider": "Anthropic", "active_control": "未发送 cache_control", "usage_visibility": "仅被动解析可能返回的缓存 usage", "gap": "缺 capability contract 与主动缓存实现" },
+        { "order": 4, "provider": "Gemini", "active_control": "未建立或引用 cachedContent", "usage_visibility": "仅被动解析可能返回的缓存 usage", "gap": "缺 capability contract 与主动缓存实现" },
+        { "order": 5, "provider": "OpenAI-compatible Chat", "active_control": "未注入 cache key", "usage_visibility": "取决于兼容端返回字段", "gap": "探针确认前不能安全发送扩展字段" }
+      ],
+      "failure_nodes": [
+        { "node": "群聊 Thread 分类", "attempts": 547, "usage_n": 2, "errors": 544, "error_rate": 0.9945, "missing_usage": 545, "cause": "5 秒超时；另有 mini 路径无 usage" },
+        { "node": "Director", "attempts": 52, "usage_n": 10, "errors": 42, "error_rate": 0.8077, "missing_usage": 42, "cause": "director_daily_plan schema 400" },
+        { "node": "memory", "attempts": 1750, "usage_n": 676, "errors": 1074, "error_rate": 0.6137, "missing_usage": 1074, "cause": "90 秒节点超时、60 秒 transport 超时" },
+        { "node": "orchestrator 全部", "attempts": 4394, "usage_n": 2905, "errors": 1488, "error_rate": 0.3386, "missing_usage": 1489, "cause": "8 秒与 5 秒超时" },
+        { "node": "async image", "attempts": 149, "usage_n": 127, "errors": 16, "error_rate": 0.1074, "missing_usage": 22, "cause": "自拍 schema 400、生图失败" },
+        { "node": "文本 reply", "attempts": 1475, "usage_n": 1387, "errors": 42, "error_rate": 0.0285, "missing_usage": 88, "cause": "fetch、60 秒与 300 秒超时；排除 image generation" }
+      ],
+      "node_inventory": [
+        { "order": 1, "node": "私聊、群聊、Web Chat、异步 callback 主回复", "request_shape": "1–21 个模型轮次；每轮还可能 transport retry", "measurement": "归 reply；逻辑总量不完整" },
+        { "order": 2, "node": "群聊总结", "request_shape": "通常 1 个 completion", "measurement": "归 reply；样本期无法稳定单列" },
+        { "order": 3, "node": "用户群聊主动编排器", "request_shape": "最多 4 次完整逻辑尝试", "measurement": "归 orchestrator；family 可识别" },
+        { "order": 4, "node": "群聊 Thread 分类", "request_shape": "每个回复最多 4 批，每批 1 次 completion", "measurement": "归 orchestrator；样本期几乎全部失败" },
+        { "order": 5, "node": "Tone", "request_shape": "每个非空外发文本 1 次；中间消息可重复触发", "measurement": "聚合落 other；原始 stage 可复算" },
+        { "order": 6, "node": "工作与长期记忆", "request_shape": "每个 memory batch 1 次；CAS 冲突可重做", "measurement": "memoryKind 可见；runId 不完整" },
+        { "order": 7, "node": "用户画像", "request_shape": "每个参与者 batch 通常再执行 1 次", "measurement": "memoryKind 可见" },
+        { "order": 8, "node": "Dream", "request_shape": "每 Agent 每日一次；retryable 错误最多 3 次", "measurement": "stage 为 memory；聚合落 other" },
+        { "order": 9, "node": "Director 每日计划", "request_shape": "每 Agent 每日一次", "measurement": "聚合落 other；family 可识别" },
+        { "order": 10, "node": "call_director 日程修订", "request_shape": "主模型轮次 + Director 子调用 + 主模型续轮", "measurement": "父子成本未关联" },
+        { "order": 11, "node": "Director 主动分享", "request_shape": "每目标会话执行主回复、自拍、图片、续轮、Tone", "measurement": "fan-out 缺独立成本桶" },
+        { "order": 12, "node": "read_air", "request_shape": "主模型轮次 + AIR 子调用；CAS 冲突可重做 + 续轮", "measurement": "原始 stage 可见；聚合落 other" },
+        { "order": 13, "node": "普通 generate_img", "request_shape": "主模型轮次 + image Provider + 主模型续轮", "measurement": "图片价格与文本 usage 未分离" },
+        { "order": 14, "node": "自拍", "request_shape": "主模型 + prompt 改写 + image Provider + 续轮 + Tone", "measurement": "改写继承父 stage；family 可分离" },
+        { "order": 15, "node": "管理台表情生成", "request_shape": "直接 image Provider；最多 3 张角色参考图", "measurement": "有 metadata；缺统一图片成本" },
+        { "order": 16, "node": "管理台 image playground", "request_shape": "直接 image Provider", "measurement": "缺稳定 stage/family" },
+        { "order": 17, "node": "视觉 fallback 描述", "request_shape": "含图主请求前额外 1 次 completion", "measurement": "继承父日志上下文" },
+        { "order": 18, "node": "多模态能力探测", "request_shape": "每个 Provider 配置进程内最多 1 次 completion", "measurement": "无独立 stage/family" },
+        { "order": 19, "node": "异步 Codex", "request_shape": "主模型受理 + CLI 多轮 + callback 主回复", "measurement": "缺内部轮次与父任务维度" },
+        { "order": 20, "node": "Bash 安全审计", "request_shape": "每次真实 Bash 工具调用额外 1 次 completion", "measurement": "原始 stage 可见；聚合落 other" },
+        { "order": 21, "node": "Config Doctor AI", "request_shape": "管理员显式触发 1 次，无工具", "measurement": "原始 stage 可见；聚合落 other" },
+        { "order": 22, "node": "Provider 测试/健康探针", "request_shape": "非 OpenAI 官方发送 1 次 ping completion", "measurement": "缺稳定业务 stage" },
+        { "order": 23, "node": "在线语音合成", "request_shape": "TTS Provider 请求", "measurement": "需字符数、音频时长和语音价格" },
+        { "order": 24, "node": "普通定时任务生成", "request_shape": "到期后复用主回复；当前渲染 callback 不单独调用 LLM", "measurement": "不应重复计为独立模型节点" },
+        { "order": 25, "node": "外部 MCP/Skill 内部模型", "request_shape": "由外部服务决定", "measurement": "本地不可见，需要外部账单与 trace" }
+      ],
+      "immediate_actions": [
+        { "order": 1, "priority": "P0", "change": "将群聊 memory.long_term 移到动态 developer 边界，并做保留式持久模板迁移", "validation": "公共模板、Agent override、热更新、迁移幂等、跨会话 prefix 回归", "signal": "key 平均请求数高于当前 1.4–1.6；7 日群聊缓存率进入实验门槛" },
+        { "order": 2, "priority": "P0", "change": "增加 nodeId、父子 invocation、round、transport attempt、final outcome", "validation": "SQLite schema 前向迁移、API 聚合和逻辑调用测试", "signal": "可同时计算物理请求与业务调用成本" },
+        { "order": 3, "priority": "P0", "change": "保留 cache read/write、prefix/tool/schema digest 与失败前 input 估算", "validation": "usage 归一化、日志、聚合与管理台测试", "signal": "cache write 和未知消耗可见" },
+        { "order": 4, "priority": "P0", "change": "Thread、memory、Director/Dream 确定性错误按版本熔断", "validation": "超时、schema 400、恢复版本测试", "signal": "停止重复 5 秒超时和确定性 400 放大" },
+        { "order": 5, "priority": "P0", "change": "为逻辑调用设置最大轮次、累计输入/输出和截止时间", "validation": "预算耗尽、工具续轮与回退测试", "signal": "单次业务调用具备明确成本上限" },
+        { "order": 6, "priority": "P1", "change": "压缩编排器、Tone、memory 输入，并按节点设置输出上限", "validation": "离线 replay 与质量 A/B", "signal": "编排器 P50 input 2K–3K；Tone 1K–1.5K" },
+        { "order": 7, "priority": "P1", "change": "形成少量稳定 capability profile，收敛工具描述与顺序", "validation": "权限矩阵、工具可达性与 cache identity 回归", "signal": "工具/schema 变体减少且权限不扩大" },
+        { "order": 8, "priority": "P1", "change": "为各 Provider 建立 cold + 3 warm + mutate cache smoke", "validation": "每个受支持 Provider/模型的隔离真实请求", "signal": "warm 窗口至少一次 cache read；首段扰动归零" }
+      ],
+      "product_decisions": [
+        { "order": 1, "decision": "合并、替换或按场景跳过群聊 Thread/是否回复编排", "cost_issue": "双节点、高超时、编排器占总 Token 30.4%", "quality_metrics": "误回复、漏回复、thread 准确率、广播循环" },
+        { "order": 2, "decision": "Tone 从全量后处理调整为条件调用", "cost_issue": "每条非空外发约增加 3.1K Token 和一次网络延迟", "quality_metrics": "人格一致、事实保持、XML 合法、平均气泡数" },
+        { "order": 3, "decision": "memory 保留固定双调用或合并为一次结构化抽取", "cost_issue": "成功 batch 约 30K Token", "quality_metrics": "错误画像、遗漏承诺、重复记忆、晋升准确率" },
+        { "order": 4, "decision": "按任务复杂度路由 terra/sol/luna", "cost_issue": "sol 样本均值更高且缓存更低，场景分布不同", "quality_metrics": "工具成功率、事实质量、延迟、每任务总 Token" },
+        { "order": 5, "decision": "为 Director 主动分享定义每日预算和目标门槛", "cost_issue": "成本随目标会话线性 fan-out", "quality_metrics": "退订、互动、图片完成率、活跃会话收益" }
+      ],
+      "roadmap": [
+        { "order": 1, "phase": "阶段 A", "duration": "1–3 天", "delivery": "缓存边界、nodeId/runId、cache write、失败熔断、cache smoke", "acceptance": "新增 prefix 结构测试；warm 至少一次命中；turn 变量全部位于稳定边界后" },
+        { "order": 2, "phase": "阶段 B", "duration": "1–2 周", "delivery": "section 级预算、管理台业务成本、7 日生产观测", "acceptance": "群聊缓存率实验门槛 ≥20%；Thread 错误率 <5%；memory runId 100%" },
+        { "order": 3, "phase": "阶段 C", "duration": "2–4 周", "delivery": "编排、Tone、memory、模型路由 A/B 与预算告警", "acceptance": "质量和成本联合门槛通过；图片/TTS 成本独立可见" }
+      ],
+      "verification": [
+        { "order": 1, "check": "Prompt Cache、Codex Responses、usage 归一化单测", "result": "4 个文件，42 项全部通过", "scope": "代码夹具与协议合同" },
+        { "order": 2, "check": "npm run check", "result": "通过", "scope": "类型与静态检查" },
+        { "order": 3, "check": "npm run architecture", "result": "通过", "scope": "架构门禁" },
+        { "order": 4, "check": "gpt-5.6-luna Cache Smoke", "result": "4 次请求；warm-2 命中 89.17%", "scope": "合成文本、隔离 key、无业务内容" },
+        { "order": 5, "check": "三套 SQLite 只读抽样", "result": "读取成功，无锁冲突", "scope": "未修改数据库、配置、服务或 outbox" }
+      ],
+      "code_locations": [
+        { "order": 1, "area": "Provider 与工具循环", "path": "adapters/model/provider/completion.ts" },
+        { "order": 2, "area": "Cache key", "path": "adapters/model/provider/promptCaching.ts" },
+        { "order": 3, "area": "usage 归一化", "path": "packages/contracts/model/tokenUsage.ts" },
+        { "order": 4, "area": "行为分类", "path": "packages/contracts/model/modelCallStats.ts" },
+        { "order": 5, "area": "请求日志", "path": "adapters/observability/requestLog.ts" },
+        { "order": 6, "area": "SQLite 聚合", "path": "adapters/sqlite/modelCallStore.ts" },
+        { "order": 7, "area": "主回复", "path": "src/runtime/reply.ts" },
+        { "order": 8, "area": "群聊编排", "path": "src/runtime/orchestration.ts；src/runtime/groupThreadPipeline.ts" },
+        { "order": 9, "area": "memory", "path": "src/runtime/memoryPipeline.ts；src/runtime/dreamPipeline.ts" },
+        { "order": 10, "area": "Tone / Director / AIR / 自拍", "path": "src/runtime/tone.ts；director.ts；air.ts；selfie.ts" },
+        { "order": 11, "area": "群聊持久模板", "path": "workspace/business/prompts/conversation_group_reply.json 及 Agent override" }
+      ],
+      "chart_map": [
+        { "chart": "token_contribution_chart", "question": "Token 集中在哪些链路", "family": "horizontalBar", "fields": "family, share, total_tokens, usage_n", "takeaway": "前四链路占 85.6%" },
+        { "chart": "node_cost_chart", "question": "哪些节点单次最重", "family": "horizontalBar", "fields": "node, avg_total, usage_n, cache_rate", "takeaway": "memory 单次最重，reply 次之" },
+        { "chart": "cache_rate_chart", "question": "各主要节点的实际缓存水平", "family": "horizontalBar", "fields": "node, cache_rate, usage_n, avg_total", "takeaway": "高成本 memory 缓存率低" },
+        { "chart": "prefix_variants_chart", "question": "长期记忆造成多少前缀碎片", "family": "bar", "fields": "agent, scenario, variants", "takeaway": "固定长期记忆后变体大幅减少" },
+        { "chart": "cache_smoke_chart", "question": "后端缓存是否真实工作", "family": "stackedBar", "fields": "phase, component, tokens", "takeaway": "warm-2 命中，首段扰动归零" },
+        { "chart": "failure_rate_chart", "question": "哪些节点正在无效放大", "family": "horizontalBar", "fields": "node, error_rate, attempts, missing_usage", "takeaway": "Thread、Director、memory 风险最高" }
+      ],
+      "omission_notes": [
+        { "topic": "时间趋势", "reason": "三套业务库起始日期不同，离散窗口不可直接比较" },
+        { "topic": "美元成本", "reason": "没有冻结的 Provider 价格表与 cache-write 计费快照" },
+        { "topic": "图片与 TTS 总成本", "reason": "文本 Token 口径无法覆盖图片尺寸/质量和语音字符/时长" },
+        { "topic": "Prefix Token 估算", "reason": "缺少与 gpt-5.6 完全匹配的 tokenizer，仅保留严格前缀与 digest 指标" }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "request_logs_snapshot",
+      "label": "三 Agent request_logs 只读快照",
+      "query": {
+        "engine": "sqlite",
+        "language": "sql",
+        "sql": "SELECT at, data_json FROM request_logs WHERE category = 'model.response' AND at <= '2026-07-22T17:50:44.292Z';",
+        "description": "在 Plana、Arona、Koharu 三套业务库分别执行后，以只读聚合层按 stage、prompt family、memory kind、模型和 runId 合并复算。",
+        "executed_at": "2026-07-23T01:44:45Z",
+        "filters": [
+          "三套 sunabot.sqlite",
+          "category = model.response",
+          "at <= 2026-07-22T17:50:44.292Z",
+          "Token 均值只统计可归一化 usage"
+        ],
+        "metric_definitions": [
+          "API 缓存率 = SUM(cachedInput) / SUM(input)",
+          "usage 覆盖率 = 带 tokenUsage 的 model.response / 全部 model.response",
+          "错误率 = 明确 response.error / response attempts",
+          "功能链路占比 = prompt family 的 SUM(total) / 全部可计量 SUM(total)"
+        ],
+        "tables_used": ["Plana.request_logs", "Arona.request_logs", "Koharu.request_logs"]
+      }
+    },
+    {
+      "id": "prefix_analysis",
+      "label": "生产请求 Prefix 精确复算",
+      "query": {
+        "engine": "sqlite",
+        "language": "sql",
+        "sql": "SELECT at, data_json FROM request_logs WHERE category = 'model.request' AND at <= '2026-07-22T17:50:44.292Z';",
+        "description": "按 Provider、模型、prompt family、工具 digest 与 schema digest 分桶，从第 0 段开始比较严格 LCP，并分别核对 cache key 与 Provider cached_tokens。",
+        "executed_at": "2026-07-23T01:44:45Z",
+        "filters": [
+          "三套 sunabot.sqlite",
+          "category = model.request",
+          "at <= 2026-07-22T17:50:44.292Z",
+          "群聊变体仅统计 developer-first 可分析请求"
+        ],
+        "metric_definitions": [
+          "严格 LCP 只计从第 0 段开始连续完全相同的内容",
+          "Prefix 重复率不能替代 Provider API 缓存率"
+        ],
+        "tables_used": ["Plana.request_logs", "Arona.request_logs", "Koharu.request_logs"]
+      }
+    },
+    {
+      "id": "cache_smoke",
+      "label": "gpt-5.6-luna 隔离 Cache Smoke",
+      "path": "docs/audits/2026-07-23-llm-token-cache-audit.md",
+      "query": {
+        "engine": "sqlite",
+        "language": "sql",
+        "sql": "WITH cache_smoke(phase, input_tokens, cached_tokens, output_tokens, latency_sec) AS (VALUES ('cold', 5455, 0, 204, 5.9), ('warm-1', 5455, 0, 341, 8.6), ('warm-2', 5455, 4864, 152, 4.5), ('prefix-mutated', 5462, 0, 92, 3.3)) SELECT * FROM cache_smoke;",
+        "description": "隔离 gpt-5.6-luna 的 cold、两次 warm 与首段扰动实测结果。",
+        "executed_at": "2026-07-23T01:44:45Z",
+        "filters": ["同一随机审计 cache key", "固定合成 developer 前缀", "无工具、无业务内容、无 QQ I/O"],
+        "metric_definitions": ["请求级命中率 = cached_tokens / input_tokens"]
+      }
+    },
+    {
+      "id": "code_inventory",
+      "label": "Sunabot 模型调用代码路径复核",
+      "path": "docs/audits/2026-07-23-llm-token-cache-audit.md",
+      "query": {
+        "engine": "sqlite",
+        "language": "sql",
+        "sql": "SELECT 'docs/audits/2026-07-23-llm-token-cache-audit.md' AS source_document, 'completePrompt, completeRequest, completeRequestTurn, generateImage, async Codex, provider probes' AS reviewed_entrypoints;",
+        "description": "将保存的代码入口盘点作为节点清单、Provider 覆盖和实施位置表的规范来源。",
+        "executed_at": "2026-07-23T01:44:45Z"
+      }
+    },
+    {
+      "id": "audit_report",
+      "label": "LLM Token 与 Prompt Cache 审计源报告",
+      "path": "docs/audits/2026-07-23-llm-token-cache-audit.md",
+      "query": {
+        "engine": "sqlite",
+        "language": "sql",
+        "sql": "SELECT 'docs/audits/2026-07-23-llm-token-cache-audit.md' AS source_document, 'business_flows, actions, product_decisions, roadmap, verification' AS derived_sections;",
+        "description": "将保存的审计结论与验证记录投影为报告中的流程、行动、决策和路线图表。",
+        "executed_at": "2026-07-23T01:44:45Z"
+      }
+    },
+    {
+      "id": "openai_prompt_cache",
+      "label": "OpenAI Prompt Caching",
+      "href": "https://developers.openai.com/api/docs/guides/prompt-caching"
+    }
+  ]
+}

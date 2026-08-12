@@ -1,123 +1,43 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
-import path from "node:path";
 import { nanoid } from "nanoid";
 import {
-  AppConfig,
   AssistantMessageTrace,
-  ChatMessage,
-  ConversationMessageQuote,
   ConversationRecord,
-  ImageResult,
   ParsedIncomingMessage,
-  ReasoningEffort
+  type AppConfig
 } from "../types.js";
-import { resolveModelReasoningEffort } from "../admin/models.js";
-import { AttachmentService } from "../../services/media/attachments/service.js";
-import type {
-  AttachmentExtractionContext,
-  ParsedAttachment
-} from "../../services/media/attachments/types.js";
-import { CommandRouter, type CommandMatch } from "../../services/messaging/commandRouter.js";
-import { isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
-import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
+import { inboundImageAltTexts, inboundImageUrls } from "../../packages/contracts/messaging/messages.js";
+import { senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
 import {
-  assistantReplyEnvelope,
-  decodeAssistantReply,
-  decodeIncomingReply,
-  decodeToolCompletion,
-  incomingReplyEnvelope,
-  type AssistantReplyOutboxEnvelope,
-  type AssistantReplyOutboxPayload,
-  type AsyncToolCompletionPayload,
-  type RuntimeIncomingReplyEventPayload
-} from "../../packages/contracts/session/runtimeMessages.js";
-import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
-import { configureMemoryPersistence } from "../../services/memory/persistence.js";
+  ACTIVE_CONVERSATION_WINDOW_MS,
+  type ConversationReplyUpdateInput
+} from "./runtimeContracts.js";
 import {
-  ReplyGateEpochs,
-  isOrchestratorReplyRateLimited,
-  resolveUserGroupReplyRoute,
-  type ReplyGateSnapshot
-} from "../../services/orchestration/groupReplyPolicy.js";
-import { HookBus } from "../../services/messaging/hookBus.js";
-import {
-  applyMemoryBatchTransaction,
-  ensureAgentTextFile,
-  formatMemoryMatchesForPrompt,
-  isMemoryBatchCommitted,
-  mergeUserProfileMemory,
-  normalizeEventMemorySchema,
-  readAgentTextFile,
-  readMemorySourceEntries,
-  readUserProfileForUser,
-  readWorkingMemorySnapshot,
-  recallMemory,
-  recoverMemoryTransactions,
-  replaceWorkingMemoryFacts,
-  resolveUserAddressName,
-  type MemoryEntry,
-  type MemoryFactInput
-} from "../../services/memory/memoryService.js";
-import {
-  MemorySchedulerStore,
-  type MemoryClaim,
-  type MemoryQueuedMessage
-} from "../../services/memory/memoryScheduler.js";
-import {
-  OpenAIProvider,
-  type ProviderBashOptions,
-  type ProviderCompleteOptions,
-  type ProviderDeferredTurn
-} from "../../adapters/model/openaiProvider.js";
-import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
-import {
-  inboundImageUrls,
-  replaceInboundImageUrls,
-  type MessageDetailsV1,
-  type MessagingPort,
-  type OutboundMessageV1
-} from "../../packages/contracts/messaging/messages.js";
-import {
-  generatedImageMediaAsset,
-  imageMediaAsset,
-  type AttachmentSourcePort
-} from "../../packages/contracts/media/media.js";
-import { loadPersona, AgentPersona } from "../../services/agent/persona.js";
-import { appendRequestLog } from "../requestLog.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
-import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
-import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
-import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
-import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
-import {
-  OutboxDisconnectedError,
-  SessionCoordinator,
-  type SessionHandleResult
-} from "../../services/sessions/sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
-import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
-import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
-import {
-  parseFinalPromptTemplate,
-  renderFinalPromptTemplate,
-  type PromptVariableValue,
-  type RenderedPromptRequest
-} from "../../services/agent/promptSystem.js";
-import { buildConversationPromptVariables } from "../../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { conversationDescriptorFromInput, conversationRecordId, conversationReplyEnabled, incomingConversationMessageId, isWebConversationId, normalizeConversationId, persistedAttachments, persistedQuoteReferences } from "./messagingAttachmentHelpers.js";
-import { appendConversationMessage } from "./conversationMemoryHelpers.js";
+  conversationDescriptorFromInput,
+  conversationRecordId,
+  conversationReplyEnabled,
+  incomingConversationMessageId,
+  isWebConversationId,
+  normalizeConversationId,
+  persistedAttachments,
+  persistedQuoteReferences
+} from "./messagingAttachmentHelpers.js";
+import { appendConversationMessage, resolveRuntimePersonaName } from "./conversationMemoryHelpers.js";
 import { conversationLastText, conversationTitle } from "./selfieHelpers.js";
 import {
   saveConversationRecordStrict,
   saveConversationRecords
 } from "./infrastructure.js";
 
-import type { SunaRuntime } from "../runtime.js";
-type RuntimeHost = SunaRuntime;
+interface RuntimeHost {
+  readonly config: AppConfig;
+  readonly conversationRecords: Map<string, ConversationRecord>;
+  readonly persona?: { name: string };
+  ensureConversationRecord(incoming: ParsedIncomingMessage, at: string): ConversationRecord;
+  isAdminUser(userId: ParsedIncomingMessage["userId"]): boolean;
+  persistConversationRecords(): void;
+  protectedConversationIds(): ReadonlySet<string>;
+  retainedConversationMessageLimit(): number;
+}
 
 export function runtime_incomingCaptureSequence(this: RuntimeHost, incoming: ParsedIncomingMessage) {
     const record = this.conversationRecords.get(conversationRecordId(incoming));
@@ -159,6 +79,7 @@ export function runtime_recordIncomingMessage(this: RuntimeHost,
       isAdmin: this.isAdminUser(incoming.userId),
       selfId: incoming.selfId,
       imageUrls: inboundImageUrls(incoming),
+      imageAltTexts: inboundImageAltTexts(incoming),
       attachments: persistedAttachments(incoming.attachments),
       replyMessageIds: incoming.replyMessageIds,
       quoteReferences: persistedQuoteReferences(incoming.quoteReferences)
@@ -176,7 +97,7 @@ export function runtime_recordAssistantRequestStarted(this: RuntimeHost, incomin
       at,
       userId: incoming.userId,
       groupId: incoming.groupId,
-      senderName: this.persona?.name ?? "普拉娜",
+      senderName: resolveRuntimePersonaName(this.persona?.name, this.config.persona.name),
       selfId: incoming.selfId,
       logRunId,
       actionSummary: "日志",
@@ -208,7 +129,7 @@ export function runtime_recordAssistantMessage(this: RuntimeHost,
       at,
       userId: incoming.userId,
       groupId: incoming.groupId,
-      senderName: this.persona?.name ?? "普拉娜",
+      senderName: resolveRuntimePersonaName(this.persona?.name, this.config.persona.name),
       selfId: incoming.selfId,
       imageUrls,
       replyMessageIds: options.replyMessageIds,
@@ -290,6 +211,7 @@ export function runtime_ensureConversationRecord(this: RuntimeHost, incoming: Pa
       groupId: incoming.groupId,
       selfId: incoming.selfId,
       replyEnabled: false,
+      directorEventsEnabled: false,
       messageCount: 0,
       lastAt: at,
       lastText: "",
@@ -315,6 +237,7 @@ export function runtime_upsertConversationRecordForReplySetting(this: RuntimeHos
       userId: descriptor.userId,
       groupId: descriptor.groupId,
       replyEnabled: false,
+      directorEventsEnabled: false,
       messageCount: 0,
       lastAt: now,
       lastText: "",
@@ -336,8 +259,7 @@ export function runtime_persistConversationRecordStrict(
 ) {
     saveConversationRecordStrict(record, this.config);
   }
-export function runtime_markConversationMessagesAsRecordedOnly(this: RuntimeHost, record: ConversationRecord) {
-    record.memoryCompressedThroughMessageCount = record.messageCount;
+export function runtime_markConversationMessagesAsRecordedOnly(this: RuntimeHost, _record: ConversationRecord) {
     this.persistConversationRecords();
   }
 export function runtime_getActiveConversationRecords(this: RuntimeHost) {
@@ -363,7 +285,7 @@ export function runtime_recordServiceMessage(this: RuntimeHost, record: Conversa
       at: new Date().toISOString(),
       userId: record.userId,
       groupId: record.groupId,
-      senderName: this.persona?.name ?? "普拉娜",
+      senderName: resolveRuntimePersonaName(this.persona?.name, this.config.persona.name),
       selfId: record.selfId,
       messageOrigin: "text"
     }, this.retainedConversationMessageLimit());
@@ -378,21 +300,4 @@ function normalizedToolNames(toolNames: readonly string[] | undefined) {
 
 function sameStrings(left: readonly string[] | undefined, right: readonly string[]) {
   return left?.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-export class RuntimeConversations {
-  constructor(private readonly host: RuntimeHost) {}
-  incomingCaptureSequence(...args: Parameters<typeof runtime_incomingCaptureSequence>) { return runtime_incomingCaptureSequence.call(this.host, ...args); }
-  recordIncomingMessage(...args: Parameters<typeof runtime_recordIncomingMessage>) { return runtime_recordIncomingMessage.call(this.host, ...args); }
-  recordAssistantRequestStarted(...args: Parameters<typeof runtime_recordAssistantRequestStarted>) { return runtime_recordAssistantRequestStarted.call(this.host, ...args); }
-  recordAssistantMessage(...args: Parameters<typeof runtime_recordAssistantMessage>) { return runtime_recordAssistantMessage.call(this.host, ...args); }
-  recordAssistantTurnTools(...args: Parameters<typeof runtime_recordAssistantTurnTools>) { return runtime_recordAssistantTurnTools.call(this.host, ...args); }
-  discardAssistantRequest(...args: Parameters<typeof runtime_discardAssistantRequest>) { return runtime_discardAssistantRequest.call(this.host, ...args); }
-  ensureConversationRecord(...args: Parameters<typeof runtime_ensureConversationRecord>) { return runtime_ensureConversationRecord.call(this.host, ...args); }
-  upsertConversationRecordForReplySetting(...args: Parameters<typeof runtime_upsertConversationRecordForReplySetting>) { return runtime_upsertConversationRecordForReplySetting.call(this.host, ...args); }
-  persistConversationRecords(...args: Parameters<typeof runtime_persistConversationRecords>) { return runtime_persistConversationRecords.call(this.host, ...args); }
-  persistConversationRecordStrict(...args: Parameters<typeof runtime_persistConversationRecordStrict>) { return runtime_persistConversationRecordStrict.call(this.host, ...args); }
-  markConversationMessagesAsRecordedOnly(...args: Parameters<typeof runtime_markConversationMessagesAsRecordedOnly>) { return runtime_markConversationMessagesAsRecordedOnly.call(this.host, ...args); }
-  getActiveConversationRecords(...args: Parameters<typeof runtime_getActiveConversationRecords>) { return runtime_getActiveConversationRecords.call(this.host, ...args); }
-  recordServiceMessage(...args: Parameters<typeof runtime_recordServiceMessage>) { return runtime_recordServiceMessage.call(this.host, ...args); }
 }

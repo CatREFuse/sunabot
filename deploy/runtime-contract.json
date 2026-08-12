@@ -1,26 +1,13 @@
 {
   "$schema": "./runtime-contract.schema.json",
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "runtimeId": "sunabot-qq-runtime",
-  "releaseVersion": "0.1.0",
-  "supportedPlatforms": ["linux/amd64"],
+  "releaseVersion": "0.3.0",
+  "supportedPlatforms": ["linux/amd64", "linux/arm64"],
   "nodeVersion": "24.18.0",
   "runtimeUsers": {
-    "docker": {
-      "core": {
-        "name": "node",
-        "uid": 1000,
-        "gid": 1000
-      },
-      "napcat": {
-        "name": "napcat",
-        "uid": 1000,
-        "gid": 1000
-      }
-    },
-    "native": {
-      "name": "sunabot"
-    }
+    "native": { "name": "sunabot" },
+    "napcat": { "name": "napcat", "uid": 1000, "gid": 1000 }
   },
   "paths": {
     "installPrefix": "/opt/sunabot/current",
@@ -38,14 +25,9 @@
     "backups": "backups"
   },
   "network": {
-    "admin": {
-      "host": "127.0.0.1",
-      "containerHost": "0.0.0.0",
-      "port": 8787
-    },
+    "admin": { "host": "127.0.0.1", "port": 8787 },
     "onebot": {
       "path": "/onebot/v11/ws",
-      "containerHost": "0.0.0.0",
       "internalPort": 8788,
       "listenerHostEnv": "SUNABOT_ONEBOT_HOST",
       "listenerPortEnv": "SUNABOT_ONEBOT_PORT",
@@ -53,21 +35,16 @@
       "accessTokenRequired": true,
       "nativeListenerHosts": {
         "macos": "127.0.0.1",
-        "wsl": "docker-network-gateway",
+        "wsl": "docker-network-gateway-or-loopback",
         "linux": "docker-network-gateway"
       },
       "nativeAdvertisedUrls": {
         "macos": "ws://host.docker.internal:8788/onebot/v11/ws",
         "wsl": "ws://host.docker.internal:8788/onebot/v11/ws",
         "linux": "ws://host.docker.internal:8788/onebot/v11/ws"
-      },
-      "dockerAdvertisedUrl": "ws://core:8788/onebot/v11/ws"
+      }
     },
-    "napcatWebui": {
-      "host": "127.0.0.1",
-      "containerHost": "0.0.0.0",
-      "port": 6099
-    }
+    "napcatWebui": { "host": "127.0.0.1", "port": 6099 }
   },
   "mediaTransport": {
     "outbound": {
@@ -86,12 +63,14 @@
     "explicitUrlEnv": "SUNABOT_PROXY_URL",
     "modeEnv": "SUNABOT_PROXY_MODE",
     "portsEnv": "SUNABOT_PROXY_PORTS",
+    "connectTimeoutMs": 60000,
+    "headersTimeoutMs": 600000,
+    "bodyTimeoutMs": 600000,
     "noProxyRequired": ["localhost", "127.0.0.1", "::1", "[::1]"]
   },
   "startup": {
-    "nativeCoreOrder": ["core-native", "napcat"],
-    "dockerCoreOrder": ["core", "napcat"],
-    "shutdownOrder": ["napcat", "core"],
+    "order": ["webfetch-renderer", "core-native", "napcat"],
+    "shutdownOrder": ["napcat", "core-native", "webfetch-renderer"],
     "coreReadyTimeoutSeconds": 60,
     "napcatReadyTimeoutSeconds": 120,
     "shutdownTimeoutSeconds": 30
@@ -100,97 +79,93 @@
     "livenessPath": "/api/auth/session",
     "readinessLayers": ["api", "onebot", "qq", "provider"],
     "services": {
-      "core": {
-        "livenessCommand": [
-          "/usr/local/bin/node",
-          "/srv/sunabot/deploy/docker/healthcheck.mjs"
-        ],
-        "intervalSeconds": 10,
-        "timeoutSeconds": 5,
-        "startPeriodSeconds": 45,
-        "retries": 6
-      },
+      "onebot": { "path": "/healthz" },
       "napcat": {
-        "livenessCommand": [
-          "CMD-SHELL",
-          "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/6099'"
-        ],
         "intervalSeconds": 10,
         "timeoutSeconds": 5,
         "startPeriodSeconds": 60,
         "retries": 12
+      },
+      "webfetchRenderer": {
+        "path": "/healthz",
+        "engine": "lightpanda",
+        "port": 8790
       }
     }
   },
   "capabilities": {
-    "required": ["admin-web", "onebot-v11", "image-generation", "office-documents", "workspace-bash", "codex-cli"],
+    "required": ["admin-web", "onebot-v11", "image-generation", "office-documents", "workspace-bash", "codex-cli", "webfetch", "webfetch-dynamic-renderer"],
     "optional": ["websearch"],
     "workspaceBash": {
-      "service": "core",
-      "isolation": "bubblewrap",
-      "executable": "/usr/bin/bwrap",
-      "dockerSeccompProfile": "deploy/docker/seccomp-bwrap.json",
-      "filesystemMode": "host-readonly-workspace-readwrite",
-      "subprocessIsolation": "inherited-mount-and-pid-namespaces",
-      "capabilitiesDropped": true,
+      "managedBy": "native",
+      "linuxIsolation": "bubblewrap-prlimit",
+      "macosPolicy": "approved-admin-host-only",
+      "dockerFallback": false,
       "failClosed": true
     },
     "codexCli": {
-      "service": "core",
+      "managedBy": "native",
       "version": "0.139.0",
-      "executable": "/usr/local/bin/codex",
+      "executable": "node_modules/@openai/codex/bin/codex.js",
       "authFile": "secrets/codex/auth.json",
       "failClosed": true
-    }
+    },
+    "webfetch": {
+      "staticEngine": "node-defuddle",
+      "dynamicEngine": "lightpanda",
+      "dynamicExecutable": "runtime/lightpanda/lightpanda",
+      "chromium": false,
+      "telemetry": false
+    },
+    "mcp": { "managedBy": "native" },
+    "skillScript": { "managedBy": "native" }
   },
   "resources": {
-    "core": {
-      "memory": "4g",
-      "cpus": 4,
-      "pids": 512,
-      "sharedMemory": "1g"
-    },
-    "napcat": {
-      "memory": "2g",
-      "cpus": 2,
-      "pids": 512,
-      "sharedMemory": "1g"
-    },
-    "logging": {
-      "maxSize": "20m",
-      "maxFiles": 5
-    }
+    "core": { "memory": "4g", "cpus": 4, "pids": 512 },
+    "napcat": { "memory": "2g", "cpus": 2, "pids": 512, "sharedMemory": "1g" },
+    "webfetchRenderer": { "memory": "1g", "cpus": 1.5, "pids": 256 },
+    "logging": { "maxSize": "20m", "maxFiles": 5 }
   },
-  "docker": {
-    "composeProject": "sunabot",
-    "composeFile": "deploy/docker/compose.yml",
-    "network": {
-      "name": "sunabot-runtime",
-      "nameEnv": "SUNABOT_DOCKER_NETWORK"
-    },
-    "services": {
-      "core": {
-        "name": "core",
-        "profile": "core-docker",
-        "image": "sunabot-core",
-        "workspaceMount": "/srv/sunabot/workspace"
-      },
-      "napcat": {
-        "name": "napcat",
-        "image": "sunabot-napcat",
-        "upstreamImage": "docker.io/mlikiowa/napcat-docker:v4.15.0@sha256:cde89d766604e570517e9ce66304d4222210479d2209ec04e5d58890dea087f7",
-        "stateRoot": "runtime/napcat",
-        "webuiPort": 6099
-      }
-    },
+  "napcat": {
+    "managedBy": "docker",
+    "composeProject": "sunabot-napcat",
+    "composeFile": "deploy/napcat/compose.yml",
+    "service": "napcat",
+    "network": { "name": "sunabot-napcat", "nameEnv": "SUNABOT_NAPCAT_NETWORK" },
+    "image": "docker.io/mlikiowa/napcat-docker:v4.15.0",
+    "digest": "sha256:cde89d766604e570517e9ce66304d4222210479d2209ec04e5d58890dea087f7",
+    "pullPolicy": "never",
     "labels": {
       "runtimeId": "io.sunabot.runtime-id",
       "workspaceId": "io.sunabot.workspace-id",
-      "component": "io.sunabot.component"
+      "component": "io.sunabot.component",
+      "accountId": "io.sunabot.account-id"
     }
   },
   "native": {
-    "napcatManagedBy": "docker"
+    "core": { "managedBy": "launcher" },
+    "bubblewrap": {
+      "managedBy": "launcher",
+      "releaseExecutable": "runtime/bubblewrap/bwrap",
+      "executableEnvironment": "SUNABOT_BWRAP_EXECUTABLE",
+      "packagedFallback": false,
+      "verifiedByLauncher": true,
+      "consumers": ["native-bash", "mcp-stdio", "skill-script", "webfetch-renderer"]
+    },
+    "webfetchRenderer": {
+      "managedBy": "launcher",
+      "engine": "lightpanda",
+      "host": "127.0.0.1",
+      "port": 8790,
+      "authentication": "ephemeral-token",
+      "deploymentByPlatform": { "macos": "unavailable", "wsl": "launcher", "linux": "launcher" },
+      "sandboxByPlatform": { "macos": "unavailable", "wsl": "bubblewrap", "linux": "bubblewrap" },
+      "releaseRequired": true,
+      "bubblewrapRuntime": "bundled-loader-and-libraries",
+      "namespaceProbeRequired": true,
+      "tokenDelivery": "renderer-fd-core-fd",
+      "runtimeDirectories": ["home", "cache", "run"]
+    }
   },
   "componentsLock": "components/component.lock.json"
 }

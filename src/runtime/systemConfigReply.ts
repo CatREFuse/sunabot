@@ -1,26 +1,19 @@
 import { createHash } from "node:crypto";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
-import {
-  SYSTEM_CONFIG_TOOL_NAME,
-  type SystemConfigMutationDescriptor,
-  type SystemConfigTurn
-} from "../../services/tools/systemConfigTool.js";
-import type { SunaRuntime } from "../runtime.js";
+import type { SystemConfigMutationDescriptor, SystemConfigRuntimePort, SystemConfigTurn } from "../../services/tools/systemConfigTool.js";
 import type {
   AssistantMessageOrigin,
+  ConversationRecord,
   ImageResult,
   ParsedIncomingMessage
 } from "../types.js";
-import type {
-  ReplyDelivery,
-  ReplyDeliveryDraft,
-  SystemConfigHeldConfirmationHandle
-} from "./runtimeContracts.js";
+import type { ReplyDelivery, ReplyDeliveryDraft, RuntimeConfigPort, SystemConfigHeldConfirmationHandle } from "./runtimeContracts.js";
+import type { runtime_sendAssistantReply } from "./delivery.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import type { SessionTurnContext } from "../../services/sessions/sessionCoordinator.js";
-import type { OutboxRecord } from "../../services/sessions/sessionStore.js";
-import { readReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
+import type { OutboxRecord, SessionStore } from "../../services/sessions/sessionStore.js";
+import { readReplyGateSnapshot, type ReplyGateEpochs, type ReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
 import {
   SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT,
   type AssistantReplyOutboxPayload
@@ -48,7 +41,16 @@ interface SystemConfigFinalReplyInput {
   signal?: AbortSignal;
   messageOrigin: AssistantMessageOrigin;
   toolNames: readonly string[];
+  singleMessage?: boolean;
 }
+
+interface SystemConfigLifecycleHost extends RuntimeConfigPort { readonly systemConfig?: SystemConfigRuntimePort; }
+
+interface ReplyGateCaptureHost { readonly replyGates: Pick<ReplyGateEpochs, "capture">; }
+
+interface HeldSystemConfigValidationHost extends ReplyGateCaptureHost { readonly conversationRecords: ReadonlyMap<string, ConversationRecord>; readonly sessionStore: Pick<SessionStore, "getTurn" | "getOutbox">; isAdminUser(userId: number): boolean; isReplyTaskCurrent(incoming: ParsedIncomingMessage, gate: ReplyGateSnapshot, signal?: AbortSignal): boolean; }
+
+interface SystemConfigFinalReplyHost extends RuntimeConfigPort { readonly activeDirectControllers: Pick<Map<string, AbortController>, "delete">; sendAssistantReply(...args: Parameters<typeof runtime_sendAssistantReply>): ReturnType<typeof runtime_sendAssistantReply>; }
 
 export class SystemConfigReplyLifecycle {
   readonly toolPort: SystemConfigTurn;
@@ -69,9 +71,6 @@ export class SystemConfigReplyLifecycle {
     SystemConfigFinalReplyInput,
     "delivery" | "generatedImages" | "messageOrigin" | "toolNames"
   >) {
-    if (this.toolPort.turnRejected()) {
-      throw lifecycleError("system_config 与其他输出或工具混用，当前回合已拒绝。");
-    }
     const descriptor = this.toolPort.stagedMutation();
     if (!descriptor) {
       if (this.toolPort.mutationStaged()) {
@@ -82,20 +81,9 @@ export class SystemConfigReplyLifecycle {
     if (!this.toolPort.mutationStaged()) {
       throw lifecycleError("system_config 修改状态不一致。");
     }
-    if (
-      input.messageOrigin !== "text" ||
-      input.generatedImages.length > 0 ||
-      input.toolNames.length !== 1 ||
-      input.toolNames[0] !== SYSTEM_CONFIG_TOOL_NAME
-    ) {
-      throw lifecycleError("system_config 修改回合只能生成纯文本确认。");
-    }
     const delivery = input.delivery;
     const heldPort = delivery?.systemConfigHeld;
     if (!heldPort) throw lifecycleError("配置修改缺少 held 持久化投递通道。");
-    if (delivery.outbox.length > 0) {
-      throw lifecycleError("system_config 修改前已产生其他外发内容。");
-    }
     const mutationFingerprint = systemConfigMutationFingerprint(this.binding, descriptor);
     this.mutationPrepared = true;
     return {
@@ -146,6 +134,11 @@ export class SystemConfigReplyLifecycle {
     }
   }
 
+  async commitWithoutConfirmation() {
+    if (!this.toolPort.mutationStaged()) return;
+    await this.toolPort.commit();
+  }
+
   discard() {
     if (this.discarded) return;
     this.discarded = true;
@@ -153,7 +146,7 @@ export class SystemConfigReplyLifecycle {
   }
 
   suppressesOrdinaryFailureReply() {
-    return this.mutationPrepared || this.appendStarted || this.toolPort.turnRejected();
+    return this.mutationPrepared || this.appendStarted;
   }
 
   protectsCurrentPrivateReplyFromGateClosure() {
@@ -162,7 +155,7 @@ export class SystemConfigReplyLifecycle {
 }
 
 export function createSystemConfigReplyLifecycle(
-  host: Pick<SunaRuntime, "config" | "systemConfig">,
+  host: SystemConfigLifecycleHost,
   incoming: ParsedIncomingMessage,
   isAdmin: boolean,
   promptOverride: string | undefined,
@@ -184,13 +177,14 @@ export function createSystemConfigReplyLifecycle(
 }
 
 export function createSystemConfigHeldConfirmationPort(
-  host: Pick<SunaRuntime, "replyGates">,
+  host: ReplyGateCaptureHost,
   appendHeldOutbox: SessionTurnContext["appendHeldOutbox"] | undefined
 ): ReplyDelivery["systemConfigHeld"] {
   if (!appendHeldOutbox) return undefined;
   return {
     appendHeld: async (draft, options) => {
-      const payload = decodeHeldConfirmationPayload(draft);
+      if (draft.kind !== "onebot.reply") throw lifecycleError("配置确认投递类型无效。");
+      const payload = draft.payload.payload;
       const conversationId = conversationRecordId(payload.incoming);
       const originalReplyGate = readReplyGateSnapshot(
         payload.replyGate,
@@ -222,7 +216,7 @@ export function createSystemConfigHeldConfirmationPort(
 }
 
 export function validateHeldSystemConfigConfirmation(
-  host: SunaRuntime,
+  host: HeldSystemConfigValidationHost,
   outbox: OutboxRecord,
   payload: AssistantReplyOutboxPayload,
   checkCurrent: boolean,
@@ -247,9 +241,6 @@ export function validateHeldSystemConfigConfirmation(
     payload.incoming.groupId != null ||
     payload.isAdmin !== true ||
     !host.isAdminUser(payload.incoming.userId) ||
-    payload.messageOrigin !== "text" ||
-    payload.toolNames?.length !== 1 ||
-    payload.toolNames[0] !== SYSTEM_CONFIG_TOOL_NAME ||
     hold.originalReplyGate.scope !== "private" ||
     hold.originalReplyGate.conversationId !== conversationId ||
     outbox.sessionId !== conversationId ||
@@ -314,7 +305,7 @@ function validHeldReleaseTransition(
     (fallback && release.scopeEpoch === original.scopeEpoch);
 }
 
-function validateHeldOutboxLineage(host: SunaRuntime, outbox: OutboxRecord) {
+function validateHeldOutboxLineage(host: Pick<HeldSystemConfigValidationHost, "sessionStore">, outbox: OutboxRecord) {
   const lineage = outbox.holdProvenance?.lineage ?? [];
   if (lineage.length === 0) {
     const turn = host.sessionStore.getTurn(outbox.originTurnId);
@@ -352,7 +343,7 @@ function sameReplyGateSnapshot(
 }
 
 export async function sendSystemConfigAwareFinalReply(
-  host: SunaRuntime,
+  host: SystemConfigFinalReplyHost,
   input: SystemConfigFinalReplyInput
 ) {
   let prepared: ReturnType<SystemConfigReplyLifecycle["prepareFinalDelivery"]> | undefined;
@@ -376,7 +367,8 @@ export async function sendSystemConfigAwareFinalReply(
       { messageOrigin: input.messageOrigin, toolNames: [...input.toolNames] },
       prepared?.timing ?? "buffered",
       input.signal,
-      emojiPlan
+      emojiPlan,
+      input.singleMessage
     );
     if (prepared?.timing === "immediate" && input.lifecycle?.protectsCurrentPrivateReplyFromGateClosure()) {
       host.activeDirectControllers.delete(input.channelKey);
@@ -385,7 +377,6 @@ export async function sendSystemConfigAwareFinalReply(
     if (prepared?.timing === "immediate" && input.delivery) {
       input.delivery.terminalStatus = "replied";
     }
-    if (record) host.scheduleMemoryCompression(record);
     return Boolean(record);
   } catch (error) {
     const suppress = input.lifecycle?.suppressesOrdinaryFailureReply() === true;
@@ -415,7 +406,6 @@ export function systemConfigMutationFingerprint(
       enabled: descriptor.normalizedInput.enabled,
       orchestratorEnabled: descriptor.normalizedInput.orchestratorEnabled,
       searchImplementation: descriptor.normalizedInput.searchImplementation,
-      bashAdminBackend: descriptor.normalizedInput.bashAdminBackend,
       conversationId: descriptor.normalizedInput.conversationId
     },
     closesCurrentPrivateReplyGate: descriptor.closesCurrentPrivateReplyGate
@@ -438,18 +428,7 @@ function marksPrivateGateClosingConfirmation(
     payload.incoming.groupId == null &&
     payload.incoming.userId === binding.administratorUserId &&
     payload.isAdmin === true &&
-    payload.messageOrigin === "text" &&
-    payload.generatedImages.length === 0 &&
-    payload.text.trim().length > 0 &&
-    payload.toolNames?.length === 1 &&
-    payload.toolNames[0] === SYSTEM_CONFIG_TOOL_NAME;
-}
-
-function decodeHeldConfirmationPayload(draft: ReplyDeliveryDraft) {
-  if (draft.kind !== "onebot.reply") {
-    throw lifecycleError("配置确认投递类型无效。");
-  }
-  return draft.payload.payload;
+    payload.text.trim().length > 0;
 }
 
 class SystemConfigReplyLifecycleError extends Error {

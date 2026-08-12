@@ -1,85 +1,34 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sunabot.local/schemas/runtime-contract-v2.json",
-  "title": "Sunabot Runtime Contract",
+  "$id": "https://sunabot.local/schemas/runtime-contract-v3.json",
+  "title": "Sunabot Native Runtime Contract",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schemaVersion",
-    "runtimeId",
-    "releaseVersion",
-    "supportedPlatforms",
-    "nodeVersion",
-    "runtimeUsers",
-    "paths",
-    "network",
-    "mediaTransport",
-    "outboundProxy",
-    "startup",
-    "health",
-    "capabilities",
-    "resources",
-    "docker",
-    "native",
-    "componentsLock"
+    "schemaVersion", "runtimeId", "releaseVersion", "supportedPlatforms", "nodeVersion",
+    "runtimeUsers", "paths", "network", "mediaTransport", "outboundProxy", "startup",
+    "health", "capabilities", "resources", "napcat", "native", "componentsLock"
   ],
   "properties": {
     "$schema": { "type": "string" },
-    "schemaVersion": { "const": 2 },
+    "schemaVersion": { "const": 3 },
     "runtimeId": { "const": "sunabot-qq-runtime" },
-    "releaseVersion": {
-      "type": "string",
-      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"
-    },
+    "releaseVersion": { "$ref": "#/$defs/version" },
     "supportedPlatforms": {
-      "type": "array",
-      "minItems": 1,
-      "uniqueItems": true,
+      "type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true,
       "items": { "enum": ["linux/amd64", "linux/arm64"] }
     },
     "nodeVersion": { "const": "24.18.0" },
     "runtimeUsers": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["docker", "native"],
+      "type": "object", "additionalProperties": false, "required": ["native", "napcat"],
       "properties": {
-        "docker": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["core", "napcat"],
-          "properties": {
-            "core": { "$ref": "#/$defs/runtimeUser" },
-            "napcat": { "$ref": "#/$defs/runtimeUser" }
-          }
-        },
-        "native": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["name"],
-          "properties": {
-            "name": { "type": "string", "minLength": 1 }
-          }
-        }
+        "native": { "$ref": "#/$defs/namedUser" },
+        "napcat": { "$ref": "#/$defs/runtimeUser" }
       }
     },
     "paths": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "installPrefix",
-        "workspace",
-        "config",
-        "database",
-        "sessionQueue",
-        "media",
-        "napcatState",
-        "napcatAccounts",
-        "secrets",
-        "logs",
-        "temporary",
-        "cache",
-        "backups"
-      ],
+      "type": "object", "additionalProperties": false,
+      "required": ["installPrefix", "workspace", "config", "database", "sessionQueue", "media", "napcatState", "napcatAccounts", "secrets", "logs", "temporary", "cache", "backups"],
       "properties": {
         "installPrefix": { "$ref": "#/$defs/absolutePath" },
         "workspace": { "$ref": "#/$defs/absolutePath" },
@@ -98,410 +47,114 @@
     },
     "network": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["admin", "onebot", "napcatWebui"],
+      "required": ["onebot"],
       "properties": {
-        "admin": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["host", "containerHost", "port"],
-          "properties": {
-            "host": { "const": "127.0.0.1" },
-            "containerHost": { "const": "0.0.0.0" },
-            "port": { "const": 8787 }
-          }
-        },
         "onebot": {
           "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "path",
-            "containerHost",
-            "internalPort",
-            "listenerHostEnv",
-            "listenerPortEnv",
-            "advertisedUrlEnv",
-            "accessTokenRequired",
-            "nativeListenerHosts",
-            "nativeAdvertisedUrls",
-            "dockerAdvertisedUrl"
-          ],
+          "required": ["nativeListenerHosts"],
           "properties": {
-            "path": { "const": "/onebot/v11/ws" },
-            "containerHost": { "const": "0.0.0.0" },
-            "internalPort": { "const": 8788 },
-            "listenerHostEnv": { "const": "SUNABOT_ONEBOT_HOST" },
-            "listenerPortEnv": { "const": "SUNABOT_ONEBOT_PORT" },
-            "advertisedUrlEnv": { "const": "SUNABOT_ONEBOT_ADVERTISED_URL" },
-            "accessTokenRequired": { "const": true },
-            "nativeListenerHosts": { "$ref": "#/$defs/platformHosts" },
-            "nativeAdvertisedUrls": { "$ref": "#/$defs/platformWebSocketUrls" },
-            "dockerAdvertisedUrl": {
-              "const": "ws://core:8788/onebot/v11/ws"
+            "nativeListenerHosts": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["macos", "wsl", "linux"],
+              "properties": {
+                "macos": { "const": "127.0.0.1" },
+                "wsl": { "const": "docker-network-gateway-or-loopback" },
+                "linux": { "const": "docker-network-gateway" }
+              }
             }
           }
-        },
-        "napcatWebui": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["host", "containerHost", "port"],
-          "properties": {
-            "host": { "const": "127.0.0.1" },
-            "containerHost": { "const": "0.0.0.0" },
-            "port": { "const": 6099 }
-          }
         }
       }
     },
-    "mediaTransport": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["outbound", "inbound"],
-      "properties": {
-        "outbound": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["mode", "onebotScheme", "sharedFilesystem"],
-          "properties": {
-            "mode": { "const": "inline-base64" },
-            "onebotScheme": { "const": "base64://" },
-            "sharedFilesystem": { "const": false }
-          }
-        },
-        "inbound": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["acceptedReferences", "containerLocalPaths"],
-          "properties": {
-            "acceptedReferences": {
-              "type": "array",
-              "minItems": 3,
-              "maxItems": 3,
-              "prefixItems": [
-                { "const": "base64" },
-                { "const": "http" },
-                { "const": "https" }
-              ],
-              "items": false
-            },
-            "containerLocalPaths": { "const": false }
-          }
-        }
-      }
-    },
-    "outboundProxy": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "defaultMode",
-        "supportedModes",
-        "explicitUrlEnv",
-        "modeEnv",
-        "portsEnv",
-        "noProxyRequired"
-      ],
-      "properties": {
-        "defaultMode": { "const": "auto" },
-        "supportedModes": {
-          "type": "array",
-          "minItems": 4,
-          "maxItems": 4,
-          "prefixItems": [
-            { "const": "auto" },
-            { "const": "env" },
-            { "const": "wsl-host" },
-            { "const": "off" }
-          ],
-          "items": false
-        },
-        "explicitUrlEnv": { "const": "SUNABOT_PROXY_URL" },
-        "modeEnv": { "const": "SUNABOT_PROXY_MODE" },
-        "portsEnv": { "const": "SUNABOT_PROXY_PORTS" },
-        "noProxyRequired": {
-          "type": "array",
-          "minItems": 4,
-          "uniqueItems": true,
-          "contains": { "const": "127.0.0.1" }
-        }
-      }
-    },
-    "startup": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "nativeCoreOrder",
-        "dockerCoreOrder",
-        "shutdownOrder",
-        "coreReadyTimeoutSeconds",
-        "napcatReadyTimeoutSeconds",
-        "shutdownTimeoutSeconds"
-      ],
-      "properties": {
-        "nativeCoreOrder": {
-          "type": "array",
-          "minItems": 2,
-          "maxItems": 2,
-          "prefixItems": [{ "const": "core-native" }, { "const": "napcat" }],
-          "items": false
-        },
-        "dockerCoreOrder": {
-          "type": "array",
-          "minItems": 2,
-          "maxItems": 2,
-          "prefixItems": [{ "const": "core" }, { "const": "napcat" }],
-          "items": false
-        },
-        "shutdownOrder": {
-          "type": "array",
-          "minItems": 2,
-          "maxItems": 2,
-          "prefixItems": [{ "const": "napcat" }, { "const": "core" }],
-          "items": false
-        },
-        "coreReadyTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300 },
-        "napcatReadyTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 600 },
-        "shutdownTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300 }
-      }
-    },
-    "health": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["livenessPath", "readinessLayers", "services"],
-      "properties": {
-        "livenessPath": { "type": "string", "pattern": "^/" },
-        "readinessLayers": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1 }
-        },
-        "services": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["core", "napcat"],
-          "properties": {
-            "core": { "$ref": "#/$defs/serviceHealth" },
-            "napcat": { "$ref": "#/$defs/serviceHealth" }
-          }
-        }
-      }
-    },
+    "mediaTransport": { "type": "object" },
+    "outboundProxy": { "type": "object" },
+    "startup": { "type": "object" },
+    "health": { "type": "object" },
     "capabilities": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["required", "optional", "workspaceBash", "codexCli"],
+      "required": ["required", "optional"],
       "properties": {
         "required": {
           "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "contains": { "const": "workspace-bash" },
-          "items": { "type": "string", "minLength": 1 }
+          "contains": { "const": "webfetch-dynamic-renderer" }
         },
         "optional": {
           "type": "array",
-          "uniqueItems": true,
-          "not": { "contains": { "const": "workspace-bash" } },
-          "items": { "type": "string", "minLength": 1 }
-        },
-        "workspaceBash": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "service",
-            "isolation",
-            "executable",
-            "dockerSeccompProfile",
-            "filesystemMode",
-            "subprocessIsolation",
-            "capabilitiesDropped",
-            "failClosed"
-          ],
-          "properties": {
-            "service": { "const": "core" },
-            "isolation": { "const": "bubblewrap" },
-            "executable": { "const": "/usr/bin/bwrap" },
-            "dockerSeccompProfile": { "const": "deploy/docker/seccomp-bwrap.json" },
-            "filesystemMode": { "const": "host-readonly-workspace-readwrite" },
-            "subprocessIsolation": { "const": "inherited-mount-and-pid-namespaces" },
-            "capabilitiesDropped": { "const": true },
-            "failClosed": { "const": true }
-          }
-        },
-        "codexCli": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["service", "version", "executable", "authFile", "failClosed"],
-          "properties": {
-            "service": { "const": "core" },
-            "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
-            "executable": { "const": "/usr/local/bin/codex" },
-            "authFile": { "const": "secrets/codex/auth.json" },
-            "failClosed": { "const": true }
-          }
+          "not": { "contains": { "const": "webfetch-dynamic-renderer" } }
         }
       }
     },
-    "resources": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["core", "napcat", "logging"],
+    "resources": { "type": "object" },
+    "napcat": {
+      "type": "object", "additionalProperties": false,
+      "required": ["managedBy", "composeProject", "composeFile", "service", "network", "image", "digest", "pullPolicy", "labels"],
       "properties": {
-        "core": { "$ref": "#/$defs/serviceResources" },
-        "napcat": { "$ref": "#/$defs/serviceResources" },
-        "logging": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["maxSize", "maxFiles"],
-          "properties": {
-            "maxSize": { "type": "string", "minLength": 1 },
-            "maxFiles": { "type": "integer", "minimum": 1 }
-          }
-        }
-      }
-    },
-    "docker": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["composeProject", "composeFile", "network", "services", "labels"],
-      "properties": {
-        "composeProject": { "const": "sunabot" },
-        "composeFile": { "const": "deploy/docker/compose.yml" },
-        "network": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["name", "nameEnv"],
-          "properties": {
-            "name": { "const": "sunabot-runtime" },
-            "nameEnv": { "const": "SUNABOT_DOCKER_NETWORK" }
-          }
-        },
-        "services": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["core", "napcat"],
-          "properties": {
-            "core": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["name", "profile", "image", "workspaceMount"],
-              "properties": {
-                "name": { "const": "core" },
-                "profile": { "const": "core-docker" },
-                "image": { "const": "sunabot-core" },
-                "workspaceMount": { "const": "/srv/sunabot/workspace" }
-              }
-            },
-            "napcat": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["name", "image", "upstreamImage", "stateRoot", "webuiPort"],
-              "properties": {
-                "name": { "const": "napcat" },
-                "image": { "const": "sunabot-napcat" },
-                "upstreamImage": {
-                  "type": "string",
-                  "pattern": "^docker\\.io/mlikiowa/napcat-docker:[^@]+@sha256:[a-f0-9]{64}$"
-                },
-                "stateRoot": { "const": "runtime/napcat" },
-                "webuiPort": { "const": 6099 }
-              }
-            }
-          }
-        },
-        "labels": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["runtimeId", "workspaceId", "component"],
-          "properties": {
-            "runtimeId": { "const": "io.sunabot.runtime-id" },
-            "workspaceId": { "const": "io.sunabot.workspace-id" },
-            "component": { "const": "io.sunabot.component" }
-          }
-        }
+        "managedBy": { "const": "docker" },
+        "composeProject": { "type": "string", "minLength": 1 },
+        "composeFile": { "const": "deploy/napcat/compose.yml" },
+        "service": { "const": "napcat" },
+        "network": { "type": "object" },
+        "image": { "type": "string", "minLength": 1 },
+        "digest": { "pattern": "^sha256:[a-f0-9]{64}$" },
+        "pullPolicy": { "const": "never" },
+        "labels": { "type": "object" }
       }
     },
     "native": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["napcatManagedBy"],
+      "type": "object", "additionalProperties": false, "required": ["core", "bubblewrap", "webfetchRenderer"],
       "properties": {
-        "napcatManagedBy": { "const": "docker" }
+        "core": { "type": "object" },
+        "bubblewrap": {
+          "type": "object", "additionalProperties": false,
+          "required": ["managedBy", "releaseExecutable", "executableEnvironment", "packagedFallback", "verifiedByLauncher", "consumers"],
+          "properties": {
+            "managedBy": { "const": "launcher" },
+            "releaseExecutable": { "const": "runtime/bubblewrap/bwrap" },
+            "executableEnvironment": { "const": "SUNABOT_BWRAP_EXECUTABLE" },
+            "packagedFallback": { "const": false },
+            "verifiedByLauncher": { "const": true },
+            "consumers": {
+              "type": "array",
+              "prefixItems": [
+                { "const": "native-bash" },
+                { "const": "mcp-stdio" },
+                { "const": "skill-script" },
+                { "const": "webfetch-renderer" }
+              ],
+              "items": false,
+              "minItems": 4,
+              "maxItems": 4
+            }
+          }
+        },
+        "webfetchRenderer": {
+          "type": "object",
+          "required": ["releaseRequired", "bubblewrapRuntime", "namespaceProbeRequired"],
+          "properties": {
+            "releaseRequired": { "const": true },
+            "bubblewrapRuntime": { "const": "bundled-loader-and-libraries" },
+            "namespaceProbeRequired": { "const": true }
+          }
+        }
       }
     },
     "componentsLock": { "const": "components/component.lock.json" }
   },
   "$defs": {
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$" },
     "absolutePath": { "type": "string", "pattern": "^/" },
-    "relativePath": {
-      "type": "string",
-      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+    "relativePath": { "type": "string", "minLength": 1, "not": { "pattern": "^(?:/|.*(?:^|/)\\.\\.(?:/|$))" } },
+    "namedUser": {
+      "type": "object", "additionalProperties": false, "required": ["name"],
+      "properties": { "name": { "type": "string", "minLength": 1 } }
     },
     "runtimeUser": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "uid", "gid"],
+      "type": "object", "additionalProperties": false, "required": ["name", "uid", "gid"],
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "uid": { "type": "integer", "minimum": 1 },
         "gid": { "type": "integer", "minimum": 1 }
-      }
-    },
-    "platformHosts": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["macos", "wsl", "linux"],
-      "properties": {
-        "macos": { "const": "127.0.0.1" },
-        "wsl": { "const": "docker-network-gateway" },
-        "linux": { "const": "docker-network-gateway" }
-      }
-    },
-    "platformWebSocketUrls": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["macos", "wsl", "linux"],
-      "properties": {
-        "macos": { "$ref": "#/$defs/webSocketUrl" },
-        "wsl": { "$ref": "#/$defs/webSocketUrl" },
-        "linux": { "$ref": "#/$defs/webSocketUrl" }
-      }
-    },
-    "webSocketUrl": {
-      "type": "string",
-      "pattern": "^ws://[^/]+:8788/onebot/v11/ws$"
-    },
-    "serviceHealth": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "livenessCommand",
-        "intervalSeconds",
-        "timeoutSeconds",
-        "startPeriodSeconds",
-        "retries"
-      ],
-      "properties": {
-        "livenessCommand": {
-          "type": "array",
-          "minItems": 1,
-          "items": { "type": "string" }
-        },
-        "intervalSeconds": { "type": "integer", "minimum": 1 },
-        "timeoutSeconds": { "type": "integer", "minimum": 1 },
-        "startPeriodSeconds": { "type": "integer", "minimum": 0 },
-        "retries": { "type": "integer", "minimum": 1 }
-      }
-    },
-    "serviceResources": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["memory", "cpus", "pids", "sharedMemory"],
-      "properties": {
-        "memory": { "type": "string", "minLength": 1 },
-        "cpus": { "type": "number", "exclusiveMinimum": 0 },
-        "pids": { "type": "integer", "minimum": 1 },
-        "sharedMemory": { "type": "string", "minLength": 1 }
       }
     }
   }

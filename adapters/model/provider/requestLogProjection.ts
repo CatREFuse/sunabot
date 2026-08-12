@@ -3,10 +3,20 @@ import {
   WORKBENCH_FILE_MAX_BYTES,
   isWorkbenchFileRelativePath
 } from "../../../services/tools/public.js";
+import {
+  ADD_WORKMEMORY_TOOL_NAME,
+  isAddWorkMemoryStableErrorCode
+} from "../../../services/tools/addWorkMemoryTool.js";
+import {
+  ADD_USER_PROFILE_TOOL_NAME,
+  isAddUserProfileStableErrorCode
+} from "../../../services/tools/addUserProfileTool.js";
 import { isMcpToolAlias } from "../../../services/extensions/public.js";
 
 export const PROVIDER_FILE_LOG_REDACTED = "[REDACTED]";
 export const PROVIDER_FILE_LOG_INVALID_RESULT = "[INVALID TOOL RESULT]";
+export const PROVIDER_WORKMEMORY_LOG_REDACTED = "[WORKING MEMORY CONTENT REDACTED]";
+export const PROVIDER_USER_PROFILE_LOG_REDACTED = "[USER PROFILE CONTENT REDACTED]";
 export const PROVIDER_REQUEST_LOG_REDACTED = "[PROVIDER REQUEST LOG REDACTED]";
 export const PROVIDER_RESPONSE_LOG_REDACTED = "[PROVIDER RESPONSE LOG REDACTED]";
 export const PROVIDER_MCP_LOG_REDACTED = "[EXTERNAL MCP DATA REDACTED]";
@@ -15,7 +25,8 @@ const maxInertDepth = 32;
 const maxInertNodes = 100_000;
 
 type FileToolName = "read_file" | "write_file";
-type ProjectedToolName = FileToolName | "mcp";
+type MemoryToolName = typeof ADD_WORKMEMORY_TOOL_NAME | typeof ADD_USER_PROFILE_TOOL_NAME;
+type ProjectedToolName = FileToolName | MemoryToolName | "mcp";
 
 export function projectProviderRequestLog(action: string, request: unknown): unknown {
   if (action === "responses.complete" || action === "codex.complete") {
@@ -58,6 +69,22 @@ export function projectProviderResponseLogForStorage(action: string, response: u
   } catch {
     return { summary: PROVIDER_RESPONSE_LOG_REDACTED };
   }
+}
+
+export function projectAddWorkMemoryResultLog(value: unknown) {
+  return projectWorkingMemoryResult(asRecord(value));
+}
+
+export function projectAddWorkMemoryArgumentsLog(value: unknown) {
+  return projectWorkingMemoryCallArguments(asRecord(value));
+}
+
+export function projectAddUserProfileResultLog(value: unknown) {
+  return projectUserProfileResult(asRecord(value));
+}
+
+export function projectAddUserProfileArgumentsLog(value: unknown) {
+  return projectUserProfileCallArguments(asRecord(value));
 }
 
 function projectProviderResponsePayload(action: string, payload: unknown) {
@@ -270,13 +297,25 @@ function projectGeminiRequest(request: unknown) {
 
 function projectJsonArguments(toolName: ProjectedToolName, value: unknown) {
   const parsed = typeof value === "string" ? parseRecord(value) : undefined;
-  return JSON.stringify(toolName === "mcp" ? projectMcpValue(parsed, value, "arguments") :
-    projectFileCallArguments(toolName, parsed));
+  if (toolName === "mcp") return JSON.stringify(projectMcpValue(parsed, value, "arguments"));
+  if (toolName === ADD_WORKMEMORY_TOOL_NAME) {
+    return JSON.stringify(projectWorkingMemoryCallArguments(parsed));
+  }
+  if (toolName === ADD_USER_PROFILE_TOOL_NAME) {
+    return JSON.stringify(projectUserProfileCallArguments(parsed));
+  }
+  return JSON.stringify(projectFileCallArguments(toolName, parsed));
 }
 
 function projectObjectArguments(toolName: ProjectedToolName, value: unknown) {
-  return toolName === "mcp" ? projectMcpValue(value, value, "arguments") :
-    projectFileCallArguments(toolName, asRecord(value));
+  if (toolName === "mcp") return projectMcpValue(value, value, "arguments");
+  if (toolName === ADD_WORKMEMORY_TOOL_NAME) {
+    return projectWorkingMemoryCallArguments(asRecord(value));
+  }
+  if (toolName === ADD_USER_PROFILE_TOOL_NAME) {
+    return projectUserProfileCallArguments(asRecord(value));
+  }
+  return projectFileCallArguments(toolName, asRecord(value));
 }
 
 function projectFileCallArguments(toolName: FileToolName, value: Record<string, unknown> | undefined) {
@@ -293,6 +332,12 @@ function projectFileCallArguments(toolName: FileToolName, value: Record<string, 
 function projectJsonResult(toolName: ProjectedToolName, value: unknown) {
   const parsed = typeof value === "string" ? parseRecord(value) : undefined;
   if (toolName === "mcp") return JSON.stringify(projectMcpValue(parsed, value, "result"));
+  if (toolName === ADD_WORKMEMORY_TOOL_NAME) {
+    return JSON.stringify(projectWorkingMemoryResult(parsed));
+  }
+  if (toolName === ADD_USER_PROFILE_TOOL_NAME) {
+    return JSON.stringify(projectUserProfileResult(parsed));
+  }
   if (!parsed) return PROVIDER_FILE_LOG_INVALID_RESULT;
   return JSON.stringify(projectFileResult(toolName, parsed));
 }
@@ -300,7 +345,100 @@ function projectJsonResult(toolName: ProjectedToolName, value: unknown) {
 function projectObjectResult(toolName: ProjectedToolName, value: unknown) {
   if (toolName === "mcp") return projectMcpValue(value, value, "result");
   const parsed = asRecord(value);
+  if (toolName === ADD_WORKMEMORY_TOOL_NAME) return projectWorkingMemoryResult(parsed);
+  if (toolName === ADD_USER_PROFILE_TOOL_NAME) return projectUserProfileResult(parsed);
   return parsed ? projectFileResult(toolName, parsed) : PROVIDER_FILE_LOG_INVALID_RESULT;
+}
+
+function projectWorkingMemoryCallArguments(value: Record<string, unknown> | undefined) {
+  const content = value?.content;
+  const argumentKeys = value
+    ? ["action", "content"].filter((key) => Object.hasOwn(value, key))
+    : [];
+  const unsupportedArgumentCount = value
+    ? Object.keys(value).length - argumentKeys.length
+    : 0;
+  return {
+    action: value?.action === "record" || value?.action === "skip"
+      ? value.action
+      : invalidValue,
+    argumentKeys,
+    unsupportedArgumentCount,
+    content: content === null
+      ? null
+      : typeof content === "string"
+        ? PROVIDER_WORKMEMORY_LOG_REDACTED
+        : invalidValue,
+    contentChars: typeof content === "string"
+      ? Array.from(content).length
+      : content === null
+        ? 0
+        : invalidValue
+  };
+}
+
+function projectWorkingMemoryResult(value: Record<string, unknown> | undefined) {
+  return {
+    ok: typeof value?.ok === "boolean" ? value.ok : invalidValue,
+    action: value?.action === "record" || value?.action === "skip"
+      ? value.action
+      : invalidValue,
+    code: isAddWorkMemoryStableErrorCode(value?.code) ? value.code : invalidValue,
+    deduplicated: typeof value?.deduplicated === "boolean"
+      ? value.deduplicated
+      : invalidValue
+  };
+}
+
+function projectUserProfileCallArguments(value: Record<string, unknown> | undefined) {
+  const profile = value?.profile;
+  const addressNames = value?.addressNames;
+  const argumentKeys = value
+    ? ["action", "profile", "addressNames"].filter((key) => Object.hasOwn(value, key))
+    : [];
+  const unsupportedArgumentCount = value
+    ? Object.keys(value).length - argumentKeys.length
+    : 0;
+  return {
+    action: value?.action === "record" || value?.action === "skip"
+      ? value.action
+      : invalidValue,
+    argumentKeys,
+    unsupportedArgumentCount,
+    profile: profile === null
+      ? null
+      : typeof profile === "string"
+        ? PROVIDER_USER_PROFILE_LOG_REDACTED
+        : invalidValue,
+    profileChars: typeof profile === "string"
+      ? Array.from(profile).length
+      : profile === null
+        ? 0
+        : invalidValue,
+    addressNameCount: Array.isArray(addressNames)
+      ? addressNames.length
+      : addressNames === null
+        ? 0
+        : invalidValue
+  };
+}
+
+function projectUserProfileResult(value: Record<string, unknown> | undefined) {
+  return {
+    ok: typeof value?.ok === "boolean" ? value.ok : invalidValue,
+    action: value?.action === "record" || value?.action === "skip"
+      ? value.action
+      : invalidValue,
+    code: isAddUserProfileStableErrorCode(value?.code) ? value.code : invalidValue,
+    addressNameCount: Number.isSafeInteger(value?.addressNameCount)
+      && Number(value?.addressNameCount) >= 0
+      && Number(value?.addressNameCount) <= 16
+      ? value?.addressNameCount
+      : invalidValue,
+    deduplicated: typeof value?.deduplicated === "boolean"
+      ? value.deduplicated
+      : invalidValue
+  };
 }
 
 function projectFileResult(toolName: FileToolName, value: Record<string, unknown>) {
@@ -338,12 +476,14 @@ function fileToolName(value: unknown): FileToolName | undefined {
 function projectedToolName(value: unknown, trustedMcp: Set<string>): ProjectedToolName | undefined {
   const file = fileToolName(value);
   if (file) return file;
+  if (value === ADD_WORKMEMORY_TOOL_NAME || value === ADD_USER_PROFILE_TOOL_NAME) return value;
   return typeof value === "string" && trustedMcp.has(value) ? "mcp" : undefined;
 }
 
 function responseProjectedToolName(value: unknown): ProjectedToolName | undefined {
   const file = fileToolName(value);
   if (file) return file;
+  if (value === ADD_WORKMEMORY_TOOL_NAME || value === ADD_USER_PROFILE_TOOL_NAME) return value;
   return typeof value === "string" && isMcpToolAlias(value) ? "mcp" : undefined;
 }
 

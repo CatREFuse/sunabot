@@ -6,6 +6,7 @@ import {
   type SelfieReferenceVariant
 } from "../../../src/admin/selfieReferences.js";
 import { badRequest } from "../../../src/admin/errors.js";
+import { requestAgentId } from "../requestAgentId.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
@@ -73,19 +74,32 @@ export function registerSelfieReferenceRoutes(app: FastifyInstance, options: Sel
 }
 
 function repositoryContext(options: SelfieReferenceRouteOptions, query: unknown) {
-  if (!options.getRepository) return { repository: options.repository };
+  rejectRetiredWorkbenchQuery(query);
+  if (!options.getRepository) return { repository: options.repository, agentId: undefined };
   const agentId = requestAgentId(query);
   return { agentId, repository: options.getRepository(agentId) };
 }
 
-function withContentUrls(envelope: SelfieReferenceEnvelope, agentId?: string) {
+function rejectRetiredWorkbenchQuery(query: unknown) {
+  if (query && typeof query === "object" && !Array.isArray(query) && "workbench" in query) {
+    badRequest("WORKBENCH_SOURCE_RETIRED", "Workbench 来源参数已停用。", "workbench");
+  }
+}
+
+function withContentUrls(
+  envelope: SelfieReferenceEnvelope,
+  agentId: string | undefined
+) {
   return {
     maxImages: envelope.maxImages,
     images: envelope.images.map((image) => publicImage(image, agentId))
   };
 }
 
-function publicImage(image: SelfieReferenceImage, agentId?: string) {
+function publicImage(
+  image: SelfieReferenceImage,
+  agentId: string | undefined
+) {
   const base = `/api/selfie-references/${encodeURIComponent(image.id)}/content`;
   const scope = agentId ? `&agentId=${encodeURIComponent(agentId)}` : "";
   return {
@@ -94,11 +108,6 @@ function publicImage(image: SelfieReferenceImage, agentId?: string) {
     displayUrl: `${base}?variant=display${scope}`,
     placeholderUrl: `${base}?variant=placeholder${scope}`
   };
-}
-
-function requestAgentId(query: unknown) {
-  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
-  return String(value ?? "plana").trim() || "plana";
 }
 
 function parseVariant(value: string | undefined): SelfieReferenceVariant {

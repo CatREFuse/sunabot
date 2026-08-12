@@ -4,6 +4,7 @@ import type {
   AgentToolName,
   AppConfig,
   BotConfig,
+  BotDirectorSettings,
   BotMemorySettings,
   BotOrchestratorSettings,
   BotToneSettings,
@@ -11,13 +12,9 @@ import type {
   BroadcastStormConfig,
   ProviderConfig
 } from "../types.js";
-import {
-  AGENT_TOOL_NAMES,
-  MAX_REPLY_DEBOUNCE_MS,
-  MIN_REPLY_DEBOUNCE_MS
-} from "../types.js";
+import { AGENT_TOOL_NAMES } from "../types.js";
 import { AdminApiError, badRequest, conflict } from "./errors.js";
-import { getModelCatalogEntry } from "./models.js";
+import { getModelCatalogEntry } from "../../packages/contracts/admin/models.js";
 import {
   DEFAULT_TAVILY_API_KEY_ENV,
   isEnvironmentName,
@@ -61,6 +58,11 @@ import { validateBroadcastStormConfig } from "./broadcastStormConfig.js";
 import { validateNormalReplyConfig } from "./normalReplyConfig.js";
 import { ConfigDoctorApplyService, type DoctorCandidateInput } from "./configDoctorApply.js";
 import { configFieldStates, type ConfigFieldStates } from "./configFieldStates.js";
+import { validateMemoryConfig } from "./memoryConfigValidation.js";
+import {
+  validateBotConfigSection,
+  type BotConfigSection
+} from "./botConfigValidation.js";
 export type { DoctorCandidateInput } from "./configDoctorApply.js";
 export { configFieldStates } from "./configFieldStates.js";
 export { configRevision, stableJson } from "./configRevision.js";
@@ -80,9 +82,10 @@ export interface ConfigSectionValueMap {
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
   normalReply: AppConfig["normalReply"];
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit">;
+  bot: BotConfigSection;
   tone: BotToneSettings;
   memory: BotMemorySettings;
+  director: BotDirectorSettings;
   orchestrator: BotOrchestratorSettings;
   tools: BotToolSettings;
   bash: BotConfig["bash"];
@@ -275,9 +278,10 @@ export function validateConfigSectionValue<S extends ConfigSection>(
     case "providers": return validateProviders(value, current?.providers) as ConfigSectionValueMap[S];
     case "broadcastStorm": return validateBroadcastStormConfig(value) as ConfigSectionValueMap[S];
     case "normalReply": return validateNormalReplyConfig(value) as ConfigSectionValueMap[S];
-    case "bot": return validateBot(value) as ConfigSectionValueMap[S];
+    case "bot": return validateBotConfigSection(value, current) as ConfigSectionValueMap[S];
     case "tone": return validateTone(value, current?.providers) as ConfigSectionValueMap[S];
-    case "memory": return validateMemory(value) as ConfigSectionValueMap[S];
+    case "memory": return validateMemoryConfig(value) as ConfigSectionValueMap[S];
+    case "director": return validateDirector(value) as ConfigSectionValueMap[S];
     case "orchestrator": return validateOrchestrator(value) as ConfigSectionValueMap[S];
     case "tools": return validateTools(value, current?.bot.tools) as ConfigSectionValueMap[S];
     case "bash": return validateBash(value) as ConfigSectionValueMap[S];
@@ -300,6 +304,12 @@ function validatePersona(input: unknown): ConfigSectionValueMap["persona"] {
   return {
     agentWorkspace: pathString(value.agentWorkspace, "persona.agentWorkspace", false)
   };
+}
+
+function validateDirector(input: unknown): BotDirectorSettings {
+  const value = object(input, "director");
+  exactKeys(value, ["enabled"], "director");
+  return { enabled: boolean(value.enabled, "director.enabled") };
 }
 
 function validateProviders(input: unknown, current?: AppConfig["providers"]): AppConfig["providers"] {
@@ -404,47 +414,10 @@ function validateProvider(input: unknown, field: string): ProviderConfig {
   };
 }
 
-function validateBot(input: unknown): ConfigSectionValueMap["bot"] {
-  const value = object(input, "bot");
-  exactKeys(value, [
-    "adminQq", "adminName", "replyDebounceMs", "pokeOnNoReply", "quoteGroupReplies", "quoteGroupReplyExcludedUserIds", "contextMessageLimit"
-  ], "bot");
-  const adminQq = requiredString(value.adminQq, "bot.adminQq", { trim: true, min: 0, max: 32, allowEmpty: true });
-  if (adminQq && !/^\d+$/.test(adminQq)) badRequest("CONFIG_INVALID", "管理员 QQ 必须是数字。", "bot.adminQq");
-  const quoteGroupReplyExcludedUserIds = stringArray(
-    value.quoteGroupReplyExcludedUserIds,
-    "bot.quoteGroupReplyExcludedUserIds",
-    100,
-    32
-  );
-  const invalidIndex = quoteGroupReplyExcludedUserIds.findIndex((userId) => !/^\d+$/.test(userId));
-  if (invalidIndex >= 0) {
-    badRequest(
-      "CONFIG_INVALID",
-      "过滤名单中的 QQ 必须是数字。",
-      `bot.quoteGroupReplyExcludedUserIds.${invalidIndex}`
-    );
-  }
-  return {
-    adminQq,
-    adminName: requiredString(value.adminName, "bot.adminName", { trim: true, min: 1, max: 80 }),
-    replyDebounceMs: integer(
-      value.replyDebounceMs,
-      "bot.replyDebounceMs",
-      MIN_REPLY_DEBOUNCE_MS,
-      MAX_REPLY_DEBOUNCE_MS
-    ),
-    pokeOnNoReply: boolean(value.pokeOnNoReply, "bot.pokeOnNoReply"),
-    quoteGroupReplies: boolean(value.quoteGroupReplies, "bot.quoteGroupReplies"),
-    quoteGroupReplyExcludedUserIds: uniqueStrings(quoteGroupReplyExcludedUserIds),
-    contextMessageLimit: integer(value.contextMessageLimit, "bot.contextMessageLimit", 1, 120)
-  };
-}
-
 function validateTone(input: unknown, providers?: AppConfig["providers"]): BotToneSettings {
   const value = object(input, "tone");
   exactKeys(value, [
-    "enabled", "providerId", "model", "reasoningEffort", "temperature", "maxOutputTokens", "maxRetries"
+    "enabled", "segmentedReply", "followMainModel", "providerId", "model", "reasoningEffort", "temperature", "maxOutputTokens", "maxRetries"
   ], "tone");
   const providerId = requiredString(value.providerId, "tone.providerId", {
     trim: true,
@@ -462,6 +435,8 @@ function validateTone(input: unknown, providers?: AppConfig["providers"]): BotTo
   validateCatalogEffort(model, reasoningEffort, "tone.reasoningEffort");
   return {
     enabled: boolean(value.enabled, "tone.enabled"),
+    segmentedReply: boolean(value.segmentedReply, "tone.segmentedReply"),
+    followMainModel: boolean(value.followMainModel, "tone.followMainModel"),
     providerId,
     model,
     ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -471,37 +446,12 @@ function validateTone(input: unknown, providers?: AppConfig["providers"]): BotTo
   };
 }
 
-function validateMemory(input: unknown): BotMemorySettings {
-  const value = object(input, "memory");
-  exactKeys(value, [
-    "memoryModel", "reasoningEffort", "messageThreshold", "workingMemoryMaxEntries",
-    "workMemoryCompressInPrompt", "workMemoryCompressOutPrompt", "userProfilePrompt"
-  ], "memory");
-  const memoryModel = requiredString(value.memoryModel, "memory.memoryModel", { trim: true, min: 1, max: 200 });
-  const reasoningEffort = optionalReasoningEffort(value.reasoningEffort, "memory.reasoningEffort");
-  validateCatalogEffort(memoryModel, reasoningEffort, "memory.reasoningEffort");
-  return {
-    memoryModel,
-    ...(reasoningEffort ? { reasoningEffort } : {}),
-    messageThreshold: integer(value.messageThreshold, "memory.messageThreshold", 1, 200),
-    workingMemoryMaxEntries: integer(value.workingMemoryMaxEntries, "memory.workingMemoryMaxEntries", 1, 1_000),
-    workMemoryCompressInPrompt: pathString(value.workMemoryCompressInPrompt, "memory.workMemoryCompressInPrompt", true),
-    workMemoryCompressOutPrompt: pathString(value.workMemoryCompressOutPrompt, "memory.workMemoryCompressOutPrompt", true),
-    userProfilePrompt: pathString(value.userProfilePrompt, "memory.userProfilePrompt", true)
-  };
-}
-
 function validateOrchestrator(input: unknown): BotOrchestratorSettings {
   const value = object(input, "orchestrator");
   exactKeys(value, [
-    "enabled", "userGroupchatOrchestratorModel", "groupThreadModel", "reasoningEffort", "promptFile", "messageThreshold", "recentMessageWindowMs"
+    "enabled", "userGroupchatOrchestratorModel", "reasoningEffort", "promptFile", "messageThreshold", "recentMessageWindowMs"
   ], "orchestrator");
   const model = requiredString(value.userGroupchatOrchestratorModel, "orchestrator.userGroupchatOrchestratorModel", {
-    trim: true,
-    min: 1,
-    max: 200
-  });
-  const groupThreadModel = requiredString(value.groupThreadModel, "orchestrator.groupThreadModel", {
     trim: true,
     min: 1,
     max: 200
@@ -511,7 +461,6 @@ function validateOrchestrator(input: unknown): BotOrchestratorSettings {
   return {
     enabled: boolean(value.enabled, "orchestrator.enabled"),
     userGroupchatOrchestratorModel: model,
-    groupThreadModel,
     ...(reasoningEffort ? { reasoningEffort } : {}),
     promptFile: pathString(value.promptFile, "orchestrator.promptFile", true),
     messageThreshold: integer(value.messageThreshold, "orchestrator.messageThreshold", 0, 200),
@@ -636,7 +585,7 @@ function validateToolOverrides(input: unknown): NonNullable<BotToolSettings["ove
     const override = object(rawOverride, field);
     const extra = Object.keys(override).find((key) => key !== "enabled" && key !== "description");
     if (extra) badRequest("CONFIG_UNKNOWN_FIELD", "包含不支持的字段。", `${field}.${extra}`);
-    const enabled = name === "workspace_bash" || name === "codex" || override.enabled == null
+    const enabled = name === "native_bash" || name === "codex" || override.enabled == null
       ? undefined
       : boolean(override.enabled, `${field}.enabled`);
     let description: string | undefined;
@@ -659,15 +608,11 @@ function validateToolOverrides(input: unknown): NonNullable<BotToolSettings["ove
 function validateBash(input: unknown): BotConfig["bash"] {
   const value = object(input, "bash");
   exactKeys(value, [
-    "enabled", "adminPrivateBackend", "auditModel", "strictMode",
+    "enabled", "auditModel", "strictMode",
     "allowGroup", "adminOnly", "workspaceOnly", "blockedKeywords"
   ], "bash");
-  if (value.adminPrivateBackend !== "native" && value.adminPrivateBackend !== "docker") {
-    badRequest("CONFIG_INVALID", "管理员私聊 Bash 后端无效。", "bash.adminPrivateBackend");
-  }
   return {
     enabled: boolean(value.enabled, "bash.enabled"),
-    adminPrivateBackend: value.adminPrivateBackend,
     auditModel: requiredString(value.auditModel, "bash.auditModel", { trim: true, min: 1, max: 200 }),
     strictMode: boolean(value.strictMode, "bash.strictMode"),
     allowGroup: boolean(value.allowGroup, "bash.allowGroup"),
@@ -717,17 +662,23 @@ export function validateCompleteConfig(config: AppConfig) {
   validateProviders(config.providers);
   validateBroadcastStormConfig(config.broadcastStorm);
   validateNormalReplyConfig(config.normalReply);
-  validateBot({
+  validateBotConfigSection({
     adminQq: config.bot.adminQq,
     adminName: config.bot.adminName,
+    replyModel: config.bot.replyModel,
+    replyReasoningEffort: config.bot.replyReasoningEffort,
+    imageReader: config.bot.imageReader,
     replyDebounceMs: config.bot.replyDebounceMs,
     pokeOnNoReply: config.bot.pokeOnNoReply,
     quoteGroupReplies: config.bot.quoteGroupReplies,
     quoteGroupReplyExcludedUserIds: config.bot.quoteGroupReplyExcludedUserIds,
-    contextMessageLimit: config.bot.contextMessageLimit
-  });
+    contextMessageLimit: config.bot.contextMessageLimit,
+    emojiSendSize: config.bot.emojiSendSize,
+    emojiSendSeparately: config.bot.emojiSendSeparately
+  }, config);
   validateTone(config.bot.tone, config.providers);
-  validateMemory(config.bot.memory);
+  validateDirector(config.bot.director ?? { enabled: false });
+  validateMemoryConfig(config.bot.memory);
   validateOrchestrator(config.bot.orchestrator);
   validateTools(config.bot.tools);
   validateBash(config.bot.bash);
@@ -756,6 +707,7 @@ export function mergeConfigSection<S extends ConfigSection>(
     }
     case "tone": candidate.bot.tone = value as ConfigSectionValueMap["tone"]; break;
     case "memory": candidate.bot.memory = value as ConfigSectionValueMap["memory"]; break;
+    case "director": candidate.bot.director = value as ConfigSectionValueMap["director"]; break;
     case "orchestrator": candidate.bot.orchestrator = value as ConfigSectionValueMap["orchestrator"]; break;
     case "tools": candidate.bot.tools = value as ConfigSectionValueMap["tools"]; break;
     case "bash": candidate.bot.bash = value as ConfigSectionValueMap["bash"]; break;

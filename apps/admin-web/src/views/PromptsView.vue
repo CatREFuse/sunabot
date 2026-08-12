@@ -5,11 +5,12 @@ import { ApiRequestError } from "../composables/useAdminApi";
 import { usePromptLibrary } from "../composables/usePromptLibrary";
 import PromptEditor from "../components/prompts/PromptEditor.vue";
 import PromptFileList from "../components/prompts/PromptFileList.vue";
+import AgentSoulControls from "../components/prompts/AgentSoulControls.vue";
 import DialogOverlay from "../components/ui/DialogOverlay.vue";
 import ToggleSwitch from "../components/ui/ToggleSwitch.vue";
 import type { AgentFileDetail } from "../types";
 import { apiRequest } from "../composables/useAdminApi";
-import { activeAgentId } from "../composables/agentScope";
+import { activeAgentId, activeAgentIdState } from "../composables/agentScope";
 
 const props = withDefaults(defineProps<{ scope?: "persona" | "system" }>(), { scope: "persona" });
 
@@ -224,6 +225,12 @@ async function setSystemOverride(value: boolean) {
   }
 }
 
+async function soulImported() {
+  await library.loadList();
+  if (selectedId.value) await openFile(selectedId.value);
+  setMessage("灵魂文件已导入", "success");
+}
+
 function setMessage(value: string, kind: "" | "success" | "error" | "warning") {
   message.value = value;
   messageKind.value = kind;
@@ -244,7 +251,8 @@ function setMessage(value: string, kind: "" | "success" | "error" | "warning") {
         @update:query="query = $event"
       >
         <template v-if="props.scope === 'persona'" #headerAfter>
-          <div class="mt-4 border-y border-line py-2">
+          <AgentSoulControls :agent-id="activeAgentIdState" :disabled="dirty || saving" @imported="soulImported" />
+          <div class="border-b border-line py-2">
             <ToggleSwitch
               :model-value="overrideSystem"
               label="覆盖系统提示词"

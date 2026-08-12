@@ -1,124 +1,63 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { nanoid } from "nanoid";
+import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
 import {
-  AppConfig,
-  ChatMessage,
-  ConversationMessageQuote,
-  ConversationRecord,
-  ImageResult,
-  ParsedIncomingMessage,
-  ReasoningEffort
-} from "../types.js";
-import { resolveModelReasoningEffort } from "../admin/models.js";
-import { AttachmentService } from "../../services/media/attachments/service.js";
-import type {
-  AttachmentExtractionContext,
-  ParsedAttachment
-} from "../../services/media/attachments/types.js";
-import { CommandRouter, commandInvocationSnapshot, type CommandMatch } from "../../services/messaging/commandRouter.js";
-import { isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
-import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
-import {
-  assistantReplyEnvelope,
   decodeAssistantReply,
   decodeIncomingReply,
   decodeNoReplyPoke,
   decodeToolCompletion,
-  incomingReplyEnvelope,
-  type AssistantReplyOutboxEnvelope,
-  type AsyncToolCompletionPayload,
   type ReplyQuoteSnapshotV1,
   type RuntimeIncomingReplyEventPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
-import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
-import { configureMemoryPersistence } from "../../services/memory/persistence.js";
-import {
-  ReplyGateEpochs,
-  isOrchestratorReplyRateLimited,
-  readReplyGateSnapshot,
-  resolveUserGroupReplyRoute,
-  type ReplyGateSnapshot
-} from "../../services/orchestration/groupReplyPolicy.js";
-import { HookBus } from "../../services/messaging/hookBus.js";
-import {
-  applyMemoryBatchTransaction,
-  ensureAgentTextFile,
-  formatMemoryMatchesForPrompt,
-  isMemoryBatchCommitted,
-  mergeUserProfileMemory,
-  normalizeEventMemorySchema,
-  readAgentTextFile,
-  readMemorySourceEntries,
-  readUserProfileForUser,
-  readWorkingMemorySnapshot,
-  recallMemory,
-  recoverMemoryTransactions,
-  replaceWorkingMemoryFacts,
-  resolveUserAddressName,
-  type MemoryEntry,
-  type MemoryFactInput
-} from "../../services/memory/memoryService.js";
-import {
-  MemorySchedulerStore,
-  type MemoryClaim,
-  type MemoryQueuedMessage
-} from "../../services/memory/memoryScheduler.js";
-import {
-  OpenAIProvider,
-  type ProviderBashOptions,
-  type ProviderCompleteOptions,
-  type ProviderDeferredTurn
-} from "../../adapters/model/openaiProvider.js";
-import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
-import {
-  inboundImageUrls,
-  replaceInboundImageUrls,
-  type MessageDetailsV1,
-  type MessagingPort,
-  type OutboundMessageV1
-} from "../../packages/contracts/messaging/messages.js";
-import {
-  generatedImageMediaAsset,
-  imageMediaAsset,
-  type AttachmentSourcePort
-} from "../../packages/contracts/media/media.js";
-import { loadPersona, AgentPersona } from "../../services/agent/persona.js";
-import { appendRequestLog, appendRequestLogStrict } from "../requestLog.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
-import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
-import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
-import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
-import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
+import { commandInvocationSnapshot, type CommandMatch } from "../../services/messaging/commandRouter.js";
+import { readReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
 import {
   OutboxDisconnectedError,
-  SessionCoordinator,
   type OutboxDeliveryContext,
   type SessionHandleResult,
   type SessionTurnContext
 } from "../../services/sessions/sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
-import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
-import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
+import type { OutboxRecord, SessionEventRecord } from "../../services/sessions/sessionStore.js";
+import { appendRequestLog, appendRequestLogStrict } from "../../adapters/observability/requestLog.js";
 import {
-  parseFinalPromptTemplate,
-  renderFinalPromptTemplate,
-  type PromptVariableValue,
-  type RenderedPromptRequest
-} from "../../services/agent/promptSystem.js";
-import { buildConversationPromptVariables } from "../../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { attachmentSourcePort, conversationMessageAttachments, conversationRecordId, incomingAttachmentReferenceScope, incomingConversationMessageId, isNumericMessageId, isRecentMessageForHydration, mergeAttachments, mergeConversationMessageDetails, persistentIncomingKey, queueIncomingSnapshot, replaceQuoteAttachments, uniqueAttachments, uniqueStrings } from "./messagingAttachmentHelpers.js";
-import { conversationLastText } from "./selfieHelpers.js";
+  type ConversationRecord,
+  type ParsedIncomingMessage
+} from "../types.js";
 import {
   conversationRecordSnapshot,
   handleInboundConversationGate,
   restoreConversationRecord
 } from "./inboundConversationGate.js";
 import { errorMessage, isAbortError, isRuntimeIncomingMessage, withAbortTimeout } from "./infrastructure.js";
+import { appendReplySoftError } from "./replyModuleIsolation.js";
+import {
+  attachmentSourcePort,
+  conversationMessageAttachments,
+  conversationRecordId,
+  conversationReplyEnabled,
+  incomingAttachmentReferenceScope,
+  incomingConversationMessageId,
+  isNumericMessageId,
+  isRecentMessageForHydration,
+  mergeAttachments,
+  mergeConversationMessageDetails,
+  persistentIncomingKey,
+  replaceQuoteAttachments,
+  uniqueAttachments,
+  uniqueStrings
+} from "./messagingAttachmentHelpers.js";
+import {
+  DIRECT_REPLY_TIMEOUT_MS,
+  PREPARE_TIMEOUT_MS,
+  type DeferredCodexTurn,
+  type ReplyDelivery,
+  type RuntimeCommandContext
+} from "./runtimeContracts.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
+import {
+  SCHEDULED_CALLBACK_EVENT_KIND,
+  SCHEDULED_CALLBACK_OUTBOX_KIND
+} from "./scheduledTasks.js";
+import { conversationLastText } from "./selfieHelpers.js";
+import { populateInboundImageAltTexts } from "./imageAltText.js";
 import {
   createSystemConfigHeldConfirmationPort,
   sameCanonicalOutbox,
@@ -195,7 +134,7 @@ export async function runtime_performHydrateConversationRecords(this: RuntimeHos
         const processedAttachments = unresolvedAttachments.length
           ? await this.attachmentService.processIncoming(
             unresolvedAttachments,
-            attachmentSourcePort(gateway),
+            attachmentSourcePort(gateway, target.record.accountId),
             details.text,
             `${target.record.id}/${target.message.id}`
           )
@@ -242,6 +181,7 @@ export async function runtime_performHydrateConversationRecords(this: RuntimeHos
     }
   }
 export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: ParsedIncomingMessage, gateway: MessagingPort) {
+    if (!this.isRuntimeActive()) return;
     this.activeGateway = gateway;
     if (this.isDuplicateIncoming(incoming)) return;
     if (!this.isReplySenderAllowed(incoming.userId)) {
@@ -249,8 +189,14 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
       return;
     }
 
-    const activeDebounceConversation = this.recoverActiveReplyDebounceConversation(incoming);
     const channelKey = conversationRecordId(incoming);
+    const existingConversation = this.conversationRecords.get(channelKey);
+    if (existingConversation && !conversationReplyEnabled(existingConversation)) {
+      this.markIncomingSeen(incoming);
+      return;
+    }
+
+    const activeDebounceConversation = this.recoverActiveReplyDebounceConversation(incoming);
     const durableMessageId = incomingConversationMessageId(incoming);
     const gate = this.replyGates.capture(incoming.scope, channelKey);
     const command = this.commandRouter.match(incoming.text, uniqueStrings([
@@ -286,14 +232,21 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
           expectedSequence: proposedCaptureSequence,
           persist: false
         });
+        if (incoming.scope === "user_group" && this.config.bot.orchestrator.enabled) {
+          record.orchestratorEnabled = true;
+        }
         this.consumeOrchestratorBatch(record, proposedCaptureSequence);
         if (activeDebounceConversation) this.persistConversationRecordStrict(record);
         else this.persistConversationRecords();
         incomingPersisted = true;
         this.cancelAmbientReply(channelKey);
         const preparation = this.prepareIncomingMessage(incoming, gateway)
-          .then(() => this.patchIncomingMessage(record, incoming, durableMessageId))
+          .then(() => {
+            this.runtimeSignal.throwIfAborted();
+            this.patchIncomingMessage(record, incoming, durableMessageId);
+          })
           .catch((error) => {
+            if (!this.isRuntimeActive() || isAbortError(error)) return;
             console.error("[runtime] prepare incoming message failed; continuing with degraded context", {
               channel: channelKey,
               messageId: incoming.messageId,
@@ -303,7 +256,6 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
           .finally(() => this.scheduleAttachmentCacheRefresh());
         this.incomingPreparations.set(preparationKey, { promise: preparation, incoming });
         this.trackReplyDebouncePreparation(incoming, preparation);
-        this.scheduleMemoryCompression(record);
       } catch (error) {
         if (rollback && activeDebounceConversation && !incomingPersisted) {
           restoreConversationRecord(activeDebounceConversation, rollback);
@@ -347,7 +299,6 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
       })
       .finally(() => this.scheduleAttachmentCacheRefresh());
     this.trackReplyDebouncePreparation(incoming, preparation);
-    this.scheduleMemoryCompression(record);
 
     if (route === "ambient") {
       const thresholdReached = this.shouldRunUserGroupchatOrchestrator(incoming);
@@ -356,11 +307,11 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
         const job = { channelKey, incoming, gateway, captureSequence, gate };
         if (thresholdReached) this.queueAmbientReply(job);
         else this.scheduleAmbientIdleReply(job);
-      }).finally(() => this.scheduleMemoryCompression(record));
+      });
       return;
     }
 
-    void preparation.finally(() => this.scheduleMemoryCompression(record));
+    void preparation;
   }
 export async function runtime_processSessionEvent(this: RuntimeHost,
     event: SessionEventRecord,
@@ -372,6 +323,9 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
     let controller: AbortController | undefined;
     try {
       return await withAbortTimeout(async (signal) => {
+        if (event.kind === SCHEDULED_CALLBACK_EVENT_KIND) {
+          return this.scheduledTasks.processEvent(event, turnContext);
+        }
         if (event.kind === "reply_debounce") {
           return this.processReplyDebounceEvent(event, event.payload, signal);
         }
@@ -387,6 +341,7 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
             payload,
             signal,
             turnContext.emitOutbox,
+            turnContext.emitDeferredOutbox,
             turnContext.appendHeldOutbox
           );
         }
@@ -394,8 +349,11 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
           const payload = decodeToolCompletion(event.payload);
           timeoutIncoming = payload.originalRequest?.incoming;
           timeoutReplyQuote = payload.originalRequest?.replyQuote;
+          const expectedAgentId = this.config.persona.defaultAgentId.trim();
           if (
             !timeoutIncoming ||
+            conversationRecordId(timeoutIncoming) !== event.sessionId ||
+            (timeoutIncoming.agentId != null && timeoutIncoming.agentId !== expectedAgentId) ||
             !this.isReplySenderAllowed(timeoutIncoming.userId)
           ) return { status: "no_reply" };
           await appendRequestLog({
@@ -424,7 +382,9 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
             : { status: "no_reply" };
         }
         throw new Error(`不支持的 Session 事件：${event.kind}`);
-      }, DIRECT_REPLY_TIMEOUT_MS, (value) => {
+      }, asynchronousSessionEvent(event.kind)
+        ? AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS
+        : DIRECT_REPLY_TIMEOUT_MS, (value) => {
         controller = value;
         this.activeDirectControllers.set(event.sessionId, value);
       }, coordinatorSignal);
@@ -436,15 +396,24 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
       const message = /timed out|timeout/i.test(errorMessage(error))
         ? "请求处理超时了，请稍后再试。"
         : "请求处理已取消。";
-      const tonedMessage = await this.rewriteToneText(message, {
-        incoming: timeoutIncoming,
-        logContext: {
-          conversationId: event.sessionId,
-          incomingMessageId: timeoutIncoming.messageId == null
-            ? undefined
-            : String(timeoutIncoming.messageId)
-        }
-      });
+      let tonedMessage = message;
+      try {
+        tonedMessage = await this.rewriteToneText(message, {
+          incoming: timeoutIncoming,
+          signal: controller?.signal ?? coordinatorSignal,
+          logContext: {
+            conversationId: event.sessionId,
+            incomingMessageId: timeoutIncoming.messageId == null
+              ? undefined
+              : String(timeoutIncoming.messageId)
+          }
+        });
+      } catch (toneError) {
+        console.error("[runtime] timeout reply tone unavailable", { error: toneError });
+        tonedMessage = controller?.signal.aborted || coordinatorSignal.aborted
+          ? message
+          : appendReplySoftError(message, "表达优化暂不可用");
+      }
       return {
         status: "failed",
         error: { message: errorMessage(error) },
@@ -471,6 +440,7 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
     payload: RuntimeIncomingReplyEventPayload,
     signal: AbortSignal,
     emitOutbox?: ReplyDelivery["emitOutbox"],
+    emitDeferredOutbox?: ReplyDelivery["emitDeferredOutbox"],
     appendHeldOutbox?: SessionTurnContext["appendHeldOutbox"]
   ): Promise<SessionHandleResult> {
     const gateway = this.requireActiveGateway();
@@ -516,6 +486,7 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
     const delivery: ReplyDelivery = {
       outbox: [],
       emitOutbox,
+      emitDeferredOutbox,
       replyQuote: payload.replyQuote,
       systemConfigHeld: createSystemConfigHeldConfirmationPort(this, appendHeldOutbox)
     };
@@ -531,7 +502,8 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
       delivery,
       (value) => { deferred = value; },
       payload.contextThroughSequence,
-      payload.orchestratorResult
+      payload.orchestratorResult,
+      event.id
     );
     if (deferred) {
       await appendRequestLog({
@@ -552,6 +524,7 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
       });
       return {
         status: "deferred",
+        ...(deferred.jobId ? { jobId: deferred.jobId } : {}),
         providerCallId: deferred.deferred.toolCall.callId,
         toolName: deferred.deferred.toolCall.name,
         arguments: deferred.deferred.toolCall.arguments,
@@ -582,6 +555,10 @@ export async function runtime_deliverSessionOutbox(
       throw new Error(`Outbox ${outbox.id} canonical record changed before delivery.`);
     }
     outbox = canonical;
+  }
+  if (outbox.kind === SCHEDULED_CALLBACK_OUTBOX_KIND) {
+    if (!context) throw new Error("Scheduled callback delivery requires a durable outbox context.");
+    return this.scheduledTasks.deliverOutbox(outbox, context);
   }
   if (outbox.kind === "onebot.conversation_asset") {
     return this.deliverConversationAssetOutbox(outbox, delivery);
@@ -654,6 +631,9 @@ export async function runtime_deliverSessionOutbox(
     if (!isRuntimeIncomingMessage(payload.incoming)) {
       throw new Error(`Outbox 消息格式无效：${outbox.id}`);
     }
+    if (this.scheduledTasks.isDisabledDirectorReply(payload.incoming.text)) {
+      return { delivered: true };
+    }
     if (context?.phase !== "settle" && !this.isReplySenderAllowed(payload.incoming.userId)) {
       return { delivered: false, skipped: "sender_not_allowed" };
     }
@@ -689,6 +669,10 @@ function isOutboxDeliveryContext(value: OutboxDeliveryContext | AbortSignal): va
   return typeof (value as OutboxDeliveryContext).sendRemote === "function";
 }
 
+function asynchronousSessionEvent(kind: string) {
+  return kind === "tool_completion" || kind === SCHEDULED_CALLBACK_EVENT_KIND;
+}
+
 function isOutboxAccountConnected(gateway: MessagingPort, accountId?: string) {
   const status = gateway.getStatus();
   if (!status.connected) return false;
@@ -710,7 +694,8 @@ export async function runtime_handleIncomingMessage(this: RuntimeHost,
     delivery?: ReplyDelivery,
     onDeferred?: (value: DeferredCodexTurn) => void,
     contextThroughSequence?: number,
-    orchestratorResult?: RuntimeIncomingReplyEventPayload["orchestratorResult"]
+    orchestratorResult?: RuntimeIncomingReplyEventPayload["orchestratorResult"],
+    memoryDecisionKey?: string
   ) {
     if (command) {
       try {
@@ -743,33 +728,37 @@ export async function runtime_handleIncomingMessage(this: RuntimeHost,
       isCurrent,
       delivery,
       onDeferred,
-      orchestratorResult
+      orchestratorResult,
+      memoryDecisionKey
     });
   }
 export async function runtime_prepareIncomingMessage(this: RuntimeHost, incoming: ParsedIncomingMessage, gateway: MessagingPort) {
     await withAbortTimeout(async (signal) => {
+      signal.throwIfAborted();
       await this.senderNameResolver.hydrate(incoming, gateway);
+      signal.throwIfAborted();
       await this.attachReplyReferences(incoming, gateway, signal);
-      if (!incoming.attachments.length) return;
-      incoming.attachments = await this.attachmentService.processIncoming(
-        incoming.attachments,
-        attachmentSourcePort(gateway),
-        incoming.text,
-        incomingAttachmentReferenceScope(incoming)
-      );
-      incoming.quoteReferences = replaceQuoteAttachments(incoming.quoteReferences, incoming.attachments);
-    }, PREPARE_TIMEOUT_MS);
+      signal.throwIfAborted();
+      if (incoming.attachments.length) {
+        incoming.attachments = await this.attachmentService.processIncoming(
+          incoming.attachments,
+          attachmentSourcePort(gateway, incoming.accountId),
+          incoming.text,
+          incomingAttachmentReferenceScope(incoming),
+          signal
+        );
+        signal.throwIfAborted();
+        incoming.quoteReferences = replaceQuoteAttachments(incoming.quoteReferences, incoming.attachments);
+      }
+      await populateInboundImageAltTexts(this, incoming, {
+        signal,
+        logContext: {
+          conversationId: conversationRecordId(incoming),
+          incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
+          stage: "image_alt_text",
+          promptFamily: "image.alt-text"
+        }
+      });
+      signal.throwIfAborted();
+    }, PREPARE_TIMEOUT_MS, undefined, this.runtimeSignal);
   }
-
-export class RuntimeIntake {
-  constructor(private readonly host: RuntimeHost) {}
-  hydrateConversationRecords(...args: Parameters<typeof runtime_hydrateConversationRecords>) { return runtime_hydrateConversationRecords.call(this.host, ...args); }
-  performHydrateConversationRecords(...args: Parameters<typeof runtime_performHydrateConversationRecords>) { return runtime_performHydrateConversationRecords.call(this.host, ...args); }
-  handleInboundMessage(...args: Parameters<typeof runtime_handleInboundMessage>) { return runtime_handleInboundMessage.call(this.host, ...args); }
-  processSessionEvent(...args: Parameters<typeof runtime_processSessionEvent>) { return runtime_processSessionEvent.call(this.host, ...args); }
-  processIncomingReplyEvent(...args: Parameters<typeof runtime_processIncomingReplyEvent>) { return runtime_processIncomingReplyEvent.call(this.host, ...args); }
-  deliverSessionOutbox(...args: Parameters<typeof runtime_deliverSessionOutbox>) { return runtime_deliverSessionOutbox.call(this.host, ...args); }
-  requireActiveGateway(...args: Parameters<typeof runtime_requireActiveGateway>) { return runtime_requireActiveGateway.call(this.host, ...args); }
-  handleIncomingMessage(...args: Parameters<typeof runtime_handleIncomingMessage>) { return runtime_handleIncomingMessage.call(this.host, ...args); }
-  prepareIncomingMessage(...args: Parameters<typeof runtime_prepareIncomingMessage>) { return runtime_prepareIncomingMessage.call(this.host, ...args); }
-}

@@ -6,6 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { EmojiJsonlStore } from "../../adapters/filesystem/emojiJsonlStore.js";
 import type { ApplicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 import type { SunaRuntime } from "../../src/runtime.js";
 import type { AppConfig } from "../../src/types.js";
@@ -19,10 +20,12 @@ const AGENT_IDS = [
   "plana",
   "agent-b",
   "replace-agent",
+  "gif-agent",
   "invalid-agent",
   "limit-agent",
   "link-agent",
   "content-agent",
+  "docker-agent",
   "poison-agent",
   "external-agent",
   "zero-reference-agent",
@@ -38,12 +41,14 @@ let redPng = Buffer.alloc(0);
 let bluePng = Buffer.alloc(0);
 let greenPng = Buffer.alloc(0);
 let redJpeg = Buffer.alloc(0);
+let animatedGif = Buffer.alloc(0);
 let configs = new Map<string, AppConfig>();
 let runtimes = new Map<string, SunaRuntime>();
 let generatedCalls = new Map<string, ReturnType<typeof vi.fn>>();
 let applicationDataStore: (config?: Pick<AppConfig, "persona">) => ApplicationDataStore;
 let applicationDatabasePath: (config?: Pick<AppConfig, "persona">) => string;
 let closeApplicationDataStores: () => void;
+let emojiStore: (config: AppConfig) => EmojiJsonlStore;
 
 beforeAll(async () => {
   previousWorkspace = process.env.SUNABOT_WORKSPACE;
@@ -59,6 +64,7 @@ beforeAll(async () => {
     authRoutesModule,
     emojiCompositionModule,
     storeModule,
+    jsonlStoreModule,
     serviceErrorModule
   ] = await Promise.all([
     import("fastify"),
@@ -68,11 +74,13 @@ beforeAll(async () => {
     import("../../apps/api/plugins/authRoutes.js"),
     import("../../apps/api/emojiApiComposition.js"),
     import("../../adapters/sqlite/applicationDataStore.js"),
+    import("../../src/emojis/emojiStore.js"),
     import("../../packages/contracts/errors/serviceError.js")
   ]);
   applicationDataStore = storeModule.applicationDataStore;
   applicationDatabasePath = storeModule.applicationDatabasePath;
   closeApplicationDataStores = storeModule.closeApplicationDataStores;
+  emojiStore = jsonlStoreModule.emojiStore;
 
   const sharp = sharpModule.default;
   [redPng, bluePng, greenPng] = await Promise.all([
@@ -81,6 +89,7 @@ beforeAll(async () => {
     solidPng(sharp, { r: 30, g: 180, b: 80 })
   ]);
   redJpeg = await sharp(redPng).jpeg().toBuffer();
+  animatedGif = await twoFrameGif(sharp);
 
   for (const agentId of AGENT_IDS) {
     const config = fixturesModule.createAdminTestConfig(root);
@@ -127,6 +136,14 @@ beforeAll(async () => {
       if (agentId === "disabled-agent") throw new Error("Agent is disabled: disabled-agent");
       if (agentId === "not-ready-agent") throw new Error("Agent runtime is not available: not-ready-agent");
       return requireRuntime(agentId);
+    },
+    configService: {
+      readEnvelope: async () => ({ config: requireConfig("plana"), revision: "plana-r1" }),
+      patch: vi.fn()
+    },
+    agentConfigService: {
+      readEnvelope: async (agentId: string) => ({ config: requireConfig(agentId), revision: `${agentId}-r1` }),
+      patch: vi.fn()
     }
   });
   app.addHook("onClose", async () => closeApplicationDataStores());
@@ -154,21 +171,21 @@ afterAll(async () => {
 
 describe("emoji production repository and Fastify routes", () => {
   it("enforces admin authentication and CSRF before repository mutations", async () => {
-    const unauthorized = await app.inject({ method: "GET", url: "/api/emojis" });
+    const unauthorized = await app.inject({ method: "GET", url: "/api/emojis?agentId=plana" });
     const authorized = await app.inject({
       method: "GET",
-      url: "/api/emojis",
+      url: "/api/emojis?agentId=plana",
       headers: readHeaders()
     });
     const missingCsrf = await app.inject({
       method: "POST",
-      url: "/api/emojis",
+      url: "/api/emojis?agentId=plana",
       headers: { host: LOGIN_HEADERS.host, origin: LOGIN_HEADERS.origin, cookie },
       payload: uploadPayload("开心", "red.png", redPng)
     });
     const wrongOrigin = await app.inject({
       method: "POST",
-      url: "/api/emojis",
+      url: "/api/emojis?agentId=plana",
       headers: { ...mutationHeaders(), origin: "https://untrusted.example.test" },
       payload: uploadPayload("开心", "red.png", redPng)
     });
@@ -181,7 +198,7 @@ describe("emoji production repository and Fastify routes", () => {
     expect(missingCsrf.json()).toMatchObject({ error: { code: "ADMIN_CSRF_INVALID" } });
     expect(wrongOrigin.statusCode).toBe(403);
     expect(wrongOrigin.json()).toMatchObject({ error: { code: "ADMIN_ORIGIN_REJECTED" } });
-    expect(applicationDataStore(requireConfig("plana")).readEmojis()).toEqual([]);
+    expect(emojiStore(requireConfig("plana")).readAll()).toEqual([]);
   });
 
   it("isolates Agent databases, media paths and content bytes", async () => {
@@ -194,8 +211,8 @@ describe("emoji production repository and Fastify routes", () => {
     expect(applicationDatabasePath(requireConfig("plana"))).toBe(path.join(root, "business", "data", "sunabot.sqlite"));
     expect(applicationDatabasePath(requireConfig("agent-b")))
       .toBe(path.join(root, "business", "agents", "agent-b", "data", "sunabot.sqlite"));
-    await expect(fs.access(path.join(root, "business", "media", "images", planaRecord.fileName))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(root, "business", "media", "images", "agents", "agent-b", agentBRecord.fileName)))
+    await expect(fs.access(path.join(agentMediaDirectory("plana"), planaRecord.fileName))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(agentMediaDirectory("agent-b"), agentBRecord.fileName)))
       .resolves.toBeUndefined();
 
     const [planaContent, agentBContent] = await Promise.all([
@@ -211,7 +228,90 @@ describe("emoji production repository and Fastify routes", () => {
     expect((await list("agent-b")).emojis.map((item: { key: string }) => item.key)).toEqual(["开心"]);
   });
 
-  it("versions replacements, rejects stale content URLs and binds generated images", async () => {
+  it("uses one Agent Workbench and rejects retired source selectors", async () => {
+    const agentId = "docker-agent";
+    const uploadResponse = await app.inject({
+      method: "POST",
+      url: `/api/emojis?agentId=${agentId}`,
+      headers: mutationHeaders(),
+      payload: uploadPayload("认真", "emoji.png", redPng)
+    });
+    expect(uploadResponse.statusCode, uploadResponse.body).toBe(200);
+    const record = findEmoji(uploadResponse.json(), "认真");
+    expect(record).not.toHaveProperty("workbench");
+    expect(record.originalUrl).not.toContain("workbench=");
+    await expect(fs.access(path.join(
+      requireConfig(agentId).persona.agentWorkspace,
+      "workbench",
+      "emoji",
+      record.fileName
+    ))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(
+      requireConfig(agentId).persona.agentWorkspace,
+      "docker-workbench"
+    ))).rejects.toMatchObject({ code: "ENOENT" });
+
+    for (const workbench of ["native", "docker", "all"]) {
+      const retired = await app.inject({
+        method: "GET",
+        url: `/api/emojis?agentId=${agentId}&workbench=${workbench}`,
+        headers: readHeaders()
+      });
+      expect(retired.statusCode, retired.body).toBe(400);
+      expect(retired.json()).toMatchObject({
+        error: { code: "WORKBENCH_SOURCE_RETIRED", field: "workbench" }
+      });
+    }
+  });
+
+  it("keeps uploaded GIF animation through storage, content delivery, and configured resizing", async () => {
+    const agentId = "gif-agent";
+    const record = findEmoji(await upload(agentId, "挥手", "wave.gif", animatedGif), "挥手");
+    expect(record).toMatchObject({ width: 1024, height: 1024 });
+    expect(record.fileName).toMatch(/^emoji-[a-f0-9]{64}\.gif$/u);
+
+    const original = await app.inject({
+      method: "GET",
+      url: record.originalUrl,
+      headers: readHeaders()
+    });
+    expect(original.statusCode).toBe(200);
+    expect(original.headers["content-type"]).toContain("image/gif");
+    await expect(animatedMetadata(original.rawPayload)).resolves.toMatchObject({
+      format: "gif",
+      pages: 2,
+      pageHeight: 1024,
+      loop: 0,
+      delay: [90, 180]
+    });
+
+    const display = await app.inject({
+      method: "GET",
+      url: record.displayUrl,
+      headers: readHeaders()
+    });
+    expect(display.statusCode).toBe(200);
+    expect(display.headers["content-type"]).toContain("image/webp");
+
+    const config = requireConfig(agentId);
+    config.bot.emojiSendSize = 256;
+    const [assets, delivery] = await Promise.all([
+      import("../../src/emojis/emojiAssets.js"),
+      import("../../src/emojis/emojiDeliveryAssets.js")
+    ]);
+    const plan = assets.planAgentEmojiMarkers("[/挥手]", config);
+    const [resized] = await delivery.prepareEmojiDeliveryImages(config, plan);
+    expect(resized?.filePath).toMatch(/emoji-[a-f0-9]{64}\.gif$/u);
+    await expect(animatedMetadata(await fs.readFile(resized!.filePath!))).resolves.toMatchObject({
+      format: "gif",
+      pages: 2,
+      pageHeight: 256,
+      loop: 0,
+      delay: [90, 180]
+    });
+  });
+
+  it("lists and deletes old versions, renames keys, rejects stale current URLs and binds generated images", async () => {
     const first = findEmoji(await upload("replace-agent", "开心", "red.png", redPng), "开心");
     const second = findEmoji(await upload("replace-agent", "开心", "blue.png", bluePng), "开心");
     expect(second.fileName).not.toBe(first.fileName);
@@ -222,6 +322,47 @@ describe("emoji production repository and Fastify routes", () => {
     expect(stale.statusCode).toBe(409);
     expect(stale.json()).toMatchObject({ error: { code: "EMOJI_CONTENT_VERSION_MISMATCH" } });
     expect(current.statusCode).toBe(200);
+
+    const versions = await app.inject({
+      method: "GET",
+      url: `/api/emojis/${encodeURIComponent("开心")}/versions?agentId=replace-agent`,
+      headers: readHeaders()
+    });
+    expect(versions.statusCode, versions.body).toBe(200);
+    expect(versions.json().versions).toEqual([
+      expect.objectContaining({ fileName: second.fileName, current: true }),
+      expect.objectContaining({ fileName: first.fileName, current: false })
+    ]);
+    const oldVersion = versions.json().versions[1];
+    const oldContent = await app.inject({ method: "GET", url: oldVersion.originalUrl, headers: readHeaders() });
+    expect(oldContent.statusCode).toBe(200);
+
+    const deleteCurrent = await app.inject({
+      method: "DELETE",
+      url: `/api/emojis/${encodeURIComponent("开心")}/versions/${encodeURIComponent(second.fileName)}?agentId=replace-agent`,
+      headers: mutationHeaders()
+    });
+    expect(deleteCurrent.statusCode).toBe(409);
+    expect(deleteCurrent.json()).toMatchObject({ error: { code: "EMOJI_VERSION_CURRENT" } });
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/api/emojis/${encodeURIComponent("开心")}?agentId=replace-agent`,
+      headers: mutationHeaders(),
+      payload: { key: "大笑" }
+    });
+    expect(renamed.statusCode, renamed.body).toBe(200);
+    expect(findEmoji(renamed.json(), "大笑")).toMatchObject({ fileName: second.fileName });
+    expect(emojiStore(requireConfig("replace-agent")).readVersions("大笑")).toHaveLength(2);
+
+    const deletedOld = await app.inject({
+      method: "DELETE",
+      url: `/api/emojis/${encodeURIComponent("大笑")}/versions/${encodeURIComponent(first.fileName)}?agentId=replace-agent`,
+      headers: mutationHeaders()
+    });
+    expect(deletedOld.statusCode).toBe(204);
+    expect(emojiStore(requireConfig("replace-agent")).readVersions("大笑"))
+      .toEqual([expect.objectContaining({ fileName: second.fileName, current: true })]);
 
     const generated = await app.inject({
       method: "POST",
@@ -278,12 +419,12 @@ describe("emoji production repository and Fastify routes", () => {
     await expect(fs.access(agentMediaDirectory(agentId))).rejects.toMatchObject({ code: "ENOENT" });
   }, 30_000);
 
-  it("enforces the 64-key limit while allowing an explicit same-key replacement", async () => {
+  it("enforces the 64-key limit while allowing an explicit same-key replacement", { timeout: 30_000 }, async () => {
     const agentId = "limit-agent";
     const first = findEmoji(await upload(agentId, "表情0", "first.png", redPng), "表情0");
-    const store = applicationDataStore(requireConfig(agentId));
+    const store = emojiStore(requireConfig(agentId));
     for (let index = 1; index < 64; index += 1) {
-      store.upsertEmoji({
+      await store.upsert({
         key: `表情${index}`,
         fileName: first.fileName,
         source: "upload",
@@ -294,7 +435,7 @@ describe("emoji production repository and Fastify routes", () => {
         updatedAt: new Date(Date.now() + index).toISOString()
       });
     }
-    expect(store.readEmojis()).toHaveLength(64);
+    expect(store.readAll()).toHaveLength(64);
     const filesBefore = await sortedFiles(agentMediaDirectory(agentId));
     const rejected = await app.inject({
       method: "POST",
@@ -304,12 +445,12 @@ describe("emoji production repository and Fastify routes", () => {
     });
     expect(rejected.statusCode).toBe(409);
     expect(rejected.json()).toMatchObject({ error: { code: "EMOJI_LIMIT_REACHED" } });
-    expect(store.readEmojis()).toHaveLength(64);
+    expect(store.readAll()).toHaveLength(64);
     expect(await sortedFiles(agentMediaDirectory(agentId))).toEqual(filesBefore);
 
     const replaced = await upload(agentId, "表情0", "blue.png", bluePng);
     expect(findEmoji(replaced, "表情0").fileName).not.toBe(first.fileName);
-    expect(store.readEmojis()).toHaveLength(64);
+    expect(store.readAll()).toHaveLength(64);
   });
 
   it("fails closed for symlink directories, symlink files, oversized files and undecodable content", async () => {
@@ -326,7 +467,7 @@ describe("emoji production repository and Fastify routes", () => {
     });
     expect(linkedUpload.statusCode).toBe(500);
     expect(linkedUpload.json()).toMatchObject({ error: { code: "EMOJI_PATH_INVALID" } });
-    expect(applicationDataStore(requireConfig("link-agent")).readEmojis()).toEqual([]);
+    expect(emojiStore(requireConfig("link-agent")).readAll()).toEqual([]);
     expect(await fs.readdir(external)).toEqual([]);
 
     const contentAgent = "content-agent";
@@ -336,8 +477,8 @@ describe("emoji production repository and Fastify routes", () => {
     await fs.writeFile(target, redPng);
     const linkName = emojiFileName("a");
     await fs.symlink(target, path.join(contentDirectory, linkName));
-    const contentStore = applicationDataStore(requireConfig(contentAgent));
-    contentStore.upsertEmoji(emojiRecord("链接", linkName, redPng.byteLength));
+    const contentStore = emojiStore(requireConfig(contentAgent));
+    await contentStore.upsert(emojiRecord("链接", linkName, redPng.byteLength));
     const linkedContent = await content("链接", contentAgent, linkName, "original");
     expect(linkedContent.statusCode).toBe(415);
     expect(linkedContent.json()).toMatchObject({ error: { code: "EMOJI_IMAGE_INVALID" } });
@@ -346,7 +487,7 @@ describe("emoji production repository and Fastify routes", () => {
     const oversizedPath = path.join(contentDirectory, oversizedName);
     await fs.writeFile(oversizedPath, Buffer.from([0]));
     await fs.truncate(oversizedPath, 16 * 1024 * 1024 + 1);
-    contentStore.upsertEmoji(emojiRecord("过大", oversizedName, 16 * 1024 * 1024 + 1));
+    await contentStore.upsert(emojiRecord("过大", oversizedName, 16 * 1024 * 1024 + 1));
     const oversized = await content("过大", contentAgent, oversizedName, "original");
     expect(oversized.statusCode).toBe(415);
     expect(oversized.json()).toMatchObject({ error: { code: "EMOJI_IMAGE_INVALID" } });
@@ -354,7 +495,7 @@ describe("emoji production repository and Fastify routes", () => {
     const invalidName = emojiFileName("c");
     const invalidBytes = Buffer.from("not an image");
     await fs.writeFile(path.join(contentDirectory, invalidName), invalidBytes);
-    contentStore.upsertEmoji(emojiRecord("损坏", invalidName, invalidBytes.byteLength));
+    await contentStore.upsert(emojiRecord("损坏", invalidName, invalidBytes.byteLength));
     const invalid = await content("损坏", contentAgent, invalidName, "original");
     expect(invalid.statusCode).toBe(415);
     expect(invalid.json()).toMatchObject({ error: { code: "EMOJI_IMAGE_INVALID" } });
@@ -375,8 +516,8 @@ describe("emoji production repository and Fastify routes", () => {
       fs.writeFile(path.join(contentDirectory, sameSizeAName), sameSizeB),
       fs.writeFile(path.join(contentDirectory, sameSizeBName), sameSizeA)
     ]);
-    contentStore.upsertEmoji(emojiRecord("换位甲", sameSizeAName, sameSizeA.length));
-    contentStore.upsertEmoji(emojiRecord("换位乙", sameSizeBName, sameSizeB.length));
+    await contentStore.upsert(emojiRecord("换位甲", sameSizeAName, sameSizeA.length));
+    await contentStore.upsert(emojiRecord("换位乙", sameSizeBName, sameSizeB.length));
     const swappedList = await list(contentAgent);
     expect(swappedList.emojis.map((item: { key: string }) => item.key)).not.toContain("换位甲");
     expect(swappedList.emojis.map((item: { key: string }) => item.key)).not.toContain("换位乙");
@@ -450,7 +591,7 @@ describe("emoji production repository and Fastify routes", () => {
     });
     expect(response.statusCode, response.body).toBe(502);
     expect(response.json()).toMatchObject({ error: { code: "EMOJI_GENERATION_UNAVAILABLE" } });
-    expect(applicationDataStore(requireConfig("external-agent")).readEmojis()).toEqual([]);
+    expect(emojiStore(requireConfig("external-agent")).readAll()).toEqual([]);
   });
 
   it("rejects missing or unreadable Agent references before provider, database, and media writes", async () => {
@@ -476,7 +617,7 @@ function fakeRuntime(config: AppConfig, agentId: string) {
   const generateImage = vi.fn(async () => {
     const outputPath = agentId === "external-agent"
       ? path.join(root, "outside-generated.png")
-      : path.join(agentMediaDirectory(agentId), `provider-${agentId}.png`);
+      : path.join(generatedMediaDirectory(agentId), `provider-${agentId}.png`);
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await fs.writeFile(outputPath, greenPng);
     return {
@@ -575,7 +716,13 @@ function findEmoji(envelope: { emojis: Array<Record<string, unknown>> }, key: st
 }
 
 function agentMediaDirectory(agentId: string) {
-  return path.join(root, "business", "media", "images", "agents", agentId);
+  return path.join(root, "business", "agents", agentId, "workbench/emoji");
+}
+
+function generatedMediaDirectory(agentId: string) {
+  return agentId === "plana"
+    ? path.join(root, "business/media/images")
+    : path.join(root, "business/media/images/agents", agentId);
 }
 
 function referencePath(agentId: string) {
@@ -610,4 +757,22 @@ async function solidPng(
   return sharp({
     create: { width: 24, height: 32, channels: 3, background }
   }).png().toBuffer();
+}
+
+async function twoFrameGif(sharp: typeof import("sharp")["default"]) {
+  const pixels = Buffer.alloc(24 * 64 * 4);
+  for (let offset = 0; offset < pixels.length / 2; offset += 4) {
+    pixels.set([240, 80, 80, 255], offset);
+  }
+  for (let offset = pixels.length / 2; offset < pixels.length; offset += 4) {
+    pixels.set([80, 80, 240, 255], offset);
+  }
+  return sharp(pixels, {
+    raw: { width: 24, height: 64, channels: 4, pageHeight: 32 }
+  }).gif({ delay: [90, 180], loop: 0 }).toBuffer();
+}
+
+async function animatedMetadata(bytes: Buffer) {
+  const sharp = (await import("sharp")).default;
+  return sharp(bytes, { animated: true }).metadata();
 }

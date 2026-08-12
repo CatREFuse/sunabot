@@ -1,5 +1,6 @@
 import { computed, readonly, shallowRef } from "vue";
 import type { AgentAccount, AgentAvatarInput, AgentSummary } from "../types";
+import type { AgentConfigImportPayload } from "./useAgentConfigImport";
 import { apiRequest } from "./useAdminApi";
 import { activeAgentId, setActiveAgentId } from "./agentScope";
 
@@ -45,7 +46,12 @@ export function useAgents() {
     setActiveAgentId(agent.id);
   }
 
-  async function create(input: { id: string; name: string; avatar?: { fileName: string; dataBase64: string } }) {
+  async function create(input: {
+    id: string;
+    name: string;
+    avatar?: { fileName: string; dataBase64: string };
+    import?: AgentConfigImportPayload;
+  }) {
     const created = await apiRequest<AgentSummary>("/api/agents", {
       method: "POST",
       body: JSON.stringify(input)

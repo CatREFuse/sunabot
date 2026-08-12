@@ -105,39 +105,36 @@ describe("NapCat runtime layout", () => {
       .rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("keeps the Core image free of NapCat and confines NapCat mounts to runtime state", async () => {
-    const [coreDockerfile, napcatDockerfile, compose, entrypoint] = await Promise.all([
-      fs.readFile(path.join(root, "deploy/docker/Dockerfile"), "utf8"),
-      fs.readFile(path.join(root, "deploy/docker/Dockerfile.napcat"), "utf8"),
-      fs.readFile(path.join(root, "deploy/docker/compose.yml"), "utf8"),
-      fs.readFile(path.join(root, "deploy/docker/napcat-entrypoint.sh"), "utf8")
+  it("keeps Docker exclusive to NapCat and confines account mounts to runtime state", async () => {
+    const [contract, compose, entrypoint] = await Promise.all([
+      readJson(path.join(root, "deploy/runtime-contract.json")),
+      fs.readFile(path.join(root, "deploy/napcat/compose.yml"), "utf8"),
+      fs.readFile(path.join(root, "deploy/napcat/napcat-entrypoint.sh"), "utf8")
     ]);
-    expect(coreDockerfile).toContain('org.opencontainers.image.title="sunabot-core"');
-    expect(coreDockerfile).toContain('bubblewrap="${BUBBLEWRAP_VERSION}"');
-    expect(coreDockerfile.toLowerCase()).not.toContain("libreoffice");
-    expect(coreDockerfile).not.toContain("mlikiowa/napcat-docker");
-    expect(coreDockerfile).not.toContain("/opt/QQ");
-    expect(coreDockerfile).not.toContain("/app/napcat");
+    await expect(fs.access(path.join(root, "deploy/docker"))).rejects.toMatchObject({ code: "ENOENT" });
 
-    expect(napcatDockerfile).toContain("mlikiowa/napcat-docker:v4.15.0@sha256:");
-    expect(napcatDockerfile).toContain("sunabot-napcat-entrypoint");
+    const capabilities = asRecord(contract.capabilities);
+    expect(asRecord(capabilities.workspaceBash).managedBy).toBe("native");
+    expect(asRecord(capabilities.mcp).managedBy).toBe("native");
+    expect(asRecord(capabilities.skillScript).managedBy).toBe("native");
+    expect(asRecord(contract.napcat).managedBy).toBe("docker");
+    expect(asRecord(contract.napcat).composeFile).toBe("deploy/napcat/compose.yml");
+
+    const services = compose.slice(compose.indexOf("services:"), compose.indexOf("\nnetworks:"));
+    expect(services.match(/^  [a-z0-9_-]+:/gmu)).toEqual(["  napcat:"]);
+    expect(services).toContain("pull_policy: never");
+    expect(services).toContain("image: ${NAPCAT_IMAGE:");
+    expect(services).not.toContain("build:");
     expect(entrypoint).toContain('cp -an "$temporary_root/config/." "$config_root/"');
-    expect(entrypoint).toContain('if [[ -f "$manual_login_marker" ]]');
+    expect(entrypoint).toContain('[[ ! -f "$manual_login_marker" ]] || requested_account=');
     expect(entrypoint).toContain("export ACCOUNT=");
 
-    const coreService = compose.slice(compose.indexOf("  core:"), compose.indexOf("  napcat:"));
-    const napcatService = compose.slice(
-      compose.indexOf("  napcat:"),
-      compose.lastIndexOf("\nnetworks:\n")
-    );
-    expect(coreService).toContain('profiles: ["core-docker"]');
-    expect(coreService).toContain(":/srv/sunabot/workspace");
-    expect(napcatService).not.toContain("platform: linux/amd64");
-    expect(napcatService).not.toContain("env_file:");
-    expect(napcatService).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/config-full:/app/napcat/config");
-    expect(napcatService).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/qq:/app/.config/QQ");
-    expect(napcatService).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/plugins:/app/napcat/plugins");
-    expect(napcatService).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}:/app/napcat/cache");
+    expect(services).not.toContain("platform: linux/amd64");
+    expect(services).not.toContain("env_file:");
+    expect(services).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/config-full:/app/napcat/config");
+    expect(services).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/qq:/app/.config/QQ");
+    expect(services).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/plugins:/app/napcat/plugins");
+    expect(services).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}:/app/napcat/cache");
   });
 
   it("provisions writable native component cache paths", async () => {

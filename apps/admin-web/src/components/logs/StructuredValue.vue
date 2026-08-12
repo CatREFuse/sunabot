@@ -36,7 +36,7 @@ const type = computed(() => Array.isArray(props.value) ? "array" : typeof props.
 .structured { min-width: 0; border-bottom: 1px solid rgb(var(--color-line)); }
 .structured__summary { display: grid; grid-template-columns: 16px minmax(112px, .55fr) minmax(0, 1.45fr); gap: 12px; align-items: center; padding: 8px 0; cursor: pointer; list-style: none; }
 .structured__summary::-webkit-details-marker { display: none; }
-.structured__summary:focus-visible { outline: 1px solid rgb(var(--color-interactive)); outline-offset: 2px; }
+.structured__summary:focus-visible { outline: 1px solid rgb(var(--color-display)); outline-offset: 2px; }
 .structured__primitive { display: grid; grid-template-columns: minmax(112px, .55fr) minmax(0, 1.45fr); gap: 16px; align-items: start; min-height: 36px; padding: 8px 0; }
 .structured__toggle { color: rgb(var(--color-mute)); font-size: 16px; line-height: 20px; transition: transform 120ms ease; }
 .structured[open] > summary > .structured__toggle { transform: rotate(90deg); }
@@ -44,7 +44,7 @@ const type = computed(() => Array.isArray(props.value) ? "array" : typeof props.
 .structured__count { color: rgb(var(--color-disabled)); font-family: "Space Mono", monospace; font-size: 10px; }
 .structured__count--root { grid-column: 2 / -1; }
 .structured__value { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; color: rgb(var(--color-ink)); font-size: 12px; }
-.structured__value[data-type="number"], .structured__value[data-type="boolean"] { color: rgb(var(--color-interactive)); font-family: "Space Mono", monospace; }
+.structured__value[data-type="number"], .structured__value[data-type="boolean"] { color: rgb(var(--color-display)); font-family: "Space Mono", monospace; }
 .structured__children { margin-left: 12px; padding-left: 12px; border-left: 1px solid rgb(var(--color-visible)); }
 .structured__empty { display: block; padding: 8px 0; color: rgb(var(--color-disabled)); font-family: "Space Mono", monospace; font-size: 10px; }
 @media (max-width: 560px) {

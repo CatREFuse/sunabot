@@ -1,5 +1,9 @@
-import type { ImageQuality, ImageResult } from "../../../src/types.js";
-import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
+import type { ImageQuality } from "../../../packages/contracts/admin/public.js";
+import type { ImageResult } from "../../../packages/contracts/media/media.js";
+import {
+  AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS,
+  type ProviderLogContext
+} from "../../../packages/contracts/model/modelGateway.js";
 import {
   ImageGenerationHttpError,
   ImageGenerationTransportError,
@@ -28,19 +32,47 @@ export async function generateProviderImage(
   size: string,
   quality: ImageQuality,
   referenceImageUrls: string[] = [],
-  logContext?: ProviderLogContext
+  logContext?: ProviderLogContext,
+  signal?: AbortSignal
 ): Promise<ImageResult> {
   if (context.provider.kind !== "openai-official" && context.provider.kind !== "codex-responses") {
     throw new Error("当前 Provider 不支持 Responses 图像生成；请使用 OpenAI 官方或 Codex 订阅。");
   }
+  signal?.throwIfAborted();
   const imageModel = context.provider.imageModel?.trim() || DEFAULT_IMAGE_MODEL;
   const imageSize = normalizeImageSize(size);
-  const content = await buildImageGenerationContent(prompt, referenceImageUrls);
-
-  if (context.provider.kind === "codex-responses") {
-    return generateCodexImage(context, content, imageModel, imageSize, quality, referenceImageUrls, logContext);
+  const modelSignal = imageGenerationSignal(signal);
+  const content = await buildImageGenerationContent(prompt, referenceImageUrls, { signal: modelSignal });
+  modelSignal.throwIfAborted();
+  const expectedReferenceImageCount = uniqueStrings(referenceImageUrls).slice(0, 4).length;
+  const resolvedReferenceImageCount = countInputImages(content);
+  if (resolvedReferenceImageCount !== expectedReferenceImageCount) {
+    throw new Error(
+      `必需参考图不可用，图片生成已取消（需要 ${expectedReferenceImageCount} 张，实际解析 ${resolvedReferenceImageCount} 张）。`
+    );
   }
-  return generateOpenAIImage(context, content, imageModel, imageSize, quality, referenceImageUrls, logContext);
+  if (context.provider.kind === "codex-responses") {
+    return generateCodexImage(
+      context,
+      content,
+      imageModel,
+      imageSize,
+      quality,
+      referenceImageUrls,
+      logContext,
+      modelSignal
+    );
+  }
+  return generateOpenAIImage(
+    context,
+    content,
+    imageModel,
+    imageSize,
+    quality,
+    referenceImageUrls,
+    logContext,
+    modelSignal
+  );
 }
 
 async function generateOpenAIImage(
@@ -50,7 +82,8 @@ async function generateOpenAIImage(
   imageSize: string,
   quality: ImageQuality,
   referenceImageUrls: string[],
-  logContext?: ProviderLogContext
+  logContext: ProviderLogContext | undefined,
+  signal: AbortSignal
 ) {
   const client = context.createResponsesClient({ maxRetries: 0 });
   const requestBody = {
@@ -82,9 +115,17 @@ async function generateOpenAIImage(
     resolvedReferenceImageCount: countInputImages(content)
   }, logContext);
   const result = await runImageGenerationWithRetry(async (attemptContext) => {
+    signal.throwIfAborted();
     await context.logger.request("image.generate", requestBody, { ...metadata, ...attemptContext });
-    return client.responses.create(requestBody as never);
+    signal.throwIfAborted();
+    try {
+      return await client.responses.create(requestBody as never, { signal });
+    } catch (error) {
+      if (signal.aborted) throw signal.reason ?? error;
+      throw error;
+    }
   }, {
+    signal,
     sleep: context.options.imageRetrySleep,
     onAttemptFailure: (error, failureContext) => context.logger.imageAttemptFailure(
       "image.generate",
@@ -99,14 +140,18 @@ async function generateOpenAIImage(
     maxAttempts: result.maxAttempts
   };
   try {
-    const image = context.imageWriter.write(result.value, imageModel, imageSize);
+    signal.throwIfAborted();
+    const image = await context.imageWriter.write(result.value, imageModel, imageSize);
+    signal.throwIfAborted();
     await context.logger.response("image.generate", {
       ok: true,
       summary: summarizeResponsesPayload(result.value, ""),
       image
     }, finalMetadata);
+    signal.throwIfAborted();
     return image;
   } catch (error) {
+    if (signal.aborted) throw signal.reason ?? error;
     await context.logger.response("image.generate", {
       ok: false,
       error: errorMessage(error),
@@ -125,9 +170,12 @@ async function generateCodexImage(
   size: string,
   quality: ImageQuality,
   referenceImageUrls: string[],
-  logContext?: ProviderLogContext
+  logContext: ProviderLogContext | undefined,
+  signal: AbortSignal
 ) {
-  const apiKey = context.getApiKey();
+  signal.throwIfAborted();
+  const apiKey = await context.getApiKeyAsync();
+  signal.throwIfAborted();
   if (!apiKey) throw new Error("Codex 未登录。请先运行 codex login，或设置 CODEX_ACCESS_TOKEN。");
 
   const requestBody = {
@@ -163,8 +211,11 @@ async function generateCodexImage(
   }, logContext);
   const result = await runImageGenerationWithRetry(async (attemptContext) => {
     const attemptMetadata = { ...metadata, ...attemptContext };
+    signal.throwIfAborted();
     await context.logger.request("codex.image.generate", requestBody, attemptMetadata);
+    signal.throwIfAborted();
     let response: Response;
+    let text: string;
     try {
       response = await fetch(normalizeCodexResponsesUrl(context.provider.baseUrl), {
         method: "POST",
@@ -173,14 +224,17 @@ async function generateCodexImage(
           authorization: `Bearer ${apiKey}`,
           ...codexBackendHeaders(apiKey)
         },
-        body: JSON.stringify(requestBody)
+        body: JSON.stringify(requestBody),
+        signal
       });
+      text = await response.text();
+      signal.throwIfAborted();
     } catch (error) {
+      if (signal.aborted) throw signal.reason ?? error;
       if (isImageGenerationCancellation(error)) throw error;
       throw new ImageGenerationTransportError(error);
     }
 
-    const text = await response.text();
     const payload = parseResponsesSsePayload(text) ?? parseJson(text);
     if (!response.ok) {
       throw new ImageGenerationHttpError(
@@ -191,6 +245,7 @@ async function generateCodexImage(
     }
     return { payload, text, status: response.status };
   }, {
+    signal,
     sleep: context.options.imageRetrySleep,
     onAttemptFailure: (error, failureContext) => context.logger.imageAttemptFailure(
       "codex.image.generate",
@@ -205,15 +260,19 @@ async function generateCodexImage(
     maxAttempts: result.maxAttempts
   };
   try {
-    const image = context.imageWriter.write(result.value.payload, imageModel, size);
+    signal.throwIfAborted();
+    const image = await context.imageWriter.write(result.value.payload, imageModel, size);
+    signal.throwIfAborted();
     await context.logger.response("codex.image.generate", {
       ok: true,
       status: result.value.status,
       summary: summarizeResponsesPayload(result.value.payload, result.value.text),
       image
     }, finalMetadata);
+    signal.throwIfAborted();
     return image;
   } catch (error) {
+    if (signal.aborted) throw signal.reason ?? error;
     await context.logger.response("codex.image.generate", {
       ok: false,
       status: result.value.status,
@@ -224,6 +283,10 @@ async function generateCodexImage(
     }, finalMetadata);
     throw error;
   }
+}
+
+function imageGenerationSignal(parent?: AbortSignal) {
+  return parent ?? AbortSignal.timeout(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS);
 }
 
 function normalizeImageSize(value: string) {

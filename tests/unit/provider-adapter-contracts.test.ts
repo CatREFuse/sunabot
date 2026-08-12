@@ -65,6 +65,29 @@ describe("provider adapter ports", () => {
     }
   });
 
+  it("prefers the refreshable Codex authorization file over a stale configured token", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-provider-auth-priority-"));
+    const workspace = path.join(root, "external-workspace");
+    const authFile = path.join(workspace, "secrets", "codex", "auth.json");
+    const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1_000) + 3_600 })).toString("base64url");
+    const token = `${header}.${payload}.signature`;
+    try {
+      await fs.mkdir(path.dirname(authFile), { recursive: true });
+      await fs.writeFile(authFile, JSON.stringify({ tokens: { access_token: token } }), "utf8");
+      vi.stubEnv("SUNABOT_WORKSPACE", workspace);
+      vi.stubEnv("OPEN_ARONA_CODEX_AUTH_FILE", "");
+      vi.stubEnv("SUNABOT_TEST_CODEX_ACCESS_TOKEN", "stale-configured-token");
+      vi.resetModules();
+      const { resolveProviderApiKeyAsync } = await import("../../adapters/model/provider/transport.js");
+
+      await expect(resolveProviderApiKeyAsync(codexProvider())).resolves.toBe(token);
+    } finally {
+      vi.resetModules();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("decodes Codex SSE output items and completed text", () => {
     const message = {
       type: "message",

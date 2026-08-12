@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MODEL_CATALOG,
   resolveModelReasoningEffort
-} from "../../src/admin/models.js";
+} from "../../packages/contracts/admin/models.js";
 
 describe("model catalog", () => {
   it("exposes the required model IDs in product order", () => {

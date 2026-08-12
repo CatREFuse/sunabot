@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildUserPrompt,
-  hasIncomingReplyContent,
+  hasIncomingReplyContent
+} from "../../src/runtime/conversationMemoryHelpers.js";
+import {
   sanitizeAttachmentForPersistence,
   selectRelevantConversationAttachments
-} from "../../src/runtime.js";
+} from "../../src/runtime/messagingAttachmentHelpers.js";
 import {
   extractOneBotMessageDetails,
   parseOneBotInboundMessage
@@ -16,18 +18,13 @@ import type {
 } from "../../src/types.js";
 import {
   ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES,
-  ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES,
-  ONEBOT_UNAUTHENTICATED_MAX_PAYLOAD_BYTES
+  ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES
 } from "../../adapters/onebot/onebotGateway.js";
-import { FILE_SIZE_LIMIT_BYTES } from "../../services/media/attachments/limits.js";
 
 describe("attachment runtime integration", () => {
-  it("allows an authenticated bounded OneBot payload large enough for a 256 MiB Base64 fallback", () => {
-    const maximumBase64Characters = 4 * Math.ceil(FILE_SIZE_LIMIT_BYTES / 3);
-    expect(ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES).toBeGreaterThan(maximumBase64Characters + 1024 * 1024);
-    expect(ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES).toBe(384 * 1024 * 1024);
-    expect(ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES).toBeGreaterThan(maximumBase64Characters + 1024 * 1024);
-    expect(ONEBOT_UNAUTHENTICATED_MAX_PAYLOAD_BYTES).toBe(100 * 1024 * 1024);
+  it("caps ordinary OneBot events and rejects large inline media payloads", () => {
+    expect(ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES).toBe(16 * 1024 * 1024);
+    expect(ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES).toBe(8 * 1024 * 1024);
   });
 
   it("parses a current array-message file segment", () => {
@@ -52,7 +49,7 @@ describe("attachment runtime integration", () => {
       ]
     });
 
-    expect(incoming?.text).toBe("请读一下");
+    expect(incoming?.text).toBe("请读一下 [文件：需求说明.docx]");
     expect(incoming?.attachments).toEqual([
       expect.objectContaining({
         id: expect.stringMatching(/^attachment_[a-f0-9]{20}$/),
@@ -77,18 +74,92 @@ describe("attachment runtime integration", () => {
       raw_message: "[CQ:file,file=cq-file-id,name=发布计划.pdf,file_size=4096,busid=103]"
     });
 
-    expect(incoming?.text).toBe("");
+    expect(incoming?.text).toBe("[文件：发布计划.pdf]");
     expect(incoming?.attachments).toEqual([
       expect.objectContaining({
         source: "message",
         status: "pending",
         name: "发布计划.pdf",
-        fileId: "cq-file-id",
+        fileToken: "cq-file-id",
         sizeBytes: 4096,
         busId: 103,
         userId: 2002
       })
     ]);
+  });
+
+  it("keeps OneBot file_id, file token, temporary URL and display name separate", () => {
+    const incoming = parseOneBotInboundMessage({
+      post_type: "message",
+      message_type: "private",
+      message_id: 1004,
+      user_id: 2002,
+      message: [{
+        type: "file",
+        data: {
+          name: "显示名称.pdf",
+          file_id: "protocol-file-id",
+          file: "protocol-file-token",
+          url: "https://cdn.example.test/temporary.pdf",
+          file_size: 64
+        }
+      }]
+    });
+
+    expect(incoming?.attachments[0]).toMatchObject({
+      name: "显示名称.pdf",
+      fileId: "protocol-file-id",
+      fileToken: "protocol-file-token",
+      url: "https://cdn.example.test/temporary.pdf",
+      sizeBytes: 64
+    });
+  });
+
+  it("rejects path-like and non-token file identifiers before runtime and persistence", () => {
+    const unsafeIdentifiers = [
+      "/private/tmp/qq-private.pdf",
+      "C:\\NapCat\\temp\\qq-private.pdf",
+      "relative\\windows\\qq-private.pdf",
+      "https://qq.example.test/temporary.pdf",
+      "protocol-token\u0000suffix"
+    ];
+
+    for (const identifier of unsafeIdentifiers) {
+      const incoming = parseOneBotInboundMessage({
+        post_type: "message",
+        message_type: "private",
+        message_id: 1005,
+        user_id: 2002,
+        message: [{
+          type: "file",
+          data: {
+            name: "显示名称.pdf",
+            file_id: identifier,
+            file: identifier
+          }
+        }]
+      });
+      expect(incoming?.attachments[0]).not.toHaveProperty("fileId");
+      expect(incoming?.attachments[0]).not.toHaveProperty("fileToken");
+
+      const persisted = sanitizeAttachmentForPersistence({
+        ...readyAttachment(`unsafe-${unsafeIdentifiers.indexOf(identifier)}`, "显示名称.pdf"),
+        fileId: identifier,
+        fileToken: identifier
+      });
+      expect(persisted.fileId).toBeUndefined();
+      expect(persisted.fileToken).toBeUndefined();
+    }
+
+    const persistedTokens = sanitizeAttachmentForPersistence({
+      ...readyAttachment("safe-identifiers", "显示名称.pdf"),
+      fileId: "protocol-file-id",
+      fileToken: "protocol-file-token"
+    });
+    expect(persistedTokens).toMatchObject({
+      fileId: "protocol-file-id",
+      fileToken: "protocol-file-token"
+    });
   });
 
   it("extracts a quoted file from a get_msg response", () => {
@@ -114,7 +185,7 @@ describe("attachment runtime integration", () => {
       }
     }, { source: "quote" });
 
-    expect(details.text).toBe("原文件");
+    expect(details.text).toBe("原文件 [文件：会议材料.pptx]");
     expect(details.sender.displayName).toBe("引用用户");
     expect(details.attachments).toEqual([
       expect.objectContaining({
@@ -141,7 +212,7 @@ describe("attachment runtime integration", () => {
     });
 
     expect(incoming).toBeDefined();
-    expect(incoming?.text).toBe("");
+    expect(incoming?.text).toBe("[文件：说明.txt]");
     expect(hasIncomingReplyContent(incoming!)).toBe(true);
   });
 

@@ -56,15 +56,15 @@ describe("SelfieReferenceRepository", () => {
     });
     expect(created.images[0]!.id).toMatch(/^[a-f0-9]{64}$/);
 
-    const storedPath = path.join(workspace, "selfie", created.images[0]!.fileName);
+    const storedPath = path.join(selfieDirectoryFor(workspace), created.images[0]!.fileName);
     const stored = await fs.readFile(storedPath);
     const mode = (await fs.stat(storedPath)).mode & 0o777;
     expect(stored.equals(bytes)).toBe(true);
     expect(mode).toBe(0o600);
-    expect((await fs.readdir(path.join(workspace, "selfie"))).some((name) => name.endsWith(".tmp"))).toBe(false);
-    const manifestPath = path.join(workspace, "selfie", SELFIE_REFERENCE_MANIFEST_FILE);
+    expect((await fs.readdir(selfieDirectoryFor(workspace))).some((name) => name.endsWith(".tmp"))).toBe(false);
+    const manifestPath = path.join(selfieDirectoryFor(workspace), SELFIE_REFERENCE_MANIFEST_FILE);
     expect((await fs.stat(manifestPath)).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(await fs.readFile(manifestPath, "utf8"))).toEqual({
+    expect(await readJsonlManifest(manifestPath)).toEqual({
       schemaVersion: 1,
       references: [{
         id: created.images[0]!.id,
@@ -132,8 +132,8 @@ describe("SelfieReferenceRepository", () => {
   });
 
   it("bounds legacy scans before opening any of ten image files", async () => {
-    const selfieDirectory = path.join(workspace, "selfie");
-    await fs.mkdir(selfieDirectory);
+    const selfieDirectory = selfieDirectoryFor(workspace);
+    await fs.mkdir(selfieDirectory, { recursive: true });
     for (let index = 0; index < 10; index += 1) {
       await fs.writeFile(
         path.join(selfieDirectory, `${index}.png`),
@@ -150,7 +150,7 @@ describe("SelfieReferenceRepository", () => {
   });
 
   it("rejects an image-extension directory before opening files or writing a manifest", async () => {
-    const selfieDirectory = path.join(workspace, "selfie");
+    const selfieDirectory = selfieDirectoryFor(workspace);
     await fs.mkdir(path.join(selfieDirectory, "nested.png"), { recursive: true });
     const openFile = vi.spyOn(fs, "open");
     const writeFile = vi.spyOn(fs, "writeFile");
@@ -166,33 +166,54 @@ describe("SelfieReferenceRepository", () => {
   });
 
   it("self-heals missing and inconsistent manifests only through the legacy content path", async () => {
-    const selfieDirectory = path.join(workspace, "selfie");
-    await fs.mkdir(selfieDirectory);
+    const selfieDirectory = selfieDirectoryFor(workspace);
+    await fs.mkdir(selfieDirectory, { recursive: true });
     const bytes = await image(24, 24, "#d8edff");
     const id = sha256(bytes);
     const fileName = `泳装-${id}.png`;
     await fs.writeFile(path.join(selfieDirectory, fileName), bytes);
 
     await expect(repository.content(id, "original")).resolves.toMatchObject({ contentType: "image/png" });
-    expect(JSON.parse(await fs.readFile(path.join(selfieDirectory, SELFIE_REFERENCE_MANIFEST_FILE), "utf8")))
+    expect(await readJsonlManifest(path.join(selfieDirectory, SELFIE_REFERENCE_MANIFEST_FILE)))
       .toEqual({ schemaVersion: 1, references: [{ id, fileName, note: "泳装" }] });
 
     const staleId = "f".repeat(64);
-    await fs.writeFile(path.join(selfieDirectory, SELFIE_REFERENCE_MANIFEST_FILE), JSON.stringify({
-      schemaVersion: 1,
-      references: [{ id: staleId, fileName, note: "旧备注" }]
-    }));
+    await writeJsonlManifest(
+      path.join(selfieDirectory, SELFIE_REFERENCE_MANIFEST_FILE),
+      [{ id: staleId, fileName, note: "旧备注" }]
+    );
     await expect(repository.content(staleId, "original")).rejects.toMatchObject({
       statusCode: 404,
       code: "SELFIE_REFERENCE_NOT_FOUND"
     });
-    expect(JSON.parse(await fs.readFile(path.join(selfieDirectory, SELFIE_REFERENCE_MANIFEST_FILE), "utf8")))
+    expect(await readJsonlManifest(path.join(selfieDirectory, SELFIE_REFERENCE_MANIFEST_FILE)))
       .toEqual({ schemaVersion: 1, references: [{ id, fileName, note: "泳装" }] });
   });
 
+  it("reads a legacy JSON manifest once and publishes the canonical JSONL catalog", async () => {
+    const selfieDirectory = selfieDirectoryFor(workspace);
+    await fs.mkdir(selfieDirectory, { recursive: true });
+    const bytes = await image(24, 24, "#d8edff");
+    const id = sha256(bytes);
+    const fileName = `常服-${id}.png`;
+    await fs.writeFile(path.join(selfieDirectory, fileName), bytes);
+    await fs.writeFile(path.join(selfieDirectory, "references.json"), JSON.stringify({
+      schemaVersion: 1,
+      references: [{ id, fileName, note: "常服" }]
+    }));
+
+    await expect(repository.list()).resolves.toMatchObject({
+      images: [{ id, fileName, note: "常服" }]
+    });
+    await expect(readJsonlManifest(path.join(selfieDirectory, SELFIE_REFERENCE_MANIFEST_FILE)))
+      .resolves.toEqual({ schemaVersion: 1, references: [{ id, fileName, note: "常服" }] });
+    await expect(fs.lstat(path.join(selfieDirectory, "references.json")))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("migrates legacy image names to deterministic editable notes", async () => {
-    const selfieDirectory = path.join(workspace, "selfie");
-    await fs.mkdir(selfieDirectory);
+    const selfieDirectory = selfieDirectoryFor(workspace);
+    await fs.mkdir(selfieDirectory, { recursive: true });
     const swimsuit = await image(48, 48, "#d8edff");
     const maid = await image(48, 48, "#fff0f6");
     const swimsuitId = sha256(swimsuit);
@@ -206,7 +227,7 @@ describe("SelfieReferenceRepository", () => {
       { id: swimsuitId, note: "泳装" }
     ]));
     expect(migrated.images).toHaveLength(2);
-    const manifest = JSON.parse(await fs.readFile(path.join(selfieDirectory, SELFIE_REFERENCE_MANIFEST_FILE), "utf8"));
+    const manifest = await readJsonlManifest(path.join(selfieDirectory, SELFIE_REFERENCE_MANIFEST_FILE));
     expect(manifest.references.map(({ id, note }: { id: string; note: string }) => ({ id, note }))).toEqual(expect.arrayContaining([
       { id: maidId, note: "女仆装" },
       { id: swimsuitId, note: "泳装" }
@@ -273,12 +294,12 @@ describe("SelfieReferenceRepository", () => {
       field: "note"
     });
     expect(writeFile).not.toHaveBeenCalled();
-    await expect(fs.lstat(path.join(workspace, "selfie"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(selfieDirectoryFor(workspace))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("fails closed for malformed, unsafe, or symbolic-link manifests", async () => {
-    const selfieDirectory = path.join(workspace, "selfie");
-    await fs.mkdir(selfieDirectory);
+    const selfieDirectory = selfieDirectoryFor(workspace);
+    await fs.mkdir(selfieDirectory, { recursive: true });
     const bytes = await image(16, 16, "#ffffff");
     const id = sha256(bytes);
     const fileName = `常服-${id}.png`;
@@ -353,17 +374,18 @@ describe("SelfieReferenceRepository", () => {
   it("fails closed for symbolic-link directories and files", async () => {
     const outside = path.join(root, "outside");
     await fs.mkdir(outside);
-    await fs.symlink(outside, path.join(workspace, "selfie"));
+    await fs.mkdir(path.join(workspace, "workbench"), { recursive: true });
+    await fs.symlink(outside, selfieDirectoryFor(workspace));
     await expect(repository.list()).rejects.toMatchObject({
       statusCode: 400,
       code: "SELFIE_REFERENCE_PATH_INVALID"
     });
 
-    await fs.rm(path.join(workspace, "selfie"));
-    await fs.mkdir(path.join(workspace, "selfie"));
+    await fs.rm(selfieDirectoryFor(workspace));
+    await fs.mkdir(selfieDirectoryFor(workspace));
     const outsideImage = path.join(outside, "outside.png");
     await fs.writeFile(outsideImage, await image(16, 16, "#ffffff"));
-    await fs.symlink(outsideImage, path.join(workspace, "selfie", "linked.png"));
+    await fs.symlink(outsideImage, path.join(selfieDirectoryFor(workspace), "linked.png"));
     await expect(repository.list()).rejects.toMatchObject({
       statusCode: 400,
       code: "SELFIE_REFERENCE_PATH_INVALID"
@@ -537,8 +559,8 @@ describe("selfie reference routes", () => {
     expect(reference.displayUrl).toBe(
       `/api/selfie-references/${reference.id}/content?variant=display&agentId=arona`
     );
-    expect(await fs.readdir(path.join(aronaWorkspace, "selfie"))).toHaveLength(2);
-    expect(await fs.readdir(path.join(planaWorkspace, "selfie"))).toHaveLength(2);
+    expect(await fs.readdir(selfieDirectoryFor(aronaWorkspace))).toHaveLength(2);
+    expect(await fs.readdir(selfieDirectoryFor(planaWorkspace))).toHaveLength(2);
 
     const [aronaList, planaList] = await Promise.all([
       app.inject({ method: "GET", url: "/api/selfie-references?agentId=arona" }),
@@ -586,6 +608,52 @@ describe("selfie reference routes", () => {
       .toBe(planaReference.id);
     await app.close();
   });
+
+  it("uses one canonical selfie catalog and rejects retired source parameters", async () => {
+    const config = createAdminTestConfig(root);
+    const repository = new SelfieReferenceRepository({
+      getConfig: () => config,
+      mutex: new AdminMutationMutex()
+    });
+    const app = Fastify();
+    registerSelfieReferenceRoutes(app, {
+      repository,
+      getRepository: () => repository
+    });
+
+    const bytes = await image(64, 64, "#eff8ff");
+    const upload = await app.inject({
+      method: "POST",
+      url: "/api/selfie-references?agentId=plana",
+      payload: {
+        fileName: "canonical.png",
+        dataBase64: bytes.toString("base64"),
+        note: "统一参考图"
+      }
+    });
+    expect(upload.statusCode, upload.body).toBe(201);
+    const reference = upload.json().images[0];
+    expect(reference).not.toHaveProperty("workbench");
+    expect(reference.displayUrl).not.toContain("workbench=");
+
+    const list = await app.inject({ method: "GET", url: "/api/selfie-references?agentId=plana" });
+    expect(list.json().images).toEqual([expect.objectContaining({ note: "统一参考图" })]);
+    expect(list.json().images[0]).not.toHaveProperty("workbench");
+    const retired = await app.inject({
+      method: "GET",
+      url: "/api/selfie-references?agentId=plana&workbench=all"
+    });
+    expect(retired.statusCode).toBe(400);
+    const content = await app.inject({ method: "GET", url: reference.displayUrl });
+    expect(content.statusCode).toBe(200);
+    await expect(fs.access(path.join(
+      config.persona.agentWorkspace,
+      "workbench",
+      "selfie",
+      reference.fileName
+    ))).resolves.toBeUndefined();
+    await app.close();
+  });
 });
 
 async function image(width: number, height: number, background: string) {
@@ -596,4 +664,35 @@ async function image(width: number, height: number, background: string) {
 
 function sha256(bytes: Buffer) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+
+function selfieDirectoryFor(workspace: string) {
+  return path.join(workspace, "workbench/selfie");
+}
+
+async function readJsonlManifest(filePath: string) {
+  const content = await fs.readFile(filePath, "utf8");
+  const references = content
+    ? content.trimEnd().split("\n").map((line) => {
+        const { schemaVersion, ...reference } = JSON.parse(line) as {
+          schemaVersion: number;
+          id: string;
+          fileName: string;
+          note: string;
+        };
+        expect(schemaVersion).toBe(1);
+        return reference;
+      })
+    : [];
+  return { schemaVersion: 1, references };
+}
+
+async function writeJsonlManifest(
+  filePath: string,
+  references: Array<{ id: string; fileName: string; note: string }>
+) {
+  const content = references.length
+    ? `${references.map((reference) => JSON.stringify({ schemaVersion: 1, ...reference })).join("\n")}\n`
+    : "";
+  await fs.writeFile(filePath, content);
 }

@@ -16,11 +16,9 @@ import {
   MAX_RUNTIME_REPLY_FOLLOW_UP_SNAPSHOTS,
   replyDebounceEnvelope,
   toolCompletionEnvelope,
-  type GroupThreadContextSnapshotV1,
   type RuntimeIncomingReplyEventPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
 
-const THREAD_ID = "thread:33333333333333333333333333333333";
 const replyGate = {
   generation: "runtime-generation",
   scope: "private" as const,
@@ -116,31 +114,6 @@ const payload = {
   replyGate,
   replyQuote
 } satisfies RuntimeIncomingReplyEventPayload;
-
-const threadContext = {
-  schemaVersion: 1,
-  revision: 7,
-  processedThroughSequence: 19,
-  activeThreadId: THREAD_ID,
-  omittedThreadCount: 2,
-  threads: [{
-    threadId: THREAD_ID,
-    topic: "群成员正在确认杭州明天是否下雨，以决定是否晾晒被子。",
-    status: "active",
-    participantUids: ["10001", "10002"],
-    omittedParticipantCount: 3,
-    messageIds: ["41", "42"],
-    omittedMessageCount: 4
-  }],
-  messageAssignments: [{
-    messageId: "42",
-    sequence: 19,
-    primaryThreadId: THREAD_ID,
-    relatedThreadIds: [],
-    relation: "reply",
-    confidence: 0.98
-  }]
-} satisfies GroupThreadContextSnapshotV1;
 
 describe("runtime persisted contracts", () => {
   it("encodes and decodes a versioned envelope", () => {
@@ -666,7 +639,9 @@ describe("runtime persisted contracts", () => {
       isAdmin: true,
       logRunId: "run-1",
       messageOrigin: "async_tool_callback",
-      toolNames: ["codex", "websearch"]
+      toolNames: ["codex", "websearch"],
+      mentionUserIds: [10002, 10003],
+      bubbleSequence: { schemaVersion: 1, index: 1, total: 3 }
     }, {
       conversationId: "private:10001",
       correlationId: "run-1"
@@ -676,8 +651,34 @@ describe("runtime persisted contracts", () => {
       text: "生成完成。",
       logRunId: "run-1",
       messageOrigin: "async_tool_callback",
-      toolNames: ["codex", "websearch"]
+      toolNames: ["codex", "websearch"],
+      mentionUserIds: [10002, 10003],
+      bubbleSequence: { schemaVersion: 1, index: 1, total: 3 }
     });
+  });
+
+  it("rejects invalid durable bubble sequence metadata", () => {
+    const encoded = assistantReplyEnvelope({
+      type: "assistant_reply",
+      incoming: payload.incoming,
+      text: "第二个气泡",
+      generatedImages: [],
+      isAdmin: false
+    }, {
+      conversationId: "private:10001",
+      correlationId: "run-invalid-bubble"
+    });
+    for (const bubbleSequence of [
+      { schemaVersion: 1, index: 0, total: 1 },
+      { schemaVersion: 1, index: 2, total: 2 },
+      { schemaVersion: 1, index: -1, total: 2 },
+      { schemaVersion: 1, index: 1, total: 2, extra: true }
+    ]) {
+      expect(() => decodeAssistantReply({
+        ...encoded,
+        payload: { ...encoded.payload, bubbleSequence }
+      })).toThrow("持久化消息字段 bubbleSequence 无效");
+    }
   });
 
   it("keeps only a workbench-relative path and content snapshot in asset outbox envelopes", () => {
@@ -839,47 +840,7 @@ describe("runtime persisted contracts", () => {
     })).toThrow("版本化");
   });
 
-  it("round-trips a valid thread snapshot through assistant and tool-completion envelopes", () => {
-    const assistant = assistantReplyEnvelope({
-      type: "assistant_reply",
-      incoming: payload.incoming,
-      text: "继续讨论这个话题。",
-      generatedImages: [],
-      isAdmin: false,
-      threadContext
-    }, {
-      conversationId: "group:300",
-      correlationId: "reply:42"
-    });
-    expect(decodeAssistantReply(assistant).threadContext).toEqual(threadContext);
-
-    const completion = toolCompletionEnvelope({
-      type: "tool_result",
-      toolJobId: "job-1",
-      providerCallId: "call-1",
-      toolName: "codex",
-      originalRequest: {
-        incoming: payload.incoming,
-        captureSequence: 19,
-        contextThroughSequence: 23,
-        replyGate,
-        replyQuote,
-        threadContext
-      },
-      arguments: { task: "inspect" },
-      outcome: { status: "succeeded", result: { text: "done" }, error: null }
-    }, {
-      conversationId: "group:300",
-      correlationId: "call-1"
-    });
-    expect(decodeToolCompletion(completion).originalRequest).toMatchObject({
-      captureSequence: 19,
-      contextThroughSequence: 23,
-      threadContext
-    });
-  });
-
-  it("keeps payloads without a frozen boundary or thread snapshot readable", () => {
+  it("keeps payloads without a frozen boundary readable", () => {
     const assistant = decodeAssistantReply({
       type: "assistant_reply",
       incoming: payload.incoming,
@@ -888,7 +849,6 @@ describe("runtime persisted contracts", () => {
       isAdmin: false
     });
     expect(assistant.text).toBe("legacy reply");
-    expect(assistant.threadContext).toBeUndefined();
 
     const completion = decodeToolCompletion({
       type: "tool_result",
@@ -902,7 +862,6 @@ describe("runtime persisted contracts", () => {
       outcome: { status: "succeeded", result: null, error: null }
     });
     expect(completion.originalRequest.captureSequence).toBeUndefined();
-    expect(completion.originalRequest.threadContext).toBeUndefined();
   });
 
   it("rejects a deferred callback boundary without frozen gate and quote snapshots", () => {
@@ -938,95 +897,6 @@ describe("runtime persisted contracts", () => {
         originalRequest: { ...encoded.payload.originalRequest, replyQuote: undefined }
       }
     })).toThrow("持久化消息字段 replyQuote 无效");
-  });
-
-  it("drops an invalid thread snapshot without rejecting the durable payload", () => {
-    const invalidThreadContext = {
-      ...threadContext,
-      messageAssignments: [{
-        ...threadContext.messageAssignments[0],
-        confidence: 1.1
-      }]
-    };
-    const assistant = decodeAssistantReply({
-      type: "assistant_reply",
-      incoming: payload.incoming,
-      text: "still readable",
-      generatedImages: [],
-      isAdmin: false,
-      threadContext: invalidThreadContext
-    });
-    expect(assistant.text).toBe("still readable");
-    expect(assistant.threadContext).toBeUndefined();
-
-    const completion = decodeToolCompletion({
-      type: "tool_result",
-      toolJobId: "job-invalid",
-      providerCallId: "call-invalid",
-      toolName: "codex",
-      originalRequest: {
-        incoming: payload.incoming,
-        captureSequence: 19,
-        replyGate,
-        replyQuote,
-        threadContext: invalidThreadContext
-      },
-      arguments: {},
-      outcome: { status: "succeeded", result: null, error: null }
-    });
-    expect(completion.originalRequest.captureSequence).toBe(19);
-    expect(completion.originalRequest.threadContext).toBeUndefined();
-  });
-
-  it("drops a Thread snapshot that exceeds prompt-facing bounds", () => {
-    const oversizedThreadContext = {
-      ...threadContext,
-      threads: Array.from({ length: 73 }, (_, index) => ({
-        ...threadContext.threads[0],
-        threadId: `thread-${index}`
-      }))
-    };
-
-    const assistant = decodeAssistantReply({
-      type: "assistant_reply",
-      incoming: payload.incoming,
-      text: "still readable",
-      generatedImages: [],
-      isAdmin: false,
-      threadContext: oversizedThreadContext
-    });
-
-    expect(assistant.text).toBe("still readable");
-    expect(assistant.threadContext).toBeUndefined();
-  });
-
-  it("drops snapshots with invalid references, relation fanout, or zero sequence", () => {
-    const ghostThreadId = "thread:99999999999999999999999999999999";
-    const invalidSnapshots = [
-      { ...threadContext, activeThreadId: ghostThreadId },
-      {
-        ...threadContext,
-        messageAssignments: [{
-          ...threadContext.messageAssignments[0],
-          relatedThreadIds: [ghostThreadId, ghostThreadId, ghostThreadId]
-        }]
-      },
-      {
-        ...threadContext,
-        messageAssignments: [{ ...threadContext.messageAssignments[0], sequence: 0 }]
-      }
-    ];
-
-    for (const invalidThreadContext of invalidSnapshots) {
-      expect(decodeAssistantReply({
-        type: "assistant_reply",
-        incoming: payload.incoming,
-        text: "still readable",
-        generatedImages: [],
-        isAdmin: false,
-        threadContext: invalidThreadContext
-      }).threadContext).toBeUndefined();
-    }
   });
 
   it("keeps legacy rows readable during forward migration", () => {

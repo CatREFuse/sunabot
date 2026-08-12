@@ -4,6 +4,49 @@ export type CodexTaskStatus = "succeeded" | "failed" | "timed_out" | "cancelled"
 export interface CodexToolInput {
   task?: unknown;
   kind?: unknown;
+  inputHandles?: unknown;
+  action?: unknown;
+  ssh_host?: unknown;
+  workspace_path?: unknown;
+  thread_id?: unknown;
+  query?: unknown;
+  limit?: unknown;
+  __sunabot_admin_authorized?: unknown;
+  __sunabot_control_authorized?: unknown;
+  __sunabot_frozen_inputs?: unknown;
+  __sunabot_artifact_backend?: unknown;
+}
+
+export interface FrozenCodexInputV1 {
+  schemaVersion: 1;
+  handle: string;
+  kind: "file" | "image";
+  relativePath: string;
+  displayName: string;
+  sha256: string;
+  sizeBytes: number;
+  mimeType?: string;
+  textProjection?: FrozenCodexTextProjectionV1;
+}
+
+export interface FrozenCodexTextProjectionV1 {
+  schemaVersion: 1;
+  source: "parsed_text" | "raw_text";
+  relativePath: string;
+  sha256: string;
+  sizeBytes: number;
+  characterCount: number;
+  truncated: boolean;
+}
+
+export interface CodexResultArtifactV1 {
+  schemaVersion: 1;
+  relativePath: string;
+  displayName: string;
+  sha256: string;
+  sizeBytes: number;
+  mimeType?: string;
+  handle?: string;
 }
 
 export interface CodexToolError {
@@ -22,11 +65,14 @@ export interface CodexToolResult {
   error?: CodexToolError;
   threadId?: string;
   resultFile?: string;
+  outputTruncated?: boolean;
+  outputBytes?: number;
   usage?: Record<string, number>;
   exitCode?: number | null;
   signal?: NodeJS.Signals | null;
   durationMs?: number;
   stderr?: string;
+  artifacts?: CodexResultArtifactV1[];
 }
 
 export type CodexAuthStrategy = "copy" | "symlink";
@@ -66,6 +112,8 @@ export interface CodexToolExecutionContext {
 export interface CodexSupervisorRequest extends CodexToolExecutionContext {
   task: string;
   kind: CodexTaskKind;
+  inputHandles?: string[];
+  frozenInputs?: FrozenCodexInputV1[];
 }
 
 export interface CodexSupervisor {
@@ -73,5 +121,9 @@ export interface CodexSupervisor {
 }
 
 export interface CodexRunner {
+  run(input: CodexToolInput, context: CodexToolExecutionContext): Promise<CodexToolResult>;
+}
+
+export interface CodexControlRunner {
   run(input: CodexToolInput, context: CodexToolExecutionContext): Promise<CodexToolResult>;
 }

@@ -1,12 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveProjectPath } from "../../src/config.js";
-import type { AppConfig } from "../../src/types.js";
+import { resolveProjectPath } from "../../packages/platform/projectPaths.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import {
   extractPromptVariables,
   parseFinalPromptTemplate,
   type FinalPromptTemplate
 } from "./promptSystem.js";
+import {
+  MEMORY_PERSPECTIVE_MIGRATION_VERSION,
+  migrateMemoryPerspectiveTemplateWithLegacy,
+  type MemoryPromptSchemaName
+} from "./memoryPromptMigration.js";
+import { DEFAULT_MODEL_TIME_CONTEXT } from "./modelTime.js";
+import { hasCanonicalJsonSchemaContract, strictJsonSchema } from "./promptSchemaMigration.js";
+import { SCHEDULED_TASK_AGENT_LOOP_CONTRACT } from "./scheduledTaskPrompt.js";
+import { isLegacyVoiceToolDescription } from "./voicePromptMigration.js";
 
 export type PromptWorkspaceScope = "persona" | "system";
 
@@ -63,17 +72,112 @@ export async function ensurePromptTextFile(
   return filePath;
 }
 
-const GROUP_THREAD_CONTEXT_VARIABLE = "conversation.group.thread_context";
 const GROUP_ORCHESTRATOR_RESULT_VARIABLE = "conversation.group.orchestrator_result";
 const EMOJI_KEYS_VARIABLE = "conversation.emoji.keys";
 const EMOJI_SYNTAX_VARIABLE = "conversation.emoji.syntax";
+const VOICE_SETTINGS_VARIABLE = "conversation.voice.settings";
+const VOICE_TRIGGER_POLICY_VARIABLE = "conversation.voice.trigger_policy";
+const VOICE_TOOL_NAME = "send_voice_message";
 const CONVERSATION_EMOJI_MIGRATION_VERSION = "emoji-v2";
+const CONVERSATION_VOICE_MIGRATION_VERSION = "voice-v2";
 const TONE_EMOJI_MIGRATION_VERSION = "emoji-marker-v2";
-const MEMORY_PERSPECTIVE_MIGRATION_VERSION = "memory-perspective-v1";
+const PROMPT_TIME_CONTEXT_MIGRATION_VERSION = "time-context-v1";
+const SCHEDULED_TASK_AGENT_LOOP_MIGRATION_VERSION = "callback-input-v2";
+const SELFIE_RESPONSE_SCHEMA_MIGRATION_VERSION = "reference-selection-schema-v2";
 export const TONE_EMOJI_MARKER_RULE = "保留正文中形如 [/表情key] 的表情标记，必须逐字保留每个标记及其原始位置，不得新增、删除、改写或重排。";
 const SELFIE_REFERENCE_SELECTION_CONTRACT_MARKER = '<selfie_reference_selection_contract version="1">';
 
-type MemoryPromptSchemaName = "working_memory" | "long_term_memory" | "user_profiles";
+export async function migratePromptTimeContext(
+  config: AppConfig,
+  scope: PromptWorkspaceScope,
+  fileName: string
+) {
+  const filePath = await resolveSafePromptFilePath(config, scope, fileName);
+  const markerPath = await resolveSafePromptFilePath(
+    config,
+    scope,
+    path.join(
+      path.dirname(fileName),
+      `.${path.basename(fileName)}.${PROMPT_TIME_CONTEXT_MIGRATION_VERSION}`
+    )
+  );
+  if (await readOptional(markerPath) === `${PROMPT_TIME_CONTEXT_MIGRATION_VERSION}\n`) return false;
+  const content = await readOptional(filePath);
+  if (!content.trim()) return false;
+  const template = parseFinalPromptTemplate(content);
+  const migrated = migratePromptTimeContextTemplate(template);
+  if (migrated !== template) {
+    await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
+  }
+  await atomicWriteText(markerPath, `${PROMPT_TIME_CONTEXT_MIGRATION_VERSION}\n`);
+  return migrated !== template;
+}
+
+export function migratePromptTimeContextTemplate(template: FinalPromptTemplate): FinalPromptTemplate {
+  if (promptMessageVariables(template).has("runtime.current_time")) return template;
+  const messages = [...template.messages];
+  const finalUserIndex = findLastIndex(messages, (message) => (
+    isRecord(message) && message.role === "user" && typeof message.content === "string"
+  ));
+  if (finalUserIndex >= 0) {
+    const current = messages[finalUserIndex] as { role: string; content: string };
+    messages[finalUserIndex] = { ...current, content: `${DEFAULT_MODEL_TIME_CONTEXT}\n\n${current.content}` };
+  } else {
+    messages.push({ role: "developer", content: DEFAULT_MODEL_TIME_CONTEXT });
+  }
+  return { ...template, messages };
+}
+
+export async function migrateScheduledTaskAgentLoopPrompt(
+  config: AppConfig,
+  fileName: string,
+  canonicalContent: string
+) {
+  const filePath = await resolveSafePromptFilePath(config, "system", fileName);
+  const markerPath = await resolveSafePromptFilePath(
+    config,
+    "system",
+    path.join(
+      path.dirname(fileName),
+      `.${path.basename(fileName)}.${SCHEDULED_TASK_AGENT_LOOP_MIGRATION_VERSION}`
+    )
+  );
+  if (await readOptional(markerPath) === `${SCHEDULED_TASK_AGENT_LOOP_MIGRATION_VERSION}\n`) return false;
+  const content = await readOptional(filePath);
+  if (!content.trim()) return false;
+  const migrated = migrateScheduledTaskAgentLoopTemplate(
+    parseFinalPromptTemplate(content),
+    parseFinalPromptTemplate(canonicalContent)
+  );
+  if (migrated) await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
+  await atomicWriteText(markerPath, `${SCHEDULED_TASK_AGENT_LOOP_MIGRATION_VERSION}\n`);
+  return Boolean(migrated);
+}
+
+export function migrateScheduledTaskAgentLoopTemplate(
+  template: FinalPromptTemplate,
+  canonical: FinalPromptTemplate
+): FinalPromptTemplate | undefined {
+  let changed = false;
+  let messages = template.messages;
+  if (!messages.some((message) => (
+    isRecord(message)
+    && typeof message.content === "string"
+    && message.content.includes('<scheduled_callback_input version="2">')
+  ))) {
+    messages = [...messages];
+    const finalUserIndex = findLastIndex(messages, (message) => isRecord(message) && message.role === "user");
+    messages.splice(finalUserIndex < 0 ? messages.length : finalUserIndex, 0, {
+      role: "developer",
+      content: SCHEDULED_TASK_AGENT_LOOP_CONTRACT
+    });
+    changed = true;
+  }
+
+  const tools = structuredClone(canonical.tools ?? []);
+  if (JSON.stringify(template.tools ?? []) !== JSON.stringify(tools)) changed = true;
+  return changed ? { ...template, messages, tools } : undefined;
+}
 
 const LEGACY_MEMORY_PROMPT_PARAGRAPHS: Record<MemoryPromptSchemaName, readonly string[]> = {
   working_memory: [
@@ -92,7 +196,7 @@ const LEGACY_MEMORY_PROMPT_PARAGRAPHS: Record<MemoryPromptSchemaName, readonly s
     "每条事实都要判断是否实时晋升长期记忆。只有有明确时间、对未来仍有价值的事件才设置 promoteToLongTerm=true；寒暄、临时情绪、无结论讨论和人物属性不得晋升。",
     "晋升事实必须提供受控 eventType 和稳定 subjectKey。eventType 只允许 task、decision、commitment、milestone、incident、relationship_change、status_change、other。subjectKey 描述不随“开始、进行中、完成、失败”等进展词变化的同一事件主体，优先使用任务号、Issue/PR、明确命名事项或“动作 + 目标”；仓库路径、文件名和地点不能单独构成主体。非晋升事实的 eventType 使用 other，subjectKey 使用空字符串。",
     "longTermId 只复用输入中真实存在、与本事实参与者一致的长期记忆 id；无法可靠匹配时返回 null，禁止编造 id。已有工作事实中的 promoteToLongTerm、longTermId、eventType 和 subjectKey 在仍有效时必须保留。",
-    "输入 payload 会给出 admin.userId 和 admin.name；该 QQ 是普拉娜唯一的老师和管理员。这些字段只用于校验用户身份，不构成需要写入工作记忆的事件。如果 admin.userId 为空，不要记录任何老师或管理员身份；其他用户不得写成老师或管理员。",
+    "输入 payload 会给出 admin.userId 和 admin.name；该 QQ 是当前角色的管理员。这些字段只用于校验管理员身份和管理员提供的称呼，不构成需要写入工作记忆的事件。如果 admin.userId 为空，不要记录任何管理员身份；其他用户不得写成管理员。",
     "提取颗粒度应该粗一些。连续十几条聊天围绕同一件事时，合并为一条完整概述。",
     "输出严格 JSON 对象，不要输出 Markdown、解释或额外文字。",
     "格式为 {\"facts\":[{\"id\":\"可复用的原记忆 id 或 null\",\"fact\":\"包含相关用户 QQ 号的事实内容\",\"occurredAt\":\"单个 ISO 时间或 null\",\"occurredEndAt\":\"单个 ISO 时间或 null\",\"userIds\":[\"QQ号\"],\"userName\":\"当前昵称或群名片\",\"promoteToLongTerm\":true,\"longTermId\":\"已有长期记忆 id 或 null\",\"eventType\":\"task\",\"subjectKey\":\"稳定事件主体\"}],\"allPreviousMemoriesInvalidated\":false}。新增事实的 id 返回 null。",
@@ -122,8 +226,8 @@ const LEGACY_MEMORY_PROMPT_PARAGRAPHS: Record<MemoryPromptSchemaName, readonly s
     "严禁写入一次性事件，只能写可能会被多次观察到的事件。",
     "忽略群聊事件本身、临时情绪、临时状态、不指向具体用户的内容，以及无法确认的推测。",
     "用户唯一身份是 QQ 号。userName 只保存 payload 中当前观测到的 QQ 昵称或显示名，不承载回复称呼；群名片由会话目录派生，不复制进 fact。",
-    "addressName 只保存普拉娜回复该用户时使用的明确称呼。输入 payload.previousProfiles 会提供已有画像：已有非空 addressName 必须原样保留，只有字段为空且用户明确要求“以后叫我……”或同义表达时才推断新值。模型不得根据昵称、群名片、性别或一次玩笑自行创造称呼。",
-    "输入 payload 会给出 admin.userId 和 admin.name；该 QQ 是普拉娜唯一的老师和管理员，其 addressName 必须使用 admin.name。其他用户不得写成老师或管理员。admin.userId 为空时不要记录任何老师或管理员身份。",
+    "addressName 只保存当前角色回复该用户时使用的明确称呼。输入 payload.previousProfiles 会提供已有画像：已有非空 addressName 必须原样保留，只有字段为空且用户明确要求“以后叫我……”或同义表达时才推断新值。模型不得根据昵称、群名片、性别或一次玩笑自行创造称呼。",
+    "输入 payload 会给出 admin.userId 和 admin.name；该 QQ 是当前角色的管理员，其 addressName 必须使用 admin.name。其他用户不得写成管理员。admin.userId 为空时不要记录任何管理员身份。",
     "输入 payload.previousProfiles 会给出该 QQ 的原画像；写入新画像时必须把原画像和本批消息一起作为依据，按语义合并。合并时删除原画像中的一次性事件过程、已失效临时状态和重复描述，同时保留已有非空 addressName。",
     "对于需要更新的用户，fact 必须是该用户合并后的完整画像，不是增量；合并相近表达，删除重复描述，保留最新且稳定的信息。",
     "fact 中不要写 QQ 号、昵称、群名片、称呼指令、群或会话中的别名清单，也不要写“QQ ...：”“叫他/她……”“称呼为……”等前缀。QQ 号只写在 userId，显示名只写在 userName，回复称呼只写在 addressName。",
@@ -132,55 +236,6 @@ const LEGACY_MEMORY_PROMPT_PARAGRAPHS: Record<MemoryPromptSchemaName, readonly s
     "如果没有值得记录的用户认知，输出 {\"profiles\":[]}。"
   ]
 };
-
-export async function migrateGroupReplyThreadContextVariable(
-  config: AppConfig,
-  fileName: string
-) {
-  const filePath = await resolveSafePromptFilePath(config, "system", fileName);
-  const markerPath = await resolveSafePromptFilePath(
-    config,
-    "system",
-    `.${path.basename(fileName)}.thread-context-v1`
-  );
-  if (await readOptional(markerPath)) return false;
-
-  const content = await readOptional(filePath);
-  if (!content.trim()) return false;
-  const template = parseFinalPromptTemplate(content);
-  const migrated = migrateGroupReplyThreadContextTemplate(template);
-  if (migrated !== template) {
-    await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
-  }
-  await atomicWriteText(markerPath, "thread-context-v1\n");
-  return migrated !== template;
-}
-
-export function migrateGroupReplyThreadContextTemplate(
-  template: FinalPromptTemplate
-): FinalPromptTemplate {
-  if (extractPromptVariables(JSON.stringify(template)).includes(GROUP_THREAD_CONTEXT_VARIABLE)) {
-    return template;
-  }
-  const messages = [...template.messages];
-  const currentInputIndex = messages.findIndex((message) => (
-    typeof message === "object"
-    && message.role === "user"
-    && typeof message.content === "string"
-    && extractPromptVariables(message.content).includes("user.input")
-  ));
-  const finalUserIndex = findLastIndex(messages, (message) => (
-    typeof message === "object" && message.role === "user"
-  ));
-  const insertionIndex = currentInputIndex >= 0
-    ? currentInputIndex
-    : finalUserIndex >= 0 ? finalUserIndex : messages.length;
-  messages.splice(insertionIndex, 0, {
-    role: "developer",
-    content: `<thread_context>@{${GROUP_THREAD_CONTEXT_VARIABLE}}</thread_context>`
-  });
-  return { ...template, messages };
-}
 
 export async function migrateGroupReplyOrchestratorResultVariable(
   config: AppConfig,
@@ -343,6 +398,36 @@ export function migrateSelfieReferenceSelectionTemplate(
   return { ...template, messages, response_format: responseFormat };
 }
 
+export async function migrateSelfieResponseSchemaPrompt(
+  config: AppConfig,
+  fileName: string
+) {
+  const filePath = await resolveSafePromptFilePath(config, "persona", fileName);
+  const markerPath = await resolveSafePromptFilePath(
+    config,
+    "persona",
+    `.${path.basename(fileName)}.${SELFIE_RESPONSE_SCHEMA_MIGRATION_VERSION}`
+  );
+  if (await readOptional(markerPath) === `${SELFIE_RESPONSE_SCHEMA_MIGRATION_VERSION}\n`) return false;
+  const content = await readOptional(filePath);
+  if (!content.trim()) return false;
+  const template = parseFinalPromptTemplate(content);
+  const migrated = migrateSelfieResponseSchemaTemplate(template);
+  if (migrated) await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
+  await atomicWriteText(markerPath, `${SELFIE_RESPONSE_SCHEMA_MIGRATION_VERSION}\n`);
+  return Boolean(migrated);
+}
+
+export function migrateSelfieResponseSchemaTemplate(
+  template: FinalPromptTemplate
+): FinalPromptTemplate | undefined {
+  const selection = selfieReferenceSelectionSchema(template);
+  if (!selection || !Object.hasOwn(selection, "uniqueItems")) return undefined;
+  const migrated = structuredClone(template);
+  delete selfieReferenceSelectionSchema(migrated)!.uniqueItems;
+  return migrated;
+}
+
 export async function migrateConversationEmojiVariables(
   config: AppConfig,
   fileName: string
@@ -397,6 +482,105 @@ export function migrateConversationEmojiTemplate(
       : `<emoji_syntax>@{${variable}}</emoji_syntax>`).join("\n")
   });
   return { ...template, messages };
+}
+
+export async function migrateConversationVoicePrompt(
+  config: AppConfig,
+  fileName: string,
+  canonicalContent: string
+) {
+  const filePath = await resolveSafePromptFilePath(config, "system", fileName);
+  const markerPath = await resolveSafePromptFilePath(
+    config,
+    "system",
+    path.join(
+      path.dirname(fileName),
+      `.${path.basename(fileName)}.${CONVERSATION_VOICE_MIGRATION_VERSION}`
+    )
+  );
+  if (await readOptional(markerPath) === `${CONVERSATION_VOICE_MIGRATION_VERSION}\n`) return false;
+  const content = await readOptional(filePath);
+  if (!content.trim()) return false;
+  const migrated = migrateConversationVoiceTemplate(
+    parseFinalPromptTemplate(content),
+    parseFinalPromptTemplate(canonicalContent)
+  );
+  if (migrated !== undefined) {
+    await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
+  }
+  await atomicWriteText(markerPath, `${CONVERSATION_VOICE_MIGRATION_VERSION}\n`);
+  return migrated !== undefined;
+}
+
+export function migrateConversationVoiceTemplate(
+  template: FinalPromptTemplate,
+  canonical: FinalPromptTemplate
+): FinalPromptTemplate | undefined {
+  const canonicalTool = canonical.tools?.find((tool) => tool.function.name === VOICE_TOOL_NAME);
+  if (!canonicalTool) throw new Error("Canonical conversation prompt is missing send_voice_message.");
+  let changed = false;
+  let messages = template.messages;
+  const variables = promptMessageVariables(template);
+  const missingVariables = [VOICE_SETTINGS_VARIABLE, VOICE_TRIGGER_POLICY_VARIABLE]
+    .filter((variable) => !variables.has(variable));
+  if (missingVariables.length) {
+    messages = [...messages];
+    const currentInputIndex = messages.findIndex((message) => (
+      isRecord(message)
+      && message.role === "user"
+      && typeof message.content === "string"
+      && extractPromptVariables(message.content).includes("user.input")
+    ));
+    const finalUserIndex = findLastIndex(messages, (message) => isRecord(message) && message.role === "user");
+    const insertionIndex = currentInputIndex >= 0
+      ? currentInputIndex
+      : finalUserIndex >= 0 ? finalUserIndex : messages.length;
+    messages.splice(insertionIndex, 0, {
+      role: "developer",
+      content: missingVariables.map((variable) => variable === VOICE_SETTINGS_VARIABLE
+        ? `<voice_settings>@{${variable}}</voice_settings>`
+        : `<voice_trigger_policy>@{${variable}}</voice_trigger_policy>`).join("\n")
+    });
+    changed = true;
+  }
+
+  const tools = [...(template.tools ?? [])];
+  const voiceIndex = tools.findIndex((tool) => tool.function.name === VOICE_TOOL_NAME);
+  if (voiceIndex < 0) {
+    tools.push(structuredClone(canonicalTool));
+    changed = true;
+  } else {
+    const current = tools[voiceIndex]!;
+    const currentVariables = new Set(extractPromptVariables(current.function.description));
+    const missingDescriptionVariables = [VOICE_SETTINGS_VARIABLE, VOICE_TRIGGER_POLICY_VARIABLE]
+      .filter((variable) => !currentVariables.has(variable));
+    const description = isLegacyVoiceToolDescription(current.function.description)
+      ? canonicalTool.function.description
+      : missingDescriptionVariables.length
+      ? [current.function.description.trim(), ...missingDescriptionVariables.map((variable) => variable === VOICE_SETTINGS_VARIABLE
+          ? `Current settings: @{${variable}}`
+          : `Trigger policy: @{${variable}}`)]
+        .filter(Boolean)
+        .join("\n\n")
+      : current.function.description;
+    if (
+      description !== current.function.description
+      || JSON.stringify(current.function.parameters) !== JSON.stringify(canonicalTool.function.parameters)
+      || current.function.strict !== canonicalTool.function.strict
+    ) {
+      tools[voiceIndex] = {
+        ...current,
+        function: {
+          ...current.function,
+          description,
+          parameters: structuredClone(canonicalTool.function.parameters),
+          ...(canonicalTool.function.strict == null ? {} : { strict: canonicalTool.function.strict })
+        }
+      };
+      changed = true;
+    }
+  }
+  return changed ? { ...template, messages, tools } : undefined;
 }
 
 export async function migrateToneEmojiMarkerRule(
@@ -481,7 +665,7 @@ export async function migrateMemoryPerspectivePrompt(
   if (!content.trim()) return false;
   const template = parseFinalPromptTemplate(content);
   const canonical = parseFinalPromptTemplate(canonicalContent);
-  const migrated = migrateMemoryPerspectiveTemplate(template, canonical);
+  const migrated = migrateMemoryPerspectiveTemplateWithLegacy(template, canonical, LEGACY_MEMORY_PROMPT_PARAGRAPHS, { fileName });
   if (migrated !== template) {
     await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
   }
@@ -493,206 +677,18 @@ export function migrateMemoryPerspectiveTemplate(
   template: FinalPromptTemplate,
   canonical: FinalPromptTemplate
 ): FinalPromptTemplate {
-  const contract = memoryPerspectiveContract(canonical);
-  if (!hasMemoryPromptWireContract(template, canonical, contract.payloadContent)) return template;
-
-  const systemIndex = template.messages.findIndex((message) => {
-    if (!isRecord(message) || message.role !== "system" || typeof message.content !== "string") {
-      return false;
-    }
-    return isLegacyOrPartialMemoryPrompt(
-      message.content,
-      contract.legacyParagraphs,
-      contract.currentParagraphs,
-      splitPromptParagraphs(contract.canonicalSystemContent)
-    );
-  });
-  if (systemIndex < 0) return template;
-
-  const current = template.messages[systemIndex];
-  if (!isRecord(current) || typeof current.content !== "string") return template;
-  const currentStandardParagraphs = new Set(splitPromptParagraphs(contract.canonicalSystemContent));
-  const customParagraphs = splitPromptParagraphs(current.content)
-    .filter((paragraph) => (
-      !currentStandardParagraphs.has(paragraph)
-      && !contract.legacyParagraphs.some((legacy) => matchesLegacyParagraph(paragraph, legacy))
-    ));
-  const messages = [...template.messages];
-  messages[systemIndex] = {
-    ...current,
-    content: [contract.canonicalSystemContent.trim(), ...customParagraphs].join("\n\n")
-  };
-  return { ...template, messages };
+  return migrateMemoryPerspectiveTemplateWithLegacy(
+    template,
+    canonical,
+    LEGACY_MEMORY_PROMPT_PARAGRAPHS
+  );
 }
 
-function memoryPerspectiveContract(canonical: FinalPromptTemplate) {
-  const schemaName = memoryPromptSchemaName(canonical.response_format);
-  const legacyParagraphs = LEGACY_MEMORY_PROMPT_PARAGRAPHS[schemaName];
-  const systemMessages = canonical.messages.filter((message) => (
-    isRecord(message) && message.role === "system" && typeof message.content === "string"
-  ));
-  if (systemMessages.length !== 1) {
-    throw new Error("Canonical memory prompt must contain exactly one system message.");
-  }
-  const canonicalSystemMessage = systemMessages[0];
-  if (!isRecord(canonicalSystemMessage) || typeof canonicalSystemMessage.content !== "string") {
-    throw new Error("Canonical memory prompt must contain exactly one system message.");
-  }
-  const canonicalSystemContent = canonicalSystemMessage.content;
-  const paragraphs = splitPromptParagraphs(canonicalSystemContent);
-  const currentParagraphs = uniqueStrings([
-    requiredParagraph(paragraphs, (paragraph) => (
-      extractPromptVariables(paragraph).includes("bot.name")
-      && /第一视角|第一人称/.test(paragraph)
-    )),
-    requiredParagraph(paragraphs, (paragraph) => {
-      const variables = new Set(extractPromptVariables(paragraph));
-      return ["persona.soul", "persona.preference", "persona.user", "persona.relation"]
-        .every((variable) => variables.has(variable));
-    }),
-    requiredParagraph(paragraphs, (paragraph) => /3 至 6|3 至 8|1 至 3/.test(paragraph)),
-    requiredParagraph(paragraphs, (paragraph) => (
-      paragraph.includes("fact")
-      && /第一视角|第一人称/.test(paragraph)
-      && /感受|情绪/.test(paragraph)
-      && /看法|判断|认知/.test(paragraph)
-    )),
-    requiredParagraph(paragraphs, (paragraph) => (
-      paragraph.includes("fact")
-      && /字段标签|模板化前缀/.test(paragraph)
-    ))
-  ]);
-  const payloadMessages = canonical.messages.filter((message) => (
-    isRecord(message)
-    && message.role === "user"
-    && typeof message.content === "string"
-    && extractPromptVariables(message.content).length === 1
-  ));
-  const payloadMessage = payloadMessages[0];
-  if (payloadMessages.length !== 1 || !isRecord(payloadMessage) || typeof payloadMessage.content !== "string") {
-    throw new Error("Canonical memory prompt must contain exactly one user payload message.");
-  }
-  return {
-    canonicalSystemContent,
-    currentParagraphs,
-    legacyParagraphs,
-    payloadContent: payloadMessage.content
-  };
-}
-
-function hasMemoryPromptWireContract(
-  template: FinalPromptTemplate,
-  canonical: FinalPromptTemplate,
-  payloadContent: string
-) {
-  const actualTools = template.tools ?? [];
-  const canonicalTools = canonical.tools ?? [];
-  if (!equalSchemaStructure(actualTools, canonicalTools)) return false;
-  if (!hasCanonicalJsonSchemaContract(template.response_format, canonical.response_format)) return false;
-  return template.messages.some((message) => (
-    isRecord(message)
-    && message.role === "user"
-    && message.content === payloadContent
-  ));
-}
-
-function isLegacyOrPartialMemoryPrompt(
-  content: string,
-  legacyParagraphs: readonly string[],
-  currentParagraphs: readonly string[],
-  canonicalParagraphs: readonly string[]
-) {
-  const paragraphs = new Set(splitPromptParagraphs(content));
-  const canonical = new Set(canonicalParagraphs);
-  const legacyMatches = legacyParagraphs.filter((legacy) => (
-    [...paragraphs].some((paragraph) => matchesLegacyParagraph(paragraph, legacy))
-  )).length;
-  const legacyOnlyMatches = [...paragraphs].filter((paragraph) => (
-    !canonical.has(paragraph)
-    && legacyParagraphs.some((legacy) => matchesLegacyParagraph(paragraph, legacy))
-  )).length;
-  const currentMatches = currentParagraphs.filter((paragraph) => paragraphs.has(paragraph)).length;
-  if (legacyOnlyMatches === 0) return false;
-  if (legacyMatches === legacyParagraphs.length) return true;
-  return legacyMatches >= Math.ceil(legacyParagraphs.length * 0.6) && currentMatches >= 2;
-}
-
-function matchesLegacyParagraph(actual: string, legacy: string) {
-  if (!legacy.includes("普拉娜")) return actual === legacy;
-  const parts = legacy.split("普拉娜");
-  const prefix = parts[0];
-  const suffix = parts[1];
-  if (parts.length !== 2
-    || typeof prefix !== "string"
-    || typeof suffix !== "string"
-    || !actual.startsWith(prefix)
-    || !actual.endsWith(suffix)) return false;
-  const identity = actual.slice(prefix.length, actual.length - suffix.length);
-  return Boolean(identity.trim()) && !identity.includes("\n");
-}
-
-function memoryPromptSchemaName(responseFormat: unknown): MemoryPromptSchemaName {
-  if (!isRecord(responseFormat)
-    || responseFormat.type !== "json_schema"
-    || !isRecord(responseFormat.json_schema)) {
-    throw new Error("Canonical memory prompt must use a JSON schema response format.");
-  }
-  const name = responseFormat.json_schema.name;
-  if (name === "working_memory" || name === "long_term_memory" || name === "user_profiles") {
-    return name;
-  }
-  throw new Error("Canonical memory prompt has an unknown response schema.");
-}
-
-function splitPromptParagraphs(content: string) {
-  return content.trim().split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
-}
-
-function requiredParagraph(paragraphs: readonly string[], predicate: (paragraph: string) => boolean) {
-  const paragraph = paragraphs.find(predicate);
-  if (!paragraph) throw new Error("Canonical memory prompt is missing its perspective contract.");
-  return paragraph;
-}
-
-function uniqueStrings(values: readonly string[]) {
-  return [...new Set(values)];
-}
-
-function hasCanonicalJsonSchemaContract(actual: unknown, canonical: unknown) {
-  const actualSchema = strictJsonSchema(actual);
-  const canonicalSchema = strictJsonSchema(canonical);
-  return actualSchema !== undefined
-    && canonicalSchema !== undefined
-    && equalSchemaStructure(actualSchema, canonicalSchema);
-}
-
-function strictJsonSchema(value: unknown) {
-  if (!isRecord(value) || value.type !== "json_schema" || !isRecord(value.json_schema)) {
-    return undefined;
-  }
-  const descriptor = value.json_schema;
-  return descriptor.strict === true && isRecord(descriptor.schema)
-    ? descriptor.schema
-    : undefined;
-}
-
-function equalSchemaStructure(actual: unknown, canonical: unknown): boolean {
-  if (Array.isArray(canonical)) {
-    return Array.isArray(actual)
-      && actual.length === canonical.length
-      && canonical.every((item, index) => equalSchemaStructure(actual[index], item));
-  }
-  if (isRecord(canonical)) {
-    if (!isRecord(actual)) return false;
-    const canonicalKeys = Object.keys(canonical).filter((key) => key !== "description");
-    const actualKeys = Object.keys(actual).filter((key) => key !== "description");
-    return actualKeys.length === canonicalKeys.length
-      && canonicalKeys.every((key) => (
-        Object.hasOwn(actual, key)
-        && equalSchemaStructure(actual[key], canonical[key])
-      ));
-  }
-  return actual === canonical;
+function selfieReferenceSelectionSchema(template: FinalPromptTemplate) {
+  const schema = strictJsonSchema(template.response_format);
+  if (!schema || !isRecord(schema.properties)) return undefined;
+  const selection = schema.properties.selectedSelfieReferenceIds;
+  return isRecord(selection) ? selection : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

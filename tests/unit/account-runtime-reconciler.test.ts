@@ -43,6 +43,22 @@ describe("account runtime reconciler", () => {
     });
   });
 
+  it("forces only the selected running account to restart", () => {
+    expect(planAccountReconciliation({
+      accountId: "qq_arona",
+      account: { id: "qq_arona", enabled: true, agentEnabled: true },
+      containers: [
+        { id: "primary-container", accountId: "primary", state: "running" },
+        { id: "arona-container", accountId: "qq_arona", state: "running" }
+      ],
+      forceRestart: true
+    })).toMatchObject({
+      action: "restart",
+      targetContainerIds: ["arona-container"],
+      reconcileRequired: true
+    });
+  });
+
   it.each([
     { account: undefined, label: "removed" },
     { account: { id: "qq_arona", enabled: false, agentEnabled: true }, label: "disabled" },
@@ -81,7 +97,7 @@ describe("account runtime reconciler", () => {
     });
   });
 
-  it("uses the workspace queue so Docker Core never needs the Docker socket", async () => {
+  it("requests a forced restart through the workspace queue so Docker Core never needs the Docker socket", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-account-reconciler-"));
     try {
       const databasePath = path.join(workspace, "business/data/sunabot.sqlite");
@@ -100,7 +116,7 @@ describe("account runtime reconciler", () => {
         reconciler: { pid: 42 }
       }));
       const reconciler = new AccountRuntimeReconciler({ workspace, pollIntervalMs: 5, timeoutMs: 1_000 });
-      const pending = reconciler.reconcile("qq_arona");
+      const pending = reconciler.restart("qq_arona");
       const requests = path.join(workspace, "runtime/account-reconciler/requests");
       let requestFile = "";
       for (let index = 0; index < 100 && !requestFile; index += 1) {
@@ -110,6 +126,7 @@ describe("account runtime reconciler", () => {
       }
       expect(requestFile).toMatch(/^[a-f0-9-]{36}\.json$/);
       const request = JSON.parse(await fs.readFile(path.join(requests, requestFile), "utf8"));
+      expect(request).toMatchObject({ kind: "account-reconcile", accountId: "qq_arona", forceRestart: true });
       const results = path.join(workspace, "runtime/account-reconciler/results");
       await fs.mkdir(results, { recursive: true });
       await fs.writeFile(path.join(results, requestFile), JSON.stringify({

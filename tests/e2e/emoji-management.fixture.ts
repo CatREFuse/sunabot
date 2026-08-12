@@ -1,6 +1,6 @@
 import type { Page, Route } from "@playwright/test";
 import sharp from "sharp";
-import type { EmojiPayload, EmojiRecord, EmojiSource } from "../../apps/admin-web/src/types/emojis";
+import type { EmojiPayload, EmojiRecord, EmojiSource, EmojiVersionRecord } from "../../apps/admin-web/src/types/emojis";
 import { installMockApi } from "./mock-api";
 
 export const emojiPresetKeys = [
@@ -26,6 +26,9 @@ export interface EmojiMockRequest {
 
 export interface EmojiManagementMock {
   recordsByAgent: Record<string, EmojiRecord[]>;
+  versionsByAgent: Record<string, Record<string, EmojiVersionRecord[]>>;
+  sendSizeByAgent: Record<string, 64 | 128 | 256 | 512 | 1024>;
+  sendSeparatelyByAgent: Record<string, boolean>;
   requests: EmojiMockRequest[];
   uploadFixture: Buffer;
 }
@@ -38,17 +41,26 @@ export async function installEmojiManagementMock(page: Page): Promise<EmojiManag
       plana: [
         emojiRecord("开心", "generated", "plana", 0),
         emojiRecord("害羞", "upload", "plana", 1),
-        emojiRecord("摸鱼", "upload", "plana", 2)
+        emojiRecord("摸鱼", "upload", "plana", 2),
+        emojiRecord("门缝小春", "upload", "plana", 5)
       ],
       arona: [
         emojiRecord("认真", "generated", "arona", 3),
         emojiRecord("打招呼", "upload", "arona", 4)
       ]
     },
+    versionsByAgent: {},
+    sendSizeByAgent: { plana: 512, arona: 256 },
+    sendSeparatelyByAgent: { plana: false, arona: false },
     requests: [],
     uploadFixture
   };
-
+  for (const [agentId, agentRecords] of Object.entries(state.recordsByAgent)) {
+    state.versionsByAgent[agentId] = Object.fromEntries(agentRecords.map((record) => [
+      record.key,
+      [{ ...record, current: true }]
+    ]));
+  }
   await page.route("**/api/emojis**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -58,10 +70,36 @@ export async function installEmojiManagementMock(page: Page): Promise<EmojiManag
     const body = request.postData() ? request.postDataJSON() as Record<string, unknown> : undefined;
     state.requests.push({ method, path, agentId, body });
 
-    if (/^\/api\/emojis\/[^/]+\/content$/u.test(path) && method === "GET") {
+    if (path.endsWith("/content") && method === "GET") {
       return route.fulfill({ status: 200, contentType: "image/png", body: uploadFixture });
     }
+    const versionList = path.match(/^\/api\/emojis\/([^/]+)\/versions$/u);
+    if (versionList && method === "GET") {
+      const key = decodeURIComponent(versionList[1] ?? "");
+      return fulfillJson(route, versionPayload(state, agentId, key));
+    }
+    const versionRemove = path.match(/^\/api\/emojis\/([^/]+)\/versions\/([^/]+)$/u);
+    if (versionRemove && method === "DELETE") {
+      const key = decodeURIComponent(versionRemove[1] ?? "");
+      const fileName = decodeURIComponent(versionRemove[2] ?? "");
+      state.versionsByAgent[agentId]![key] = versions(state, agentId, key)
+        .filter((version) => version.current || version.fileName !== fileName);
+      return route.fulfill({ status: 204 });
+    }
     if (path === "/api/emojis" && method === "GET") {
+      return fulfillJson(route, payload(state, agentId));
+    }
+    if (path === "/api/emojis/settings" && method === "PATCH") {
+      const sendSize = body?.sendSize;
+      const sendSeparately = body?.sendSeparately;
+      if (sendSize !== 64 && sendSize !== 128 && sendSize !== 256 && sendSize !== 512 && sendSize !== 1024) {
+        return fulfillJson(route, { error: { code: "EMOJI_SETTINGS_INVALID", message: "表情发送尺寸无效。" } }, 400);
+      }
+      if (typeof sendSeparately !== "boolean") {
+        return fulfillJson(route, { error: { code: "EMOJI_SETTINGS_INVALID", message: "表情发送方式无效。" } }, 400);
+      }
+      state.sendSizeByAgent[agentId] = sendSize;
+      state.sendSeparatelyByAgent[agentId] = sendSeparately;
       return fulfillJson(route, payload(state, agentId));
     }
     if (path === "/api/emojis/generate" && method === "POST") {
@@ -74,10 +112,25 @@ export async function installEmojiManagementMock(page: Page): Promise<EmojiManag
       upsert(state, agentId, emojiRecord(key, "upload", agentId, state.requests.length));
       return fulfillJson(route, payload(state, agentId));
     }
+    const rename = path.match(/^\/api\/emojis\/([^/]+)$/u);
+    if (rename && method === "PATCH") {
+      const key = decodeURIComponent(rename[1] ?? "");
+      const nextKey = requireKey(body);
+      state.recordsByAgent[agentId] = records(state, agentId).map((record) => (
+        record.key === key ? { ...record, key: nextKey } : record
+      ));
+      state.versionsByAgent[agentId]![nextKey] = versions(state, agentId, key).map((version) => ({
+        ...version,
+        key: nextKey
+      }));
+      delete state.versionsByAgent[agentId]![key];
+      return fulfillJson(route, payload(state, agentId));
+    }
     const remove = path.match(/^\/api\/emojis\/([^/]+)$/u);
     if (remove && method === "DELETE") {
       const key = decodeURIComponent(remove[1] ?? "");
       state.recordsByAgent[agentId] = records(state, agentId).filter((record) => record.key !== key);
+      delete state.versionsByAgent[agentId]?.[key];
       return route.fulfill({ status: 204 });
     }
     return fulfillJson(route, {
@@ -88,10 +141,16 @@ export async function installEmojiManagementMock(page: Page): Promise<EmojiManag
   return state;
 }
 
-function payload(state: EmojiManagementMock, agentId: string): EmojiPayload {
+function payload(
+  state: EmojiManagementMock,
+  agentId: string
+): EmojiPayload {
   return {
     presetKeys: [...emojiPresetKeys],
-    emojis: records(state, agentId)
+    emojis: records(state, agentId),
+    sendSize: state.sendSizeByAgent[agentId] ?? 512,
+    sendSeparately: state.sendSeparatelyByAgent[agentId] ?? false,
+    revision: `${agentId}-revision`
   };
 }
 
@@ -99,8 +158,50 @@ function records(state: EmojiManagementMock, agentId: string) {
   return state.recordsByAgent[agentId] ??= [];
 }
 
-function upsert(state: EmojiManagementMock, agentId: string, next: EmojiRecord) {
-  state.recordsByAgent[agentId] = [...records(state, agentId).filter((record) => record.key !== next.key), next];
+function versions(
+  state: EmojiManagementMock,
+  agentId: string,
+  key: string
+) {
+  const store = state.versionsByAgent;
+  store[agentId] ??= {};
+  return store[agentId]![key] ??= [];
+}
+
+function upsert(
+  state: EmojiManagementMock,
+  agentId: string,
+  next: EmojiRecord
+) {
+  const history = versions(state, agentId, next.key).map((version) => ({ ...version, current: false }));
+  const matching = history.find((version) => version.fileName === next.fileName);
+  state.versionsByAgent[agentId]![next.key] = [
+    { ...(matching ?? next), ...next, current: true },
+    ...history.filter((version) => version.fileName !== next.fileName)
+  ];
+  state.recordsByAgent[agentId] = [
+    ...records(state, agentId).filter((record) => record.key !== next.key),
+    next
+  ];
+}
+
+function versionPayload(
+  state: EmojiManagementMock,
+  agentId: string,
+  key: string
+) {
+  return {
+    key,
+    versions: versions(state, agentId, key).map((version) => {
+      const contentPath = `/api/emojis/${encodeURIComponent(key)}/versions/${encodeURIComponent(version.fileName)}/content?agentId=${encodeURIComponent(agentId)}`;
+      return {
+        ...version,
+        originalUrl: `${contentPath}&variant=original`,
+        displayUrl: `${contentPath}&variant=display`,
+        placeholderUrl: `${contentPath}&variant=placeholder`
+      };
+    })
+  };
 }
 
 function requireKey(body: Record<string, unknown> | undefined) {
@@ -109,7 +210,12 @@ function requireKey(body: Record<string, unknown> | undefined) {
   return key;
 }
 
-function emojiRecord(key: string, source: EmojiSource, agentId: string, version: number): EmojiRecord {
+function emojiRecord(
+  key: string,
+  source: EmojiSource,
+  agentId: string,
+  version: number
+): EmojiRecord {
   const contentPath = `/api/emojis/${encodeURIComponent(key)}/content?agentId=${encodeURIComponent(agentId)}`;
   return {
     key,

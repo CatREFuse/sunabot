@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import {
   type CodexRunner,
   type CodexProcessCleanupResult,
@@ -9,6 +10,7 @@ import {
 import { SessionActorScheduler } from "./sessionActor.js";
 import { createOutboxDeliveryContext } from "./outboxDeliveryContext.js";
 import { OutboxPartitionScheduler } from "./outboxPartitionScheduler.js";
+import { SessionPersistenceMonitor } from "./sessionPersistenceMonitor.js";
 import { SessionToolJobProcessor } from "./sessionToolJobProcessor.js";
 import {
   type SessionHandleResult
@@ -18,6 +20,7 @@ import {
   type SessionTurnServices
 } from "./sessionTurnServices.js";
 import {
+  createDeferredTurnOutboxEmitter,
   emitTurnHeldOutbox,
   emitTurnOutbox,
   type TurnHeldOutboxHandle
@@ -25,6 +28,7 @@ import {
 import type {
   ClaimedToolTask,
   CodexCoordinatorSettings,
+  CodexResultFinalizer,
   CodexToolUsageObserver,
   DeferredToolRunner,
   OutboxDeliveryContext,
@@ -53,6 +57,7 @@ const DEFAULT_OUTBOX_CONCURRENCY = 8;
 const DEFAULT_OUTBOX_ATTEMPTS = 3;
 const DEFAULT_OUTBOX_RETRY_DELAY_MS = 250;
 const DEFAULT_OUTBOX_DISCONNECTED_PROBE_DELAY_MS = 5_000;
+const TOOL_ACTOR_SETTLEMENT_GRACE_MS = 5_000;
 const IDLE_POLL_MS = 2;
 
 export type { CodexCoordinatorSettings, OutboxDeliveryContext } from "./sessionCoordinatorTypes.js";
@@ -62,6 +67,7 @@ export interface SessionTurnContext {
   signal: AbortSignal;
   turn: TurnRecord;
   emitOutbox(draft: OutboxDraft): Promise<OutboxRecord>;
+  emitDeferredOutbox(draft: OutboxDraft): Promise<OutboxRecord>;
   appendHeldOutbox(
     draft: OutboxDraft,
     hold: HeldOutboxAppendOptions
@@ -81,6 +87,7 @@ export interface SessionCoordinatorOptions {
   codexRunner: CodexRunner;
   codexSettings(): CodexCoordinatorSettings;
   runDeferredTool?: DeferredToolRunner;
+  finalizeCodexResult?: CodexResultFinalizer;
   turnTimeoutMs?: number;
   outboxTimeoutMs?: number;
   maxSessionConcurrency?: number;
@@ -95,6 +102,7 @@ export interface SessionCoordinatorOptions {
   cleanupCodexProcess?: (identity: CodexProcessIdentity) => Promise<CodexProcessCleanupResult>;
   observeCodexToolUsage?: CodexToolUsageObserver;
   resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
+  onPersistenceError?: (error: unknown, context: { code: string; recordId: string }) => void;
 }
 
 export interface SessionCoordinatorIdleOptions {
@@ -149,6 +157,7 @@ export class SessionCoordinator {
   private readonly clock: () => number;
   private readonly disconnectedError: (error: unknown) => boolean;
   private readonly resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
+  private readonly persistenceMonitor: SessionPersistenceMonitor;
   private readonly toolJobProcessor: SessionToolJobProcessor;
   private readonly turnServices: SessionTurnServices;
   private readonly turnActor: SessionActorScheduler<ClaimedTurnTask>;
@@ -196,6 +205,7 @@ export class SessionCoordinator {
     this.clock = options.clock ?? Date.now;
     this.disconnectedError = options.isDisconnectedError ?? isDefaultDisconnectedError;
     this.resolveHeldReplyGate = options.resolveHeldReplyGate;
+    this.persistenceMonitor = new SessionPersistenceMonitor(this.leaseMs, this.clock, options.onPersistenceError);
     this.turnServices = createSessionTurnServices({
       store: this.store,
       workerId: this.workerId,
@@ -218,6 +228,7 @@ export class SessionCoordinator {
         message: "Codex process cleanup port is not configured."
       })),
       runDeferredTool: options.runDeferredTool,
+      finalizeCodexResult: options.finalizeCodexResult,
       observeCodexToolUsage: options.observeCodexToolUsage,
       workerId: this.workerId,
       isStopped: () => this.stopped,
@@ -342,12 +353,13 @@ export class SessionCoordinator {
       while (!this.stopped) {
         const claim = this.store.claimNextTurn({ workerId: this.workerId, leaseMs: this.leaseMs });
         if (!claim) break;
-        const state = this.createClaimState(
-          () => this.store.renewTurnLease(claim.turn.id, this.workerId, this.leaseMs)
+        const state = this.persistenceMonitor.claim(
+          () => this.store.renewTurnLease(claim.turn.id, this.workerId, this.leaseMs),
+          claim.turn.id
         );
         this.turnClaims.set(claim.turn.id, state);
         void this.turnActor.enqueue(claim.event.sessionId, { claim, state }, {
-          timeoutMs: this.turnTimeoutMs
+          timeoutMs: sessionEventTimeoutMs(claim.event.kind, this.turnTimeoutMs)
         }).catch((error) => this.turnServices.results.failActorTask(claim, state, error)).finally(() => {
           state.stopRenewal();
           this.turnClaims.delete(claim.turn.id);
@@ -361,6 +373,13 @@ export class SessionCoordinator {
     const { claim, state } = task;
     const signal = combineSignals(actorSignal, state.controller.signal);
     let outboxOrdinal = 0;
+    const deferredOutbox = createDeferredTurnOutboxEmitter(
+      this.store, claim, () => ++outboxOrdinal, () => this.scheduleOutbox()
+    );
+    const rejectDeferredOutbox = () => deferredOutbox.reject(
+      signal.reason ?? new Error("Session turn ended before it became deferred.")
+    );
+    signal.addEventListener("abort", rejectDeferredOutbox, { once: true });
     try {
       const emitOutbox = (draft: OutboxDraft) => emitTurnOutbox(
         this.store, claim, this.workerId, ++outboxOrdinal, draft,
@@ -376,13 +395,19 @@ export class SessionCoordinator {
         signal,
         turn: claim.turn,
         emitOutbox,
+        emitDeferredOutbox: deferredOutbox.emit,
         appendHeldOutbox
       });
       this.assertClaimUsable(state, signal);
       this.turnServices.results.apply(claim, state, result);
+      if (result.status === "deferred") deferredOutbox.release(result.providerCallId);
+      else deferredOutbox.reject(new Error(`Session turn completed as ${result.status}, not deferred.`));
     } catch (error) {
+      deferredOutbox.reject(error);
       this.turnServices.results.fail(claim, state, error, signal);
     } finally {
+      signal.removeEventListener("abort", rejectDeferredOutbox);
+      deferredOutbox.reject(new Error("Session turn ended before it became deferred."));
       this.deferScan(() => this.scheduleTurns());
     }
   }
@@ -411,8 +436,9 @@ export class SessionCoordinator {
           }
         }
         if (!outbox) break;
-        const state = this.createClaimState(
-          () => this.store.renewOutboxLease(outbox.id, this.workerId, this.leaseMs)
+        const state = this.persistenceMonitor.claim(
+          () => this.store.renewOutboxLease(outbox.id, this.workerId, this.leaseMs),
+          outbox.id
         );
         this.outboxClaims.set(outbox.id, state);
         this.outboxClaimPartitions.set(outbox.id, outbox.deliveryPartition);
@@ -467,11 +493,12 @@ export class SessionCoordinator {
   }
 
   private finishOutboxFailure(outbox: OutboxRecord, state: ClaimState, error: unknown) {
-    if (state.finalized || this.stopped) return;
-    state.finalized = true;
+    if (state.finalized || state.finalizationAttempted || this.stopped) return;
+    state.finalizationAttempted = true;
     try {
       const current = this.store.getOutbox(outbox.id);
       if (!current || current.status === "sent" || current.status === "dead" || current.status === "delivery_unknown") {
+        state.finalized = true;
         return;
       }
       if (current.uncertainSettleStep) {
@@ -481,6 +508,7 @@ export class SessionCoordinator {
           outcome: "delivery_unknown",
           error: serializeError(error)
         });
+        state.finalized = true;
         return;
       }
       if (current.status === "sent_remote") {
@@ -493,6 +521,7 @@ export class SessionCoordinator {
           availableAt
         });
         this.wakeAt(availableAt, () => this.scheduleOutbox());
+        state.finalized = true;
         return;
       }
       if (current.transportStartedAt != null) {
@@ -502,6 +531,7 @@ export class SessionCoordinator {
           outcome: "delivery_unknown",
           error: serializeError(error)
         });
+        state.finalized = true;
         return;
       }
       if (this.disconnectedError(error)) {
@@ -513,6 +543,7 @@ export class SessionCoordinator {
           availableAt: this.clock()
         });
         this.outboxPartitions.pause(outbox.deliveryPartition);
+        state.finalized = true;
         return;
       }
       if (outbox.attempts < this.maxOutboxAttempts) {
@@ -525,6 +556,7 @@ export class SessionCoordinator {
           availableAt
         });
         this.wakeAt(availableAt, () => this.scheduleOutbox());
+        state.finalized = true;
         return;
       }
       this.store.finishOutbox({
@@ -533,8 +565,11 @@ export class SessionCoordinator {
         outcome: "dead",
         error: serializeError(error)
       });
-    } catch {
-      // Recovery will reclaim the lease if persistence itself is unavailable.
+      state.finalized = true;
+    } catch (persistenceError) {
+      this.persistenceMonitor.record(persistenceError, "OUTBOX_FINALIZATION_PERSIST_FAILED", outbox.id);
+      state.controller.abort(persistenceError);
+      this.wakeAt(this.clock() + this.leaseMs, () => this.scheduleOutbox());
     }
   }
 
@@ -546,19 +581,20 @@ export class SessionCoordinator {
         const job = this.store.claimNextToolJob({ workerId: this.workerId, leaseMs: this.leaseMs });
         if (!job) break;
         const jobSettings = this.codexSettings();
-        const state = this.createClaimState(
+        const state = this.persistenceMonitor.claim(
           () => this.store.renewToolJobLease(
             job.id,
             this.workerId,
             this.leaseMs,
             job.attempts,
             job.attemptToken
-          )
+          ),
+          job.id
         );
         this.toolClaims.set(job.id, state);
         const actorKey = toolActorKey(job, jobSettings.workspacePath);
         void this.toolActor.enqueue(actorKey, { job, settings: jobSettings, state }, {
-          timeoutMs: positiveInteger(jobSettings.timeoutMs, DEFAULT_TURN_TIMEOUT_MS, "codex.timeoutMs") + 5_000
+          timeoutMs: toolJobActorTimeoutMs(job, jobSettings)
         }).catch((error) => this.toolJobProcessor.fail(job, state, error)).finally(() => {
           state.stopRenewal();
           this.toolClaims.delete(job.id);
@@ -570,19 +606,8 @@ export class SessionCoordinator {
     }
   }
 
-  private createClaimState(renew: () => boolean): ClaimState {
-    const controller = new AbortController();
-    const interval = setInterval(() => {
-      if (!renew() && !controller.signal.aborted) {
-        controller.abort(new Error("Persistent lease ownership was lost."));
-      }
-    }, Math.max(1, Math.floor(this.leaseMs / 3)));
-    interval.unref?.();
-    return {
-      controller,
-      finalized: false,
-      stopRenewal: () => clearInterval(interval)
-    };
+  getPersistenceHealth() {
+    return this.persistenceMonitor.health();
   }
 
   private assertClaimUsable(state: ClaimState, signal: AbortSignal) {
@@ -610,6 +635,19 @@ export class SessionCoordinator {
   private deferScan(callback: () => void) {
     queueMicrotask(callback);
   }
+}
+
+function sessionEventTimeoutMs(kind: string, regularTimeoutMs: number) {
+  return kind === "tool_completion" || kind === "scheduled_callback_delivery"
+    ? AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS + TOOL_ACTOR_SETTLEMENT_GRACE_MS
+    : regularTimeoutMs;
+}
+
+function toolJobActorTimeoutMs(job: ToolJobRecord, settings: CodexCoordinatorSettings) {
+  const taskTimeoutMs = job.toolName === "codex"
+    ? positiveInteger(settings.timeoutMs, DEFAULT_TURN_TIMEOUT_MS, "codex.timeoutMs")
+    : AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS;
+  return taskTimeoutMs + TOOL_ACTOR_SETTLEMENT_GRACE_MS;
 }
 
 function toolActorKey(job: ToolJobRecord, workspacePath: string) {

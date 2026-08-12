@@ -1,136 +1,57 @@
-export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+import type {
+  AppConfigShape,
+  BotDirectorSettings,
+  BotMemorySettings,
+  BotOrchestratorSettings,
+  BotConfigShape,
+  BotToneSettings,
+  BotToolSettingsBase,
+  BroadcastStormConfig,
+  ConversationMessageStats,
+  ConversationOrchestratorStatus,
+  NormalReplyConfig,
+  OrchestratorDecisionResult,
+  ReasoningEffort,
+  ToolOverride
+} from "../../../packages/contracts/admin/public.js";
+import type {
+  RequestLogBusinessNode,
+  RequestLogMemoryTool,
+  RequestLogPresentation
+} from "../../../packages/contracts/observability/requestLogPresentation.js";
 
-export interface ProviderConfig {
-  id: string;
-  label: string;
-  kind: "codex-responses" | "openai-official" | "anthropic-official" | "openai-compatible" | "anthropic-compatible" | "gemini-official" | "gemini-compatible";
-  enabled: boolean;
-  model: string;
-  imageModel: string;
-  baseUrl?: string;
-  apiKeyEnv: string;
-  envFile?: string;
-  temperature: number;
-  maxOutputTokens: number;
-  reasoningEffort?: ReasoningEffort;
-  modelSource?: "remote" | "custom";
-  multimodal?: "auto" | "enabled" | "disabled";
-  detectedMultimodal?: boolean;
-  visionProviderId?: string;
-  visionModel?: string;
-}
+export type {
+  BotMemorySettings,
+  BotImageReaderSettings,
+  BotDirectorSettings,
+  BotOrchestratorSettings,
+  BotToneSettings,
+  BroadcastStormConfig,
+  ConversationMessageStats,
+  ConversationOrchestratorStatus,
+  GenerateImgToolProvider,
+  ImageHistoryRecord,
+  ImageQuality,
+  ImageResolution,
+  ImageSize,
+  NormalReplyConfig,
+  OneBotLoginCheck,
+  OneBotQrLogin,
+  OrchestratorDecisionResult,
+  ProviderConfig,
+  ReasoningEffort,
+  ToolOverride,
+  WebsearchToolProvider
+} from "../../../packages/contracts/admin/public.js";
 
-export type WebsearchToolProvider = "tavily";
-export type GenerateImgToolProvider = "codex-image-gen" | "custom";
 export type ToolName = string;
 export type ToolExecutionMode = "inline" | "deferred";
 export type ToolUnavailabilityKind = "runtime" | "session";
-export interface ToolOverride {
-  enabled?: boolean;
-  description?: string;
-}
-export type ImageResolution = "1K" | "2K" | "4K";
-export type ImageQuality = "auto" | "low" | "medium" | "high";
-export type ImageSize =
-  | "1024x1024"
-  | "1536x1024"
-  | "1024x1536"
-  | "2048x2048"
-  | "2048x1152"
-  | "1152x2048"
-  | "3840x2160"
-  | "2160x3840";
-
-export interface BotToolSettings {
+export interface BotToolSettings extends BotToolSettingsBase {
   maxCalls: number;
   overrides: Record<ToolName, ToolOverride>;
-  websearch: {
-    provider: WebsearchToolProvider;
-    tavilyApiKey: string;
-    tavilyApiKeys: string[];
-    tavilyApiKeyEnv: string;
-    maxResults: number;
-  };
-  codex: {
-    enabled: boolean;
-    model: string;
-    codexExecutable: string;
-    timeoutMs: number;
-    maxConcurrency: number;
-  };
-  generateImg: {
-    provider: GenerateImgToolProvider;
-    size: ImageSize;
-    resolution: ImageResolution;
-    quality: ImageQuality;
-  };
 }
-
-export interface BotMemorySettings {
-  memoryModel: string;
-  reasoningEffort?: ReasoningEffort;
-  messageThreshold: number;
-  workingMemoryMaxEntries: number;
-  workMemoryCompressInPrompt: string;
-  workMemoryCompressOutPrompt: string;
-  userProfilePrompt: string;
-}
-
-export interface BotOrchestratorSettings {
-  enabled: boolean;
-  userGroupchatOrchestratorModel: string;
-  groupThreadModel: string;
-  reasoningEffort?: ReasoningEffort;
-  promptFile: string;
-  messageThreshold: number;
-  recentMessageWindowMs: number;
-}
-
-export interface BroadcastStormConfig {
-  enabled: boolean;
-  windowMinutes: number;
-  replyThreshold: number;
-  cooldownMinutes: number;
-  additionalQqIds: string[];
-}
-
-export interface NormalReplyConfig {
-  maxRetries: number;
-}
-
-export interface BotToneSettings {
-  enabled: boolean;
-  providerId: string;
-  model: string;
-  reasoningEffort?: ReasoningEffort;
-  temperature: number;
-  maxOutputTokens: number;
-  maxRetries: number;
-}
-
-export interface BotConfig {
-  adminQq: string;
-  adminName: string;
-  replyDebounceMs: number;
-  pokeOnNoReply: boolean;
-  quoteGroupReplies: boolean;
-  quoteGroupReplyExcludedUserIds: string[];
-  contextMessageLimit: number;
-  tone: BotToneSettings;
-  memory: BotMemorySettings;
-  orchestrator: BotOrchestratorSettings;
-  tools: BotToolSettings;
-  bash: {
-    enabled: boolean;
-    adminPrivateBackend: "native" | "docker";
-    auditModel: string;
-    strictMode: boolean;
-    allowGroup: boolean;
-    adminOnly: boolean;
-    workspaceOnly: boolean;
-    blockedKeywords: string[];
-  };
-}
+export type BotConfig = BotConfigShape<BotToolSettings>;
 
 export interface BotToolSettingsDraft extends BotToolSettings {
   websearch: BotToolSettings["websearch"] & {
@@ -138,32 +59,7 @@ export interface BotToolSettingsDraft extends BotToolSettings {
   };
 }
 
-export interface AppConfig {
-  schemaVersion: 1;
-  server: { host: string; port: number };
-  persona: {
-    defaultAgentId: string;
-    name?: string;
-    avatarPath?: string;
-    agentWorkspace: string;
-    systemPromptWorkspace: string;
-    systemPromptOverride: boolean;
-  };
-  providers: { defaultProviderId: string; items: ProviderConfig[] };
-  broadcastStorm: BroadcastStormConfig;
-  normalReply: NormalReplyConfig;
-  bot: BotConfig;
-  onebot: {
-    reverseWsPath: string;
-    accessTokenEnv: string;
-    autoReplyPrivate: boolean;
-    autoReplyUserGroup: boolean;
-    autoReplyBotGroup: boolean;
-    quoteGroupReplies: boolean;
-    mentionNames: string[];
-    commandPrefixes: string[];
-  };
-}
+export type AppConfig = AppConfigShape<BotConfig>;
 
 export interface AgentAccount {
   id: string;
@@ -203,7 +99,7 @@ export interface AgentAvatarInput {
   dataBase64: string;
 }
 
-export type ConfigSectionKey = "server" | "persona" | "providers" | "broadcastStorm" | "normalReply" | "bot" | "tone" | "memory" | "orchestrator" | "tools" | "bash" | "onebot";
+export type ConfigSectionKey = "server" | "persona" | "providers" | "broadcastStorm" | "normalReply" | "bot" | "tone" | "memory" | "director" | "orchestrator" | "tools" | "bash" | "onebot";
 export type SettingsSectionKey = ConfigSectionKey | "security";
 export type ApplyMode = "hot" | "reconnect" | "restart";
 
@@ -224,9 +120,10 @@ export interface ConfigSectionValueMap {
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
   normalReply: NormalReplyConfig;
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit">;
+  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyModel" | "replyReasoningEffort" | "imageReader" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize" | "emojiSendSeparately">;
   tone: BotToneSettings;
   memory: BotMemorySettings;
+  director: BotDirectorSettings;
   orchestrator: BotOrchestratorSettings;
   tools: BotToolSettingsDraft;
   bash: BotConfig["bash"];
@@ -388,7 +285,10 @@ export interface SunaTool {
   unavailabilityKind?: ToolUnavailabilityKind;
   accessLabel?: string;
   accessDescription?: string;
-  executionBackend?: "native" | "docker";
+  executionBackend?: "native";
+  bashEnvironments?: {
+    native?: { available: boolean; reasonCode?: string };
+  };
   runtimeReasonCode?: string;
   defaultDescription?: string;
   promptDescription?: string;
@@ -421,6 +321,7 @@ export interface ConversationMessageRecord {
   isAdmin?: boolean;
   selfId?: number;
   imageUrls?: string[];
+  imageAltTexts?: string[];
   replyMessageIds?: number[];
   quoteReferences?: ConversationMessageQuote[];
   logRunId?: string;
@@ -431,23 +332,6 @@ export interface ConversationMessageRecord {
   eventKind?: "orchestrator_decision";
   visibility?: "internal";
   orchestratorDecision?: OrchestratorDecisionResult;
-}
-
-export interface OrchestratorDecisionResult {
-  status?: "completed" | "failed";
-  shouldReply: boolean;
-  reason: string;
-  replyToMessageId?: string;
-  raw: string;
-}
-
-export interface ConversationOrchestratorStatus {
-  active: boolean;
-  messageCount: number;
-  messageTarget: number;
-  activeWindowMs: number;
-  lastMessageAt: string;
-  lastCheckedAt?: string;
 }
 
 export interface ConversationRecord {
@@ -462,12 +346,13 @@ export interface ConversationRecord {
   selfId?: number;
   replyEnabled?: boolean;
   orchestratorEnabled?: boolean;
+  orchestratorResponseTimeOverrideEnabled?: boolean;
+  orchestratorResponseTimeMs?: number;
+  directorEventsEnabled?: boolean;
   disabledTools?: ToolName[];
   messageCount: number;
   lastAt: string;
   lastText: string;
-  memoryCompressedThroughMessageCount?: number;
-  memoryCompressedAt?: string;
   orchestratorCheckedMessageCount?: number;
   orchestratorCheckedAt?: string;
   orchestratorStatus?: ConversationOrchestratorStatus;
@@ -494,7 +379,10 @@ export interface ConversationLogEntry {
   response?: unknown;
   metadata?: Record<string, unknown>;
   tokenUsage?: TokenUsageBreakdown;
+  presentation?: RequestLogPresentation;
 }
+
+export type { RequestLogBusinessNode, RequestLogMemoryTool, RequestLogPresentation };
 
 export interface TokenUsageBreakdown {
   input: number;
@@ -536,31 +424,10 @@ export interface ModelCallStatsPayload extends ModelCallStatsBreakdown {
   models?: ReadonlyArray<ModelCallStatsBreakdown & { model: string }>;
 }
 
-export interface ConversationMessageStats {
-  total: number;
-  retained: number;
-  visible: number;
-  user: number;
-  assistant: number;
-  internal: number;
-}
-
 export interface ConversationStatsPayload {
   conversationId: string;
   messages: ConversationMessageStats;
   modelCalls: ModelCallStatsPayload;
-}
-
-export interface ImageHistoryRecord {
-  id: string;
-  url: string;
-  filePath?: string;
-  prompt?: string;
-  size?: string;
-  resolution?: string;
-  providerId?: string;
-  model?: string;
-  createdAt: string;
 }
 
 export interface SelfieReferenceImage {
@@ -607,45 +474,78 @@ export interface MemoryEntry {
   userId?: string;
   userIds?: string[];
   userName?: string;
+  addressNames?: string[];
   addressName?: string;
   userNickname?: string;
   groupCards?: Array<{ groupId: number; card: string; lastSeenAt: string }>;
   score?: number;
+  recallCount?: number;
+  distinctRecallDays?: number;
+  lastRecalledAt?: string;
+  recallTrackingStartedAt?: string;
+  lastReviewedAt?: string;
+  importance?: number;
+  futureRelevance?: number;
+  emotionalSalience?: number;
 }
 export interface MemoryWritePayload {
   source: MemorySourceId;
   id?: string;
   text: string;
   userId?: string;
+  addressNames?: string[];
   addressName?: string;
 }
-export interface MemoryPayload { sources: MemorySource[]; entries: MemoryEntry[] }
+export interface MemoryDocument {
+  fileName: string;
+  content: string;
+  revision: string;
+}
+export interface MemoryPayload {
+  sources: MemorySource[];
+  entries: MemoryEntry[];
+  document?: MemoryDocument;
+}
 export interface MemoryRecallPayload { ok: boolean; query: string; matches: MemoryEntry[]; error?: string }
+export interface MemoryOperationLogEntry {
+  id: string;
+  at: string;
+  category: string;
+  action: string;
+  request?: {
+    source?: string;
+    operation?: string;
+    actor?: string;
+    recordIds?: string[];
+    batchId?: string;
+    conversationId?: string;
+    conversationScope?: string;
+  };
+  response?: {
+    outcome?: string;
+    beforeCount?: number;
+    afterCount?: number;
+    changedCount?: number;
+    beforeRevision?: string;
+    afterRevision?: string;
+    reasonCode?: string;
+  };
+  metadata?: {
+    agentId?: string;
+    stage?: string;
+    memorySource?: string;
+    batchId?: string;
+    conversationId?: string;
+  };
+}
+export interface MemoryOperationLogPayload {
+  logs: MemoryOperationLogEntry[];
+  page: number;
+  pageSize: number;
+  total: number;
+  pageCount: number;
+}
 
-export interface OneBotLoginInfo {
-  connected: boolean;
-  data?: { user_id?: number; nickname?: string };
-  retcode?: number;
-  status?: string;
-  error?: string;
-}
-export interface OneBotLoginCheck {
-  connected: boolean;
-  online: boolean;
-  data?: { user_id?: number; nickname?: string };
-  error?: string;
-}
-export interface OneBotQrLogin extends OneBotLoginCheck {
-  available: boolean;
-  phase?: "online" | "connecting" | "restarting" | "starting" | "waiting_scan" | "expired";
-  loginError?: string;
-  action?: string;
-  imageDataUrl?: string;
-  imageUrl?: string;
-  imageUpdatedAt?: string;
-  qrcode?: string;
-  webuiUrl?: string;
-}
 export interface OneBotChatList {
   connected: boolean;
   private: Array<{ userId: number; nickname: string; remark: string }>;
@@ -654,6 +554,7 @@ export interface OneBotChatList {
 
 export interface OneBotEventTrace {
   receivedAt: string;
+  accountId?: string;
   postType?: string;
   messageType?: string;
   detailType?: string;

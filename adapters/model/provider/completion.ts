@@ -37,15 +37,26 @@ import {
   resolveRetryDelayMs,
   waitForRetry
 } from "./transport.js";
-import { errorMessage, parseJson } from "./valueUtils.js";
+import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 import { completeAnthropicMessages } from "./anthropicCompletion.js";
 import { completeGeminiGenerateContent } from "./geminiCompletion.js";
-import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
+import {
+  claimBusinessToolCalls,
+  resolveMaxToolCalls,
+  resolveToolRoundLimit,
+  toolCallLimitError
+} from "./toolLoopLimits.js";
 import {
   createTurnToolState,
   withTurnToolState
 } from "./turnToolState.js";
-import { preflightProviderToolResponse } from "./toolResponsePreflight.js";
+import { processProviderToolRound } from "./toolRound.js";
+import { assertMappedProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
+import {
+  assertMemoryToolDecisionsResolved,
+  chatMemoryToolChoice,
+  responsesMemoryToolChoice
+} from "./memoryToolDecisions.js";
 
 export async function completeProviderTurn(
   context: ProviderAdapterContext,
@@ -70,7 +81,12 @@ async function completeOpenAIResponses(
   state: TurnToolState
 ): Promise<ProviderTurnResult> {
   const client = context.createResponsesClient({ maxRetries: 0 });
-  const tools = context.toolExecutor.resolveDefinitions(options, request.tools);
+  const tools = context.toolExecutor.resolveDefinitions(
+    options,
+    request.tools,
+    "openai-responses"
+  );
+  assertMappedProviderToolDefinitions(tools, "openai-responses");
   const toolNames = tools.map(readToolName);
   const explicitCache = supportsExplicitPromptCaching(context.provider);
   const instructionBoundary = leadingInstructionBoundary(request.messages);
@@ -86,8 +102,9 @@ async function completeOpenAIResponses(
   });
   const requestFields = promptRequestFields(request);
   const maxToolCalls = resolveMaxToolCalls(options);
+  const toolRoundLimit = resolveToolRoundLimit(options, maxToolCalls);
 
-  for (let round = 0; round <= maxToolCalls; round += 1) {
+  for (let round = 0; round <= toolRoundLimit; round += 1) {
     const requestBody = {
       model: context.provider.model,
       temperature: context.provider.temperature,
@@ -98,6 +115,7 @@ async function completeOpenAIResponses(
       prompt_cache_key: cacheKey,
       input: input as never,
       tools: tools.length ? tools as never : undefined,
+      tool_choice: responsesMemoryToolChoice(options),
       parallel_tool_calls: tools.length ? requestFields.parallel_tool_calls ?? false : undefined
     };
     const metadata = withLogContext({
@@ -123,24 +141,26 @@ async function completeOpenAIResponses(
     }, attempt.metadata);
 
     const toolCalls = extractFunctionCalls(response);
-    state.toolCallCount = claimToolCalls(state.toolCallCount, toolCalls.length, maxToolCalls);
+    state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, toolCalls, maxToolCalls);
     if (!toolCalls.length) {
+      assertMemoryToolDecisionsResolved(options);
       const text = extractProviderText(response);
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };
     }
 
     const siblingText = extractProviderText(response);
-    const preflight = preflightProviderToolResponse(toolCalls, siblingText, options, state);
-    if (!preflight.rejected) {
-      const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
-      if (deferred) return deferred;
-      const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
-      if (noReply) return noReply;
-      if (preflight.emitAssistantText) await emitIntermediateAssistantText(response, options);
-    }
-    const outputs = preflight.rejected ?? await context.toolExecutor.execute(toolCalls, options, tools, state);
-    input.push(...extractResponseOutput(response), ...outputs);
+    const toolRound = await processProviderToolRound({
+      calls: toolCalls,
+      siblingText,
+      options,
+      definitions: tools,
+      state,
+      executor: context.toolExecutor,
+      emitAssistantText: () => emitIntermediateAssistantText(response, options)
+    });
+    if (toolRound.terminal) return toolRound.terminal;
+    input.push(...extractResponseOutput(response), ...toolRound.outputs);
   }
 
   throw toolCallLimitError(maxToolCalls);
@@ -152,10 +172,15 @@ async function completeCodexResponses(
   options: ProviderCompleteOptions,
   state: TurnToolState
 ): Promise<ProviderTurnResult> {
-  const apiKey = context.getApiKey();
+  const apiKey = await context.getApiKeyAsync();
   if (!apiKey) throw new Error("Codex 未登录。请先运行 codex login，或设置 CODEX_ACCESS_TOKEN。");
 
-  const tools = context.toolExecutor.resolveDefinitions(options, request.tools);
+  const tools = context.toolExecutor.resolveDefinitions(
+    options,
+    request.tools,
+    "codex-responses"
+  );
+  assertMappedProviderToolDefinitions(tools, "codex-responses");
   const systemPrompt = request.messages
     .filter((message) => message.role === "system")
     .map((message) => message.content)
@@ -180,8 +205,9 @@ async function completeCodexResponses(
   });
   const requestFields = promptRequestFields(request);
   const maxToolCalls = resolveMaxToolCalls(options);
+  const toolRoundLimit = resolveToolRoundLimit(options, maxToolCalls);
 
-  for (let round = 0; round <= maxToolCalls; round += 1) {
+  for (let round = 0; round <= toolRoundLimit; round += 1) {
     const requestBody = {
       model: context.provider.model,
       store: false,
@@ -196,6 +222,7 @@ async function completeCodexResponses(
       input,
       instructions: stableInputCache ? undefined : systemPrompt,
       tools: tools.length ? tools : undefined,
+      tool_choice: responsesMemoryToolChoice(options),
       parallel_tool_calls: tools.length ? requestFields.parallel_tool_calls ?? false : undefined
     };
     const metadata = withLogContext({
@@ -229,7 +256,10 @@ async function completeCodexResponses(
           willRetry,
           retryDelayMs
         }, { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts });
-      }
+      },
+      classifyResponseFailure: (response, text) => response.ok
+        ? codexResponsePayloadFailure(parseResponsesSsePayload(text) ?? parseJson(text))
+        : undefined
     });
     const { response, text } = attempt;
     const payload = parseResponsesSsePayload(text) ?? parseJson(text);
@@ -245,7 +275,11 @@ async function completeCodexResponses(
         willRetry: false,
         retryDelayMs: 0
       }, responseMetadata);
-      throw new Error(detail);
+      throw Object.assign(new Error(detail), {
+        name: "ProviderResponseError",
+        status: response.status,
+        retryable: retryableModelError(undefined, response.status)
+      });
     }
     await context.logger.response("codex.complete", {
       ok: true,
@@ -255,8 +289,9 @@ async function completeCodexResponses(
     }, responseMetadata);
 
     const toolCalls = extractFunctionCalls(payload);
-    state.toolCallCount = claimToolCalls(state.toolCallCount, toolCalls.length, maxToolCalls);
+    state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, toolCalls, maxToolCalls);
     if (!toolCalls.length) {
+      assertMemoryToolDecisionsResolved(options);
       const outputText = extractResponsesTextFromSse(text) || extractResponsesText(payload);
       if (!outputText) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text: outputText };
@@ -264,19 +299,39 @@ async function completeCodexResponses(
 
     const streamText = extractResponsesTextFromSse(text);
     const siblingText = streamText || extractResponsesText(payload);
-    const preflight = preflightProviderToolResponse(toolCalls, siblingText, options, state);
-    if (!preflight.rejected) {
-      const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
-      if (deferred) return deferred;
-      const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
-      if (noReply) return noReply;
-      if (preflight.emitAssistantText) await emitIntermediateAssistantText(payload, options, streamText);
-    }
-    const outputs = preflight.rejected ?? await context.toolExecutor.execute(toolCalls, options, tools, state);
-    input.push(...extractResponseOutput(payload), ...outputs);
+    const toolRound = await processProviderToolRound({
+      calls: toolCalls,
+      siblingText,
+      options,
+      definitions: tools,
+      state,
+      executor: context.toolExecutor,
+      emitAssistantText: () => emitIntermediateAssistantText(payload, options, streamText)
+    });
+    if (toolRound.terminal) return toolRound.terminal;
+    input.push(...extractResponseOutput(payload), ...toolRound.outputs);
   }
 
   throw toolCallLimitError(maxToolCalls);
+}
+
+function codexResponsePayloadFailure(payload: unknown) {
+  if (!isRecord(payload) || !isRecord(payload.error)) return undefined;
+  const message = String(payload.error.message ?? "").trim();
+  if (!message) return undefined;
+  const type = String(payload.error.type ?? "").trim();
+  const code = String(payload.error.code ?? "").trim();
+  const signature = `${type} ${code}`.toLowerCase();
+  const retryable = /overload|rate_limit|service_unavailable|server_error|temporar|timeout/u.test(signature);
+  return {
+    error: Object.assign(new Error(message), {
+      name: "ProviderResponseError",
+      ...(type ? { providerType: type } : {}),
+      ...(code ? { providerCode: code } : {}),
+      retryable
+    }),
+    retryable
+  };
 }
 
 function leadingInstructionBoundary(messages: RenderedPromptRequest["messages"]) {
@@ -297,11 +352,17 @@ async function completeChatCompletions(
 ): Promise<ProviderTurnResult> {
   const client = context.createChatClient({ maxRetries: 0 });
   const messages: Array<Record<string, unknown>> = await Promise.all(request.messages.map(toChatCompletionMessage));
-  const definitions = context.toolExecutor.resolveDefinitions(options, request.tools);
+  const definitions = context.toolExecutor.resolveDefinitions(
+    options,
+    request.tools,
+    "openai-chat-completions"
+  );
   const tools = definitions.map(toChatCompletionTool);
+  assertMappedProviderToolDefinitions(tools, "openai-chat-completions");
   const maxToolCalls = resolveMaxToolCalls(options);
+  const toolRoundLimit = resolveToolRoundLimit(options, maxToolCalls);
 
-  for (let round = 0; round <= maxToolCalls; round += 1) {
+  for (let round = 0; round <= toolRoundLimit; round += 1) {
     const requestBody = {
       model: context.provider.model,
       messages,
@@ -309,6 +370,7 @@ async function completeChatCompletions(
       max_completion_tokens: context.provider.maxOutputTokens,
       reasoning_effort: undefined,
       tools: tools.length ? tools : undefined,
+      tool_choice: chatMemoryToolChoice(options),
       parallel_tool_calls: tools.length ? false : undefined,
       response_format: request.response_format?.type === "text" ? undefined : request.response_format
     };
@@ -348,31 +410,33 @@ async function completeChatCompletions(
         arguments: call.function.arguments
       }];
     });
-    state.toolCallCount = claimToolCalls(state.toolCallCount, calls.length, maxToolCalls);
+    state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, calls, maxToolCalls);
     if (!calls.length) {
+      assertMemoryToolDecisionsResolved(options);
       const text = choice.content?.trim();
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };
     }
 
     const siblingText = choice.content?.trim() ?? "";
-    const preflight = preflightProviderToolResponse(calls, siblingText, options, state);
-    if (!preflight.rejected) {
-      const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);
-      if (deferred) return deferred;
-      const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
-      if (noReply) return noReply;
-      if (siblingText && options.onAssistantText && preflight.emitAssistantText) {
-        await options.onAssistantText(siblingText, "text");
+    const toolRound = await processProviderToolRound({
+      calls,
+      siblingText,
+      options,
+      definitions,
+      state,
+      executor: context.toolExecutor,
+      emitAssistantText: async () => {
+        if (siblingText && options.onAssistantText) await options.onAssistantText(siblingText, "text");
       }
-    }
+    });
+    if (toolRound.terminal) return toolRound.terminal;
     messages.push({
       role: "assistant",
       content: choice.content ?? null,
       tool_calls: choice.tool_calls
     });
-    const outputs = preflight.rejected ?? await context.toolExecutor.execute(calls, options, definitions, state);
-    messages.push(...outputs.map((output) => ({
+    messages.push(...toolRound.outputs.map((output) => ({
       role: "tool",
       tool_call_id: output.call_id,
       content: output.output

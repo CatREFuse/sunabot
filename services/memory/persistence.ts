@@ -1,25 +1,33 @@
-import type { AppConfig } from "../../src/types.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
+import type {
+  MemoryRecallStats,
+  RecordActualMemoryRecallInput,
+  RecordActualMemoryRecallResult,
+  ReserveActualMemoryRecallInput,
+  ReserveActualMemoryRecallResult
+} from "./types.js";
 
 export type MemoryDataSource = "working" | "long_term" | "user_profile";
 export type MemoryRecordData = Record<string, unknown>;
+export type MemorySourceRevisions = Record<MemoryDataSource, number>;
 
 export interface MemoryRepositoryPort {
   readMemory(source: MemoryDataSource): MemoryRecordData[];
+  readMemorySnapshot(): { records: Record<MemoryDataSource, MemoryRecordData[]>; revisions: MemorySourceRevisions };
   replaceMemory(source: MemoryDataSource, records: readonly MemoryRecordData[]): void;
   ensureLegacyMemoryImported(source: MemoryDataSource, filePath: string): void;
-  commitMemoryBatch(input: {
-    batchId: string;
-    baselineWorking: readonly MemoryRecordData[];
-    working: readonly MemoryRecordData[];
-    longTerm: readonly MemoryRecordData[];
-    userProfile: readonly MemoryRecordData[];
-    result: unknown;
-  }): { status: "existing"; result: unknown } | { status: "snapshot_conflict" } | { status: "committed"; result: unknown };
-  readMemoryBatch(batchId: string): unknown;
-  hasMemoryBatch(batchId: string): boolean;
-  readMemoryScheduler(): Record<string, object>;
-  replaceMemoryScheduler(conversations: Readonly<Record<string, object>>): void;
-  ensureLegacyMemorySchedulerImported(filePath: string): void;
+  initializeRecallTracking?(recordIds: readonly string[], at?: Date): MemoryRecallStats[];
+  reserveActualRecall(input: ReserveActualMemoryRecallInput): ReserveActualMemoryRecallResult;
+  recordActualRecall?(input: RecordActualMemoryRecallInput): RecordActualMemoryRecallResult;
+  listRecallStats?(recordIds?: readonly string[]): MemoryRecallStats[];
+  appendMemoryOperationLog?(record: MemoryRecordData): void;
+  readMemoryOperationLogPage?(options: { page: number; pageSize: number }): {
+    logs: MemoryRecordData[];
+    page: number;
+    pageSize: number;
+    total: number;
+    pageCount: number;
+  };
 }
 
 export interface MemoryPersistenceProvider {

@@ -1,5 +1,5 @@
-import type { ProviderConfig } from "../../../src/types.js";
-import { appendRequestLog } from "../../../src/requestLog.js";
+import type { ProviderConfig } from "../../../packages/contracts/admin/public.js";
+import { appendRequestLog } from "../../observability/requestLog.js";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
 import {
   ImageGenerationHttpError,

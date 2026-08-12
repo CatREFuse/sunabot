@@ -2,6 +2,8 @@ import type { Page, Route } from "@playwright/test";
 import sharp from "sharp";
 import type { AppConfig } from "../../src/types.js";
 import type { AgentAccount, AgentSummary } from "../../apps/admin-web/src/types.js";
+import type { VoiceProfile, VoiceProviderStatus } from "../../apps/admin-web/src/types/voice.js";
+import type { KnowledgeDocument } from "../../apps/admin-web/src/types/knowledge.js";
 import type {
   AgentMcpServer,
   AgentSkillRecord,
@@ -12,6 +14,7 @@ import {
   mcpHttpCredentialEnvironmentKey,
   mcpStdioCredentialEnvironmentKey
 } from "../../packages/contracts/extensions/agentExtensions.js";
+import { RELEASE_CATALOG } from "../../packages/platform/releaseCatalog.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent } from "../../services/agent/promptDefaults.js";
 import { parseFinalPromptTemplate } from "../../services/agent/promptSystem.js";
@@ -83,13 +86,23 @@ const initialConfig = {
   bot: {
     adminQq: "171419991",
     adminName: "猫老师",
+    replyModel: "gpt-5.6-sol",
+    replyReasoningEffort: "high",
+    imageReader: {
+      enabled: true,
+      providerId: "codex",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low"
+    },
     replyDebounceMs: 5_000,
     pokeOnNoReply: false,
     quoteGroupReplies: true,
     quoteGroupReplyExcludedUserIds: [],
-    contextMessageLimit: 48,
+    contextMessageLimit: 32,
     tone: {
       enabled: false,
+      segmentedReply: false,
+      followMainModel: false,
       providerId: "",
       model: "gpt-5.4-mini",
       reasoningEffort: "low",
@@ -100,16 +113,14 @@ const initialConfig = {
     memory: {
       memoryModel: "gpt-5.4-mini",
       reasoningEffort: "medium",
-      messageThreshold: 48,
-      workingMemoryMaxEntries: 100,
-      workMemoryCompressInPrompt: "work_memory_compress_in.json",
-      workMemoryCompressOutPrompt: "work_memory_compress_out.json",
-      userProfilePrompt: "user_profile_prompt.json"
+      dreamRecentWindowHours: 24,
+      dreamRecentMemoryLimit: 24,
+      dreamOlderMemoryLimit: 12,
+      workMemoryCompressOutPrompt: "work_memory_compress_out.json"
     },
     orchestrator: {
       enabled: true,
       userGroupchatOrchestratorModel: "gpt-5.6-luna",
-      groupThreadModel: "gpt-5.4-mini",
       reasoningEffort: "max",
       promptFile: "user_groupchat_orchestrator.json",
       messageThreshold: 10,
@@ -136,7 +147,6 @@ const initialConfig = {
     },
     bash: {
       enabled: true,
-      adminPrivateBackend: "native",
       auditModel: "gpt-5.4-mini",
       strictMode: true,
       allowGroup: false,
@@ -170,6 +180,7 @@ const initialAgentFiles = [
   ),
   file("persona.user", "用户关系", "人格", "USER.md", "称呼用户为猫老师。\n"),
   file("persona.relation", "关系", "人格", "RELATION.md", "长期协作伙伴。\n"),
+  file("persona.air", "场域知识", "人格", "AIR.md", "# 场域知识\n\n## 使用边界\n\n按会话范围理解。\n\n## 场域约定\n\n暂无。\n"),
   file(
     "conversation.private-reply",
     "单聊回复",
@@ -191,11 +202,10 @@ const initialAgentFiles = [
     "tone_rewrite.json",
     defaultPromptContent("conversation.tone-rewrite")
   ),
-  file("memory.compress-in", "工作记忆提取", "记忆", "work_memory_compress_in.json", defaultPromptContent("memory.compress-in")),
   file("memory.compress-out", "长期记忆压缩", "记忆", "work_memory_compress_out.json", defaultPromptContent("memory.compress-out")),
-  file("memory.user-profile", "用户画像提取", "记忆", "user_profile_prompt.json", defaultPromptContent("memory.user-profile")),
   file("orchestrator.user-group", "群聊编排", "编排器", "user_groupchat_orchestrator.json", defaultPromptContent("orchestrator.user-group")),
   file("conversation.group-summary", "群聊总结", "对话", "group_chat_summary.json", defaultPromptContent("conversation.group-summary")),
+  file("scheduler.cron-callback", "定时任务回调", "调度", "cron_callback.json", defaultPromptContent("scheduler.cron-callback")),
   file("image.selfie-rewrite", "自拍提示词改写", "图像", "selfie_prompt_rewrite.json", defaultPromptContent("image.selfie-rewrite"))
 ];
 
@@ -325,6 +335,47 @@ const tokenUsageFixture: MockTokenUsagePayload = {
   filters: { models: ["gpt-5.4-mini", "gpt-5.6-terra", "__unlabeled__"], model: "", behavior: "" }
 };
 
+const initialVoiceProfiles: Record<string, VoiceProfile> = Object.fromEntries(
+  ["plana", "arona", "koharu"].map((agentId) => [agentId, {
+    schemaVersion: 1,
+    enabled: true,
+    defaultLanguage: "ja",
+    languages: {
+      zh: null,
+      en: null,
+      ja: {
+        language: "ja",
+        fileName: `kivo-${agentId}-ja.wav`,
+        relativePath: `voice/references/kivo-${agentId}-ja-${"a".repeat(64)}.wav`,
+        mimeType: "audio/wav",
+        sizeBytes: 1_299_818,
+        sha256: "a".repeat(64),
+        referenceText: agentId === "plana"
+          ? "待機中、解決しなければならない作業が多数存在しています。"
+          : "先生、おかえりなさい。今日もよろしくお願いします。",
+        sourceUrl: "https://static.kivo.wiki/voices/mock/reference.ogg",
+        characterUrl: "https://kivo.wiki/",
+        updatedAt: "2026-07-19T01:00:00.000Z"
+      }
+    },
+    provider: {
+      protocol: "openai-audio",
+      baseUrl: "https://api.openai.com/v1",
+      apiKeyEnv: "OPENAI_API_KEY",
+      model: "gpt-4o-mini-tts",
+      voices: { zh: null, en: null, ja: `voice_${agentId}` }
+    }
+  } satisfies VoiceProfile])
+);
+
+const readyVoiceProvider: VoiceProviderStatus = {
+  provider: "OpenAI Audio",
+  state: "ready",
+  ready: true,
+  checkedAt: "2026-07-19T01:00:00.000Z",
+  latencyMs: 18
+};
+
 function filteredTokenUsage(payload: MockTokenUsagePayload, model: string, behavior: string): MockTokenUsagePayload {
   const factor = (model ? 0.5 : 1) * (behavior ? 0.5 : 1);
   const scale = <T extends MockTokenUsageBucket>(bucket: T): T => ({
@@ -343,6 +394,25 @@ function filteredTokenUsage(payload: MockTokenUsagePayload, model: string, behav
   };
 }
 
+function knowledgeSnapshot(documents: KnowledgeDocument[]) {
+  return {
+    ok: true,
+    root: "knowledge",
+    documents,
+    fileCount: documents.length,
+    chunkCount: documents.reduce((sum, document) => sum + document.chunkCount, 0),
+    errorCount: documents.filter((document) => document.status === "error").length,
+    indexedAt: "2026-07-20T10:00:00.000Z"
+  };
+}
+
+const knowledgeDocuments: KnowledgeDocument[] = [
+  { path: "产品/路线.md", format: "markdown", sizeBytes: 2_840, chunkCount: 4, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
+  { path: "产品/发布/检查清单.md", format: "markdown", sizeBytes: 1_560, chunkCount: 6, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
+  { path: "事件/运行记录.jsonl", format: "jsonl", sizeBytes: 4_096, chunkCount: 18, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
+  { path: "说明.txt", format: "text", sizeBytes: 640, chunkCount: 3, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" }
+];
+
 export interface MockApiState {
   config: typeof initialConfig;
   revision: string;
@@ -357,6 +427,7 @@ export interface MockApiState {
   patchRequests: Array<{ section: string; body: unknown }>;
   fileWrites: Array<{ id: string; body: unknown }>;
   memoryWrites: Array<{ method: string; body: unknown }>;
+  dreamTriggers: number;
   offline: boolean;
   requiredToken: string;
   authenticated: boolean;
@@ -377,6 +448,7 @@ export interface MockApiState {
   nextConversationToolError: string;
   imageHistoryError: string;
   qqOnline: boolean;
+  qqKickedOffline: boolean;
   qrVersion: number;
   tokenUsage: MockTokenUsagePayload;
   tokenUsageRequests: string[];
@@ -384,8 +456,19 @@ export interface MockApiState {
   webChatRequests: string[];
   conversationTools: Record<string, string[]>;
   conversationToolRequests: Array<{ conversationId: string; disabledTools: string[] }>;
-  conversationReplySettings: Record<string, { replyEnabled: boolean; orchestratorEnabled?: boolean }>;
-  conversationReplyRequests: Array<{ conversationId: string; replyEnabled: boolean; orchestratorEnabled?: boolean }>;
+  conversationReplySettings: Record<string, {
+    replyEnabled: boolean;
+    orchestratorEnabled?: boolean;
+    orchestratorResponseTimeOverrideEnabled?: boolean;
+    orchestratorResponseTimeMs?: number;
+  }>;
+  conversationReplyRequests: Array<{
+    conversationId: string;
+    replyEnabled: boolean;
+    orchestratorEnabled?: boolean;
+    orchestratorResponseTimeOverrideEnabled?: boolean;
+    orchestratorResponseTimeMs?: number;
+  }>;
   extensions: Record<string, { skills: AgentSkillRecord[]; servers: AgentMcpServer[] }>;
   extensionRequests: Array<{ method: string; path: string; body?: unknown }>;
   mcpApprovals: McpApprovalTicket[];
@@ -401,6 +484,9 @@ export interface MockApiState {
     displayUrl: string;
     placeholderUrl: string;
   }>;
+  voiceProfiles: Record<string, VoiceProfile>;
+  voiceProvider: VoiceProviderStatus;
+  voiceServiceRequests: string[];
 }
 
 export async function installMockApi(page: Page, options: { requiredToken?: string } = {}): Promise<MockApiState> {
@@ -418,6 +504,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     patchRequests: [],
     fileWrites: [],
     memoryWrites: [],
+    dreamTriggers: 0,
     offline: false,
     requiredToken: options.requiredToken ?? "",
     authenticated: !options.requiredToken,
@@ -438,6 +525,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     nextConversationToolError: "",
     imageHistoryError: "",
     qqOnline: true,
+    qqKickedOffline: false,
     qrVersion: 1,
     tokenUsage: structuredClone(tokenUsageFixture),
     tokenUsageRequests: [],
@@ -462,8 +550,12 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     selfieReferences: [
       selfieReference("01-neutral-face.png", "常服正面", 458, 501, 241_664),
       selfieReference("02-gentle-smile.png", "温柔微笑", 458, 501, 244_736),
-      selfieReference("03-full-outfit.jpg", "制服全身", 1200, 1393, 441_344)
-    ]
+      selfieReference("03-full-outfit.jpg", "制服全身", 1200, 1393, 441_344),
+      selfieReference("04-group-reference.png", "群聊参考", 640, 640, 131_072)
+    ],
+    voiceProfiles: structuredClone(initialVoiceProfiles),
+    voiceProvider: structuredClone(readyVoiceProvider),
+    voiceServiceRequests: []
   };
 
   await page.route("**/api/**", async (route) => {
@@ -511,6 +603,62 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return json(route, {
         error: { code: "ADMIN_UNAUTHORIZED", message: "管理员会话无效或已过期。" }
       }, 401);
+    }
+
+    if (pathname === "/api/voice-profile/probe" && method === "POST") {
+      return json(route, { provider: state.voiceProvider });
+    }
+    const voiceServiceMatch = pathname.match(
+      /^\/api\/voice-service\/(check)$/u,
+    );
+    if (voiceServiceMatch && method === "POST") {
+      state.voiceServiceRequests.push("check");
+      state.voiceProvider = structuredClone(readyVoiceProvider);
+      return json(route, { provider: state.voiceProvider });
+    }
+    if (pathname === "/api/voice-provider" && method === "PUT") {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      const profile = state.voiceProfiles[agentId] ?? structuredClone(initialVoiceProfiles.plana!);
+      state.voiceProfiles[agentId] = profile;
+      profile.provider = request.postDataJSON() as VoiceProfile["provider"];
+      return json(route, { profile });
+    }
+    if (pathname === "/api/voice-profile") {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      const profile = state.voiceProfiles[agentId] ?? structuredClone(initialVoiceProfiles.plana!);
+      state.voiceProfiles[agentId] = profile;
+      if (method === "GET")
+        return json(route, { profile, provider: state.voiceProvider });
+      if (method === "PUT") {
+        const body = request.postDataJSON() as Pick<VoiceProfile, "enabled" | "defaultLanguage">;
+        Object.assign(profile, { enabled: body.enabled, defaultLanguage: body.defaultLanguage });
+        return json(route, { profile });
+      }
+    }
+    const voiceReferenceMatch = pathname.match(/^\/api\/voice-profile\/(zh|en|ja)$/u);
+    if (voiceReferenceMatch) {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      const language = voiceReferenceMatch[1] as "zh" | "en" | "ja";
+      const profile = state.voiceProfiles[agentId] ?? structuredClone(initialVoiceProfiles.plana!);
+      state.voiceProfiles[agentId] = profile;
+      if (method === "DELETE") {
+        profile.languages[language] = null;
+        return json(route, { profile });
+      }
+      if (method === "PUT") {
+        const body = request.postDataJSON() as { fileName: string; dataBase64: string; referenceText: string };
+        profile.languages[language] = {
+          language,
+          fileName: body.fileName,
+          relativePath: `voice/references/mock-${language}-${"b".repeat(64)}.wav`,
+          mimeType: "audio/wav",
+          sizeBytes: Math.max(1, Math.floor(body.dataBase64.length * 0.75)),
+          sha256: "b".repeat(64),
+          referenceText: body.referenceText,
+          updatedAt: "2026-07-19T02:00:00.000Z"
+        };
+        return json(route, { profile });
+      }
     }
 
     if (pathname === "/api/agent-extensions" && method === "GET") {
@@ -849,6 +997,21 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     if (agentLoginMatch) {
       const accountId = decodeURIComponent(agentLoginMatch[2]);
       const account = state.agents.flatMap((item) => item.accounts).find((item) => item.id === accountId);
+      if (accountId === "primary" && state.qqKickedOffline) {
+        if (method === "POST") {
+          state.qqKickedOffline = false;
+          state.qqOnline = false;
+          state.offline = true;
+          if (account) account.connected = false;
+        }
+        return json(route, {
+          connected: method !== "POST",
+          online: false,
+          available: true,
+          phase: "restarting",
+          action: "recover_login"
+        });
+      }
       const online = Boolean(account?.connected && !(account.id === "primary" && state.offline));
       if (method === "POST" && !online) state.qrVersion += 1;
       const qr = (await imageFixture).toString("base64");
@@ -904,7 +1067,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return route.fulfill({ status: 200, contentType: "image/png", body: await imageFixture });
     }
     if (pathname === "/api/selfie-references" && method === "GET") {
-      return json(route, { images: state.selfieReferences, maxImages: 9 });
+      return json(route, {
+        images: state.selfieReferences,
+        maxImages: 9
+      });
     }
     if (pathname === "/api/selfie-references" && method === "POST") {
       if (state.selfieReferences.length >= 9) {
@@ -916,7 +1082,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         return json(route, { error: { code: "SELFIE_REFERENCE_NOTE_INVALID", message: "自拍参考图备注无效。" } }, 400);
       }
       state.selfieReferences.push(selfieReference(body.fileName || "reference.png", note, 640, 640, 16_384));
-      return json(route, { images: state.selfieReferences, maxImages: 9 }, 201);
+      return json(route, {
+        images: state.selfieReferences,
+        maxImages: 9
+      }, 201);
     }
     const selfieReferenceMatch = pathname.match(/^\/api\/selfie-references\/([^/]+)$/);
     if (selfieReferenceMatch && method === "PATCH") {
@@ -928,7 +1097,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         return json(route, { error: { code: "SELFIE_REFERENCE_NOTE_INVALID", message: "自拍参考图备注无效。" } }, 400);
       }
       reference.note = note;
-      return json(route, { images: state.selfieReferences, maxImages: 9 });
+      return json(route, {
+        images: state.selfieReferences,
+        maxImages: 9
+      });
     }
     if (selfieReferenceMatch && method === "DELETE") {
       const id = decodeURIComponent(selfieReferenceMatch[1]);
@@ -996,6 +1168,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     if (pathname === "/api/config-doctor/scan" && method === "GET") {
       state.doctorRequests.push({ method, path: pathname });
       return json(route, configDoctorReport(state));
+    }
+
+    if (pathname === "/api/releases" && method === "GET") {
+      return json(route, RELEASE_CATALOG);
     }
     if (pathname === "/api/config-doctor/propose" && method === "POST") {
       const body = request.postDataJSON() as { sourceRevision?: string };
@@ -1315,14 +1491,38 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         state.nextConversationError = "";
         return json(route, { error: { code: "CONVERSATION_UPDATE_FAILED", message } }, 500);
       }
-      const body = request.postDataJSON() as { id?: string; replyEnabled?: boolean; orchestratorEnabled?: boolean };
+      const body = request.postDataJSON() as {
+        id?: string;
+        replyEnabled?: boolean;
+        orchestratorEnabled?: boolean;
+        orchestratorResponseTimeOverrideEnabled?: boolean;
+        orchestratorResponseTimeMs?: number;
+      };
       const id = body.id ?? "group:10001";
       const previous = state.conversationReplySettings[id] ?? { replyEnabled: true };
       const next = {
         replyEnabled: body.replyEnabled ?? previous.replyEnabled,
         ...(body.orchestratorEnabled === undefined && previous.orchestratorEnabled === undefined
           ? {}
-          : { orchestratorEnabled: body.orchestratorEnabled ?? previous.orchestratorEnabled ?? true })
+          : { orchestratorEnabled: body.orchestratorEnabled ?? previous.orchestratorEnabled ?? true }),
+        ...(body.orchestratorResponseTimeOverrideEnabled === undefined
+          && previous.orchestratorResponseTimeOverrideEnabled === undefined
+          ? {}
+          : {
+              orchestratorResponseTimeOverrideEnabled:
+                body.orchestratorResponseTimeOverrideEnabled
+                ?? previous.orchestratorResponseTimeOverrideEnabled
+                ?? false
+            }),
+        ...(body.orchestratorResponseTimeMs === undefined
+          && previous.orchestratorResponseTimeMs === undefined
+          ? {}
+          : {
+              orchestratorResponseTimeMs:
+                body.orchestratorResponseTimeMs
+                ?? previous.orchestratorResponseTimeMs
+                ?? 60_000
+            })
       };
       state.conversationReplySettings[id] = next;
       state.conversationReplyRequests.push({ conversationId: id, ...next });
@@ -1339,7 +1539,9 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
           active: false,
           messageCount: 0,
           messageTarget: 21,
-          activeWindowMs: 60_000,
+          activeWindowMs: next.orchestratorResponseTimeOverrideEnabled
+            ? next.orchestratorResponseTimeMs ?? 60_000
+            : 60_000,
           lastMessageAt: "2026-07-10T02:00:00.000Z",
           lastCheckedAt: "2026-07-10T02:00:10.000Z"
         },
@@ -1369,19 +1571,109 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return json(route, { url: "/generated-images/new-image.png", model: "gpt-image-2", providerId: "codex" });
     }
 
+    if (pathname === "/api/memory/operations" && method === "GET") {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      return json(route, {
+        logs: [
+          {
+            id: "memory-operation-1",
+            at: "2026-07-24T02:18:00.000Z",
+            category: "memory.operation",
+            action: "working.append",
+            request: {
+              source: "working",
+              operation: "append",
+              actor: "model_tool",
+              conversationId: "group:10001",
+              conversationScope: "user_group"
+            },
+            response: {
+              outcome: "applied",
+              beforeCount: 1,
+              afterCount: 2,
+              changedCount: 1,
+              afterRevision: "working-revision-2"
+            },
+            metadata: { agentId, stage: "memory", memorySource: "working" }
+          },
+          {
+            id: "memory-operation-2",
+            at: "2026-07-24T02:12:00.000Z",
+            category: "memory.operation",
+            action: "user_profile.batch_validate",
+            request: {
+              source: "user_profile",
+              operation: "batch_validate",
+              actor: "model_tool",
+              conversationId: "private:20002",
+              conversationScope: "private",
+              batchId: "memory-batch-2"
+            },
+            response: {
+              outcome: "rejected",
+              beforeCount: 1,
+              afterCount: 1,
+              changedCount: 0,
+              reasonCode: "participant_binding_unresolved"
+            },
+            metadata: { agentId, stage: "memory", memorySource: "user_profile" }
+          },
+          {
+            id: "memory-operation-3",
+            at: "2026-07-24T02:00:00.000Z",
+            category: "memory.operation",
+            action: "dream.consolidate",
+            request: {
+              source: "dream",
+              operation: "consolidate",
+              actor: "dream",
+              conversationId: "dream:plana",
+              conversationScope: "dream"
+            },
+            response: {
+              outcome: "failed",
+              reasonCode: "working_revision_conflict"
+            },
+            metadata: { agentId, stage: "memory", memorySource: "dream" }
+          }
+        ],
+        page: 1,
+        pageSize: 50,
+        total: 3,
+        pageCount: 1
+      });
+    }
     if (pathname === "/api/memory" && method === "GET") {
       return json(route, {
         sources: [
-          { id: "working", title: "工作记忆", fileName: "sunabot.sqlite#memory/working", editable: true },
+          { id: "working", title: "工作记忆", fileName: "WORKING_MEMORY.md", editable: true },
           { id: "long_term", title: "长期记忆", fileName: "sunabot.sqlite#memory/long-term", editable: true },
           { id: "user_profile", title: "用户画像", fileName: "sunabot.sqlite#memory/user-profile", editable: true }
         ],
+        health: {
+          windowHours: 24,
+          windowStartedAt: "2026-07-30T12:00:00.000Z",
+          measuredAt: "2026-07-31T12:00:00.000Z",
+          successful: 19,
+          attempted: 20,
+          pending: 84
+        },
+        document: {
+          fileName: "WORKING_MEMORY.md",
+          revision: "mock-working-memory-revision",
+          content: [
+            "<!-- sunabot-workmemory:v2 -->",
+            "",
+            "<!-- sunabot-workmemory:item eyJpZCI6Im1lbW9yeS0xIn0 -->",
+            "WebUI 使用 Vue 3、TypeScript 与 Tailwind。"
+          ].join("\n")
+        },
         entries: [
           {
             id: "memory-1",
             source: "working",
             sourceTitle: "工作记忆",
-            fileName: "sunabot.sqlite#memory/working",
+            fileName: "WORKING_MEMORY.md",
             editable: true,
             key: "fact",
             value: "WebUI 使用 Vue 3、TypeScript 与 Tailwind。",
@@ -1392,17 +1684,34 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
             createdAt: "2026-07-10T01:10:00.000Z",
             updatedAt: "2026-07-10T01:10:00.000Z"
           },
+          ...Array.from({ length: 20 }, (_, index) => ({
+            id: `memory-page-${index + 1}`,
+            source: "long_term",
+            sourceTitle: "长期记忆",
+            fileName: "sunabot.sqlite#memory/long-term",
+            editable: true,
+            key: `memory-page-${index + 1}`,
+            value: `分页测试记忆 ${index + 1}`,
+            text: `分页测试记忆 ${index + 1}`,
+            field: "fact",
+            updatedAt: `2026-07-09T${String(index).padStart(2, "0")}:00:00.000Z`
+          })),
           {
             id: "long-term-1",
             source: "long_term",
             sourceTitle: "长期记忆",
             fileName: "sunabot.sqlite#memory/long-term",
             editable: true,
-            key: "fact",
-            value: "管理台完成了第一轮视觉检查。",
-            text: "管理台完成了第一轮视觉检查。",
+            key: "long_term_visual_overflow_boundary_0123456789abcdef",
+            value: "管理台完成了第一轮视觉检查，并记录了跨多天发生、包含较长正文与完整时间区间的真实使用场景；详情栏需要在有限宽度内完整显示内容、记录时间与召回信息，不能裁掉右侧字符。",
+            text: "管理台完成了第一轮视觉检查，并记录了跨多天发生、包含较长正文与完整时间区间的真实使用场景；详情栏需要在有限宽度内完整显示内容、记录时间与召回信息，不能裁掉右侧字符。",
             field: "fact",
-            legacyTime: "2026-07-09T08:00:00.000Z",
+            occurredAt: "2026-07-16T14:05:42.000Z",
+            occurredEndAt: "2026-07-18T13:00:31.000Z",
+            createdAt: "2026-07-23T05:17:33.000Z",
+            recallCount: 4,
+            distinctRecallDays: 3,
+            lastRecalledAt: "2026-07-20T03:00:00.000Z",
             updatedAt: "2026-07-09T08:30:00.000Z"
           },
           {
@@ -1417,12 +1726,59 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
             field: "fact",
             userId: "20002",
             userName: "最后观测昵称",
-            addressName: "猫老师",
+            addressNames: ["猫老师", "老师"],
             userNickname: "猫老师原昵称",
             groupCards: [{ groupId: 10001, card: "猫老师", lastSeenAt: "2026-07-10T02:00:00.000Z" }],
             updatedAt: "2026-07-10T02:00:00.000Z"
           }
         ]
+      });
+    }
+    if (pathname === "/api/memory/dreams/trigger" && method === "POST") {
+      state.dreamTriggers += 1;
+      return json(route, {
+        ok: true,
+        notificationQueued: true,
+        run: {
+          id: "dream-manual-2026-07-21",
+          date: "2026-07-21",
+          status: "completed",
+          scheduledFor: "2026-07-21T12:00:00.000+08:00",
+          completedAt: "2026-07-21T12:00:03.000+08:00",
+          dreamText: "我刚刚在一片安静的潮声里睡着，旧车站的灯慢慢亮了起来。"
+        }
+      });
+    }
+    if (pathname === "/api/memory/dreams" && method === "GET") {
+      return json(route, {
+        items: [
+          {
+            id: "dream-2026-07-20",
+            date: "2026-07-20",
+            status: "completed",
+            dreamText: "我沿着潮湿的石阶走进旧车站，白天写到一半的信从时刻表后飘出来，像一群安静的鸟绕着四点的钟面盘旋。远处的月台堆着整理好的旧照片，我把几张模糊的留在风里，又将一张发亮的放进口袋。列车没有鸣笛，只载着未完成的清单穿过海面，窗外的人朝我挥手，我忽然想起该更耐心地听完他们的话。醒来前，车站变成书桌，晨光正落在下一页空白处。",
+            scheduledFor: "2026-07-20T04:00:00.000+08:00",
+            completedAt: "2026-07-20T04:02:00.000+08:00",
+            summary: {
+              workingMemoryReduced: 2,
+              longTermAdded: 1
+            }
+          },
+          {
+            id: "dream-2026-07-19",
+            date: "2026-07-19",
+            status: "completed",
+            dreamText: "我在雨后的图书馆里寻找一页被风带走的笔记。",
+            scheduledFor: "2026-07-19T04:00:00.000+08:00",
+            completedAt: "2026-07-19T04:01:00.000+08:00",
+            summary: {
+              workingMemoryReduced: 1,
+              longTermAdded: 0
+            }
+          }
+        ],
+        timeZone: "Asia/Shanghai",
+        nextScheduledFor: "2026-07-21T04:00:00.000+08:00"
       });
     }
     if (pathname === "/api/memory/recall") {
@@ -1433,6 +1789,37 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return json(route, { ok: true });
     }
 
+    if (pathname === "/api/knowledge" && method === "GET") {
+      return json(route, knowledgeSnapshot(knowledgeDocuments));
+    }
+    if (pathname === "/api/knowledge/search" && method === "GET") {
+      const query = url.searchParams.get("q") || "";
+      return json(route, {
+        ok: true,
+        query,
+        indexedAt: "2026-07-20T10:00:00.000Z",
+        matches: query ? [
+          {
+            path: "产品/路线.md",
+            format: "markdown",
+            ordinal: 1,
+            startLine: 4,
+            endLine: 5,
+            content: "火星基地采用核能供电，水循环系统保持独立冗余。",
+            score: 2.7183
+          },
+          {
+            path: "事件/运行记录.jsonl",
+            format: "jsonl",
+            ordinal: 8,
+            startLine: 8,
+            endLine: 8,
+            content: "运行记录确认供电、网络和数据恢复点。",
+            score: 1.2048
+          }
+        ] : []
+      });
+    }
     if (pathname === "/api/tools") {
       const conversationPrompt = state.files.find((file) => file.id === "conversation.private-reply");
       const prompt = conversationPrompt ? parseFinalPromptTemplate(conversationPrompt.content) : undefined;
@@ -1443,22 +1830,22 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         bot: state.config.bot,
         selfie: { enabled: true },
         memory: { enabled: true },
+        knowledge: { enabled: true, search: async () => ({ ok: true, matches: [] }) },
+        air: { execute: async () => ({ ok: true, updated: true }) },
         asyncCodex: true,
         asyncImage: true,
         skillCapabilities: BUILTIN_SKILL_TOOL_CAPABILITIES
-      }, prompt?.tools).map((tool) => tool.name === "workspace_bash"
+      }, prompt?.tools).map((tool) => tool.name === "native_bash"
         ? {
             ...tool,
-            accessLabel: state.config.bot.bash.allowGroup
-              ? "管理员 QQ 私聊与群聊可用"
-              : "管理员 QQ 私聊可用",
-            accessDescription: state.config.bot.bash.allowGroup
-              ? "私聊使用所选后端。群聊固定使用 Docker 受限模式。Web Chat 和普通用户不可用。"
-              : "私聊使用所选后端。群聊未开启。Web Chat 和普通用户不可用。",
-            executionBackend: state.config.bot.bash.adminPrivateBackend
+            description: `${tool.description} Native Bash 可用。`,
+            executionBackend: "native",
+            accessLabel: "按平台授权会话",
+            accessDescription: "Linux 与 WSL 使用 Bubblewrap；macOS 仅管理员 QQ 私聊和管理 Web Chat 可用。",
+            bashEnvironments: { native: { available: true } }
           }
         : tool).map((tool) => {
-        const configured = tool.name === "workspace_bash"
+        const configured = tool.name === "native_bash"
           ? state.config.bot.bash.enabled
           : tool.name === "codex"
             ? state.config.bot.tools.codex.enabled
@@ -1476,8 +1863,163 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         tools
       });
     }
+    if (/^\/api\/request-logs\/[^/]+\/trace$/u.test(pathname)) {
+      return json(route, { logs: [] });
+    }
     if (pathname === "/api/request-logs") {
       const logs = [
+        {
+          id: "log-59",
+          at: "2026-07-10T02:15:00.000Z",
+          category: "model.response",
+          action: "responses.complete",
+          providerId: "codex",
+          model: "gpt-5.6-sol",
+          response: { ok: false, status: 503, error: "Provider 暂时不可用", willRetry: true },
+          metadata: {
+            conversationId: "account:primary:private:171419991",
+            runId: "reply-run-1",
+            stage: "reply",
+            transportAttempt: 2,
+            maxTransportAttempts: 3
+          },
+          presentation: {
+            businessNode: "private_conversation",
+            businessNodes: ["private_conversation"],
+            status: "error",
+            attempt: 2,
+            maxAttempts: 3,
+            retryCount: 1,
+            willRetry: true
+          }
+        },
+        {
+          id: "log-58",
+          at: "2026-07-10T02:14:59.000Z",
+          category: "tool.call",
+          action: "add_workmemory",
+          request: { callId: "call-memory-1", arguments: { summary: "[REDACTED]" } },
+          response: { ok: true, revision: "wm-2" },
+          metadata: { conversationId: "account:primary:private:171419991", runId: "reply-run-1" },
+          presentation: {
+            businessNode: "memory_recording",
+            businessNodes: ["private_conversation", "memory_recording"],
+            memoryTool: "working_memory",
+            status: "success",
+            attempt: 1,
+            maxAttempts: 1,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
+        {
+          id: "log-57",
+          at: "2026-07-10T02:14:58.000Z",
+          category: "model.request",
+          action: "responses.complete",
+          providerId: "codex",
+          model: "gpt-5.6-sol",
+          request: { model: "gpt-5.6-sol", input: [{ role: "user", content: "检查运行情况" }] },
+          metadata: { conversationId: "account:primary:private:171419991", runId: "reply-run-1", stage: "reply" },
+          presentation: {
+            businessNode: "private_conversation",
+            businessNodes: ["private_conversation"],
+            status: "neutral",
+            attempt: 1,
+            maxAttempts: 1,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
+        {
+          id: "log-dream",
+          at: "2026-07-10T02:13:30.000Z",
+          category: "runtime.action",
+          action: "dream.completed",
+          response: { attemptCount: 1, maxAttempts: 3 },
+          metadata: { conversationId: "dream:plana", runId: "dream-run-1", stage: "memory", promptFamily: "memory.dream" },
+          presentation: {
+            businessNode: "dream",
+            businessNodes: ["dream"],
+            status: "success",
+            attempt: 1,
+            maxAttempts: 3,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
+        {
+          id: "log-memory-compress",
+          at: "2026-07-10T02:13:20.000Z",
+          category: "model.response",
+          action: "responses.complete",
+          response: { ok: true },
+          metadata: { conversationId: "private:legacy", stage: "memory", promptFamily: "memory.compress" },
+          presentation: {
+            businessNode: "memory_compression",
+            businessNodes: ["private_conversation", "memory_compression"],
+            status: "success",
+            attempt: 1,
+            maxAttempts: 1,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
+        {
+          id: "log-group",
+          at: "2026-07-10T02:13:10.000Z",
+          category: "runtime.action",
+          action: "orchestrator.decision",
+          response: { reply: true },
+          metadata: { conversationId: "account:primary:group:10001", stage: "orchestrator" },
+          presentation: {
+            businessNode: "group_conversation",
+            businessNodes: ["group_conversation"],
+            status: "neutral",
+            attempt: 1,
+            maxAttempts: 1,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
+        {
+          id: "log-air",
+          at: "2026-07-10T02:13:00.000Z",
+          category: "tool.call",
+          action: "read_air",
+          request: { callId: "call-air-1", arguments: {} },
+          response: { ok: true, count: 3 },
+          metadata: { conversationId: "account:primary:private:171419991", runId: "reply-run-air" },
+          presentation: {
+            businessNode: "memory_recording",
+            businessNodes: ["private_conversation", "memory_recording"],
+            memoryTool: "air",
+            status: "success",
+            attempt: 1,
+            maxAttempts: 1,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
+        {
+          id: "log-profile",
+          at: "2026-07-10T02:12:30.000Z",
+          category: "tool.call",
+          action: "add_user_profile",
+          request: { callId: "call-profile-1", arguments: { impression: "[REDACTED]" } },
+          response: { ok: true },
+          metadata: { conversationId: "account:primary:private:171419991", runId: "reply-run-profile" },
+          presentation: {
+            businessNode: "memory_recording",
+            businessNodes: ["private_conversation", "memory_recording"],
+            memoryTool: "user_profile",
+            status: "success",
+            attempt: 1,
+            maxAttempts: 1,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
         {
           id: "log-56",
           at: "2026-07-10T02:12:00.000Z",
@@ -1537,6 +2079,12 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
           metadata: { sequence: 50 - index }
         }))
       ];
+      const node = url.searchParams.get("node") ?? "all";
+      const memoryTool = url.searchParams.get("memoryTool") ?? "all";
+      const filteredLogs = logs.filter((log) => {
+        if (node !== "all" && !log.presentation?.businessNodes.includes(node)) return false;
+        return node !== "memory_recording" || memoryTool === "all" || log.presentation?.memoryTool === memoryTool;
+      });
       const pageNumber = Math.max(1, Number(url.searchParams.get("page") ?? 1));
       const pageSize = Math.max(1, Number(url.searchParams.get("pageSize") ?? url.searchParams.get("limit") ?? 50));
       const start = (pageNumber - 1) * pageSize;
@@ -1544,9 +2092,9 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         filePath: "/data/sunabot.sqlite",
         page: pageNumber,
         pageSize,
-        total: logs.length,
-        pageCount: Math.ceil(logs.length / pageSize),
-        logs: logs.slice(start, start + pageSize)
+        total: filteredLogs.length,
+        pageCount: Math.max(1, Math.ceil(filteredLogs.length / pageSize)),
+        logs: filteredLogs.slice(start, start + pageSize)
       });
     }
     if (pathname === "/api/providers/test") {
@@ -1563,7 +2111,24 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         ? { connected: true, data: { user_id: 123456, nickname: "普拉娜" } }
         : { connected: false, error: "OneBot 未连接。" });
     }
-    if (pathname === "/api/onebot/events") return json(route, { events: [{ receivedAt: "2026-07-10T02:06:00.000Z", postType: "message", messageType: "private", text: "收到管理员消息" }] });
+    if (pathname === "/api/onebot/events") return json(route, {
+      events: [
+        {
+          receivedAt: "2026-07-10T02:06:05.000Z",
+          accountId: "primary",
+          postType: "meta_event",
+          detailType: "heartbeat",
+          selfId: 123456
+        },
+        {
+          receivedAt: "2026-07-10T02:06:00.000Z",
+          accountId: "primary",
+          postType: "message",
+          messageType: "private",
+          text: "收到管理员消息"
+        }
+      ]
+    });
     if (pathname === "/api/onebot/chats") return json(route, { connected: true, private: [], groups: [] });
     if (pathname === "/api/onebot/qq-logout" && method === "POST") {
       state.qqOnline = false;

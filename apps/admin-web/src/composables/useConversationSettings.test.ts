@@ -57,7 +57,8 @@ describe("useConversationSettings", () => {
     expect(JSON.parse(apiRequest.mock.calls.find(([path]) => pathname(path) === "/api/conversations/reply")?.[1]?.body)).toMatchObject({
       id: "group:7",
       replyEnabled: false,
-      orchestratorEnabled: false
+      orchestratorEnabled: false,
+      directorEventsEnabled: false
     });
     expect(state.behaviorDirty.value).toBe(false);
     expect(state.toolsDirty.value).toBe(false);
@@ -85,6 +86,51 @@ describe("useConversationSettings", () => {
     const submitted = JSON.parse(apiRequest.mock.calls.find(([path]) => pathname(path) === "/api/conversations/reply")?.[1]?.body);
     expect(submitted.replyEnabled).toBe(false);
     expect(state.replyEnabled.value).toBe(false);
+    expect(state.behaviorDirty.value).toBe(false);
+  });
+
+  it("defaults legacy conversations to closed and syncs the director event switch", async () => {
+    mockLoadedConversation();
+    const state = useConversationSettings("group:7");
+    await state.load();
+
+    expect(state.directorEventsEnabled.value).toBe(false);
+    state.setDirectorEventsEnabled(true);
+    await expect(state.flush()).resolves.toBe(true);
+
+    const submitted = JSON.parse(
+      apiRequest.mock.calls.find(([path]) => pathname(path) === "/api/conversations/reply")?.[1]?.body
+    );
+    expect(submitted).toMatchObject({
+      id: "group:7",
+      directorEventsEnabled: true
+    });
+    expect(state.directorEventsEnabled.value).toBe(true);
+    expect(state.behaviorDirty.value).toBe(false);
+  });
+
+  it("syncs a conversation orchestrator response-time override after it is enabled", async () => {
+    mockLoadedConversation();
+    const state = useConversationSettings("group:7");
+    await state.load();
+
+    expect(state.orchestratorResponseTimeOverrideEnabled.value).toBe(false);
+    expect(state.orchestratorResponseTimeSeconds.value).toBe(60);
+
+    state.setOrchestratorResponseTimeOverrideEnabled(true);
+    state.setOrchestratorResponseTimeSeconds(15);
+    await expect(state.flush()).resolves.toBe(true);
+
+    const submitted = JSON.parse(
+      apiRequest.mock.calls.find(([path]) => pathname(path) === "/api/conversations/reply")?.[1]?.body
+    );
+    expect(submitted).toMatchObject({
+      id: "group:7",
+      orchestratorResponseTimeOverrideEnabled: true,
+      orchestratorResponseTimeMs: 15_000
+    });
+    expect(state.orchestratorResponseTimeOverrideEnabled.value).toBe(true);
+    expect(state.orchestratorResponseTimeSeconds.value).toBe(15);
     expect(state.behaviorDirty.value).toBe(false);
   });
 
@@ -287,6 +333,14 @@ function groupConversation() {
     groupId: 7,
     replyEnabled: true,
     orchestratorEnabled: true,
+    orchestratorResponseTimeOverrideEnabled: false,
+    orchestratorStatus: {
+      active: false,
+      messageCount: 0,
+      messageTarget: 11,
+      activeWindowMs: 60_000,
+      lastMessageAt: "2026-07-10T00:00:00.000Z"
+    },
     messageCount: 1,
     lastAt: "2026-07-10T00:00:00.000Z",
     lastText: "hello",

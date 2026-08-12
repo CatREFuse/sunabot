@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { imageMediaAsset, type AttachmentExtractionContext, type IncomingAttachment } from "../../packages/contracts/media/media.js";
 import type {
   InboundMessageV1,
@@ -6,6 +7,10 @@ import type {
   SenderIdentityV1
 } from "../../packages/contracts/messaging/messages.js";
 import { pendingAttachments } from "../../services/media/attachments/service.js";
+import {
+  extractOneBotForwardMessageIds,
+  renderOneBotMessage
+} from "./inboundMessageContent.js";
 import type { OneBotEvent, OneBotMessageSegment } from "./protocol.js";
 
 const DEFAULT_ATTACHMENT_NAME = "未命名文件";
@@ -15,6 +20,7 @@ const MAX_FILE_IDENTIFIER_LENGTH = 2_048;
 interface NormalizedFileSegment {
   name: string;
   fileId?: string;
+  fileToken?: string;
   sizeBytes?: number;
   url?: string;
   busId?: number;
@@ -25,6 +31,7 @@ export function parseOneBotInboundMessage(event: OneBotEvent): InboundMessageV1 
 
   const selfId = event.self_id;
   const message = event.message ?? event.raw_message ?? "";
+  const rendered = renderOneBotMessage(message, { selfId });
   return {
     schemaVersion: 1,
     scope: event.message_type === "private" ? "private" : detectGroupScope(event),
@@ -34,8 +41,8 @@ export function parseOneBotInboundMessage(event: OneBotEvent): InboundMessageV1 
     ...(positiveInteger(event.group_id) ? { groupId: positiveInteger(event.group_id) } : {}),
     ...(positiveInteger(selfId) ? { selfId: positiveInteger(selfId) } : {}),
     sender: senderIdentity(event.sender ?? {}, event.user_id),
-    text: extractText(message, selfId),
-    media: extractImageUrls(message).map(imageMediaAsset),
+    text: rendered.text,
+    media: rendered.imageUrls.map((url) => imageMediaAsset(url)),
     attachments: pendingAttachments(extractOneBotAttachments(message, {
       source: "message",
       messageId: event.message_id,
@@ -56,6 +63,7 @@ export function extractOneBotMessageDetails(
   const data = record(root.data);
   const payloadSource = Object.keys(data).length ? data : root;
   const message = readOneBotMessage(payloadSource.message) ?? readOneBotMessage(payloadSource.raw_message) ?? "";
+  const rendered = renderOneBotMessage(message);
   const userId = positiveInteger(payloadSource.user_id) ?? context.userId ?? 0;
   const attachmentContext: AttachmentExtractionContext = {
     source: context.source ?? "quote",
@@ -64,12 +72,37 @@ export function extractOneBotMessageDetails(
     userId: context.userId ?? positiveInteger(payloadSource.user_id)
   };
   return {
-    text: extractText(message),
-    media: extractImageUrls(message).map(imageMediaAsset),
+    text: rendered.text,
+    media: rendered.imageUrls.map((url) => imageMediaAsset(url)),
     attachments: pendingAttachments(extractOneBotAttachments(message, attachmentContext)),
     replyMessageIds: extractReplyMessageIds(message),
     sender: senderIdentity(record(payloadSource.sender), userId)
   };
+}
+
+export async function hydrateOneBotForwardContent(
+  incoming: InboundMessageV1,
+  event: OneBotEvent,
+  loadForward: (messageId: string) => Promise<unknown>
+) {
+  const message = event.message ?? event.raw_message ?? "";
+  const forwardIds = extractOneBotForwardMessageIds(message);
+  if (!forwardIds.length) return incoming;
+  const forwardPayloads = new Map<string, unknown>();
+  await Promise.all(forwardIds.map(async (messageId) => {
+    try {
+      forwardPayloads.set(messageId, await loadForward(messageId));
+    } catch (error) {
+      console.error("[onebot] forward message hydration failed", { messageId, error });
+    }
+  }));
+  const rendered = renderOneBotMessage(message, {
+    selfId: event.self_id,
+    forwardPayloads
+  });
+  incoming.text = rendered.text;
+  incoming.media = rendered.imageUrls.map((url) => imageMediaAsset(url));
+  return incoming;
 }
 
 export function extractOneBotSender(payload: unknown, fallbackUserId: number): SenderIdentityV1 {
@@ -108,6 +141,7 @@ export function extractOneBotAttachments(
       name: normalized.name
     };
     if (normalized.fileId) attachment.fileId = normalized.fileId;
+    if (normalized.fileToken) attachment.fileToken = normalized.fileToken;
     if (normalized.sizeBytes !== undefined) attachment.sizeBytes = normalized.sizeBytes;
     if (normalized.url) attachment.url = normalized.url;
     if (normalized.busId !== undefined) attachment.busId = normalized.busId;
@@ -135,20 +169,6 @@ function detectGroupScope(event: OneBotEvent): "user_group" | "bot_group" {
   return subType === "bot_group" || senderRole === "bot" ? "bot_group" : "user_group";
 }
 
-function extractText(message: string | OneBotMessageSegment[], selfId?: number) {
-  if (typeof message === "string") return normalizeCqMessage(message, selfId).trim();
-  return message.map((segment) => {
-    if (segment.type === "text") return String(segment.data?.text ?? "");
-    if (segment.type === "at") {
-      const qq = String(segment.data?.qq ?? "");
-      return selfId && qq === String(selfId) ? "" : `@${qq}`;
-    }
-    if (segment.type === "record") return "[语音]";
-    if (segment.type === "video") return "[视频]";
-    return "";
-  }).join("").trim();
-}
-
 function isMentioned(message: string | OneBotMessageSegment[], selfId?: number) {
   if (!selfId) return false;
   if (typeof message === "string") {
@@ -158,33 +178,6 @@ function isMentioned(message: string | OneBotMessageSegment[], selfId?: number) 
     return false;
   }
   return message.some((segment) => segment.type === "at" && [String(selfId), "all"].includes(String(segment.data?.qq ?? "")));
-}
-
-function normalizeCqMessage(message: string, selfId?: number) {
-  return message
-    .replace(/\[CQ:reply,[^\]]*\]/g, "")
-    .replace(/\[CQ:image,[^\]]*\]/g, "")
-    .replace(/\[CQ:file(?:,[^\]]*)?\]/gi, "")
-    .replace(/\[CQ:at,qq=([^\],]+)[^\]]*\]/g, (_match, qq: string) => {
-      if ((selfId && qq === String(selfId)) || qq === "all") return "";
-      return `@${qq}`;
-    });
-}
-
-function extractImageUrls(message: string | OneBotMessageSegment[]) {
-  if (typeof message === "string") {
-    const urls: string[] = [];
-    for (const match of message.matchAll(/\[CQ:image,([^\]]+)\]/g)) {
-      const params = parseCqParams(match[1] ?? "");
-      const url = params.url || params.file || "";
-      if (isUsableImageUrl(url)) urls.push(url);
-    }
-    return uniqueStrings(urls);
-  }
-  return uniqueStrings(message.filter((segment) => segment.type === "image").flatMap((segment) => [
-    String(segment.data?.url ?? ""),
-    String(segment.data?.file ?? "")
-  ]).map((value) => value.trim()).filter(isUsableImageUrl));
 }
 
 function extractReplyMessageIds(message: string | OneBotMessageSegment[]) {
@@ -214,9 +207,14 @@ function senderIdentity(sender: Record<string, unknown>, fallbackUserId: number)
 }
 
 function eventTime(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? new Date(value * 1000).toISOString()
-    : new Date().toISOString();
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const milliseconds = value * 1000;
+    if (Number.isFinite(milliseconds)) {
+      const date = new Date(milliseconds);
+      if (Number.isFinite(date.getTime())) return date.toISOString();
+    }
+  }
+  return new Date().toISOString();
 }
 
 function normalizeFileSegment(data: Record<string, unknown>): NormalizedFileSegment {
@@ -224,11 +222,12 @@ function normalizeFileSegment(data: Record<string, unknown>): NormalizedFileSegm
   const explicitUrl = httpUrl(data.url);
   const fileUrl = httpUrl(rawFile);
   const explicitFileId = safeFileIdentifier(data.file_id);
-  const fileId = explicitFileId || (rawFile && !fileUrl ? safeFileIdentifier(rawFile) : undefined);
+  const fileToken = rawFile && !fileUrl ? safeFileIdentifier(rawFile) : undefined;
   const nameSource = normalizedString(data.name) || fileNameFromUrl(fileUrl) || rawFile || explicitFileId;
   return {
     name: sanitizeAttachmentName(nameSource),
-    fileId,
+    fileId: explicitFileId,
+    fileToken,
     sizeBytes: nonNegativeInteger(data.file_size),
     url: explicitUrl ?? fileUrl,
     busId: nonNegativeInteger(data.busid)
@@ -258,6 +257,7 @@ function decodeCqValue(value: string) {
 
 function attachmentDedupeKey(attachment: NormalizedFileSegment) {
   if (attachment.fileId) return `file:${attachment.fileId}`;
+  if (attachment.fileToken) return `token:${attachment.fileToken}`;
   if (attachment.url) return `url:${attachment.url}`;
   return ["meta", attachment.name, attachment.sizeBytes ?? "", attachment.busId ?? ""].join("\u0000");
 }
@@ -268,7 +268,14 @@ function stableAttachmentId(dedupeKey: string, context: AttachmentExtractionCont
 }
 
 function mergeAttachment(existing: IncomingAttachment, incoming: NormalizedFileSegment) {
-  return { ...existing, fileId: existing.fileId ?? incoming.fileId, sizeBytes: existing.sizeBytes ?? incoming.sizeBytes, url: existing.url ?? incoming.url, busId: existing.busId ?? incoming.busId };
+  return {
+    ...existing,
+    fileId: existing.fileId ?? incoming.fileId,
+    fileToken: existing.fileToken ?? incoming.fileToken,
+    sizeBytes: existing.sizeBytes ?? incoming.sizeBytes,
+    url: existing.url ?? incoming.url,
+    busId: existing.busId ?? incoming.busId
+  };
 }
 
 function readOneBotMessage(value: unknown): string | OneBotMessageSegment[] | undefined {
@@ -277,18 +284,24 @@ function readOneBotMessage(value: unknown): string | OneBotMessageSegment[] | un
   return value as OneBotMessageSegment[];
 }
 
-function isUsableImageUrl(value: string) {
-  return /^https?:\/\//i.test(value) || /^data:image\/[a-z0-9.+-]+;base64,/i.test(value);
-}
-
 function normalizedString(value: unknown) {
   const result = typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
   return result || undefined;
 }
 
 function safeFileIdentifier(value: unknown) {
-  const result = normalizedString(value);
-  if (!result || result.length > MAX_FILE_IDENTIFIER_LENGTH || /^(?:data:[^,]*;base64,|base64:\/\/)/i.test(result)) return undefined;
+  const source = typeof value === "string" || typeof value === "number" ? String(value) : "";
+  if (/[\u0000-\u001f\u007f-\u009f]/u.test(source)) return undefined;
+  const result = source.trim();
+  if (
+    !result ||
+    result.length > MAX_FILE_IDENTIFIER_LENGTH ||
+    result.includes("\\") ||
+    /^[a-z]:/i.test(result) ||
+    path.posix.isAbsolute(result) ||
+    path.win32.isAbsolute(result) ||
+    /^[a-z][a-z0-9+.-]*:/i.test(result)
+  ) return undefined;
   return result;
 }
 
@@ -326,7 +339,6 @@ function fileNameFromUrl(value: string | undefined) {
   } catch { return undefined; }
 }
 
-function uniqueStrings(values: string[]) { return [...new Set(values)]; }
 function uniqueNumbers(values: number[]) { return [...new Set(values)]; }
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};

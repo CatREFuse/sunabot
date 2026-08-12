@@ -107,8 +107,11 @@ export async function apiBlob(path: string, init: RequestInit = {}): Promise<Blo
 const agentScopedPrefixes = [
   "/api/web-chat",
   "/api/conversations",
+  "/api/scheduled-tasks",
   "/api/memory",
+  "/api/knowledge",
   "/api/images",
+  "/api/overview/summary",
   "/api/request-logs",
   "/api/token-usage",
   "/api/model-call-stats",
@@ -117,7 +120,9 @@ const agentScopedPrefixes = [
   "/api/tools",
   "/api/config",
   "/api/status",
+  "/api/readiness",
   "/api/emojis",
+  "/api/voice-profile",
   "/api/selfie-references"
 ];
 

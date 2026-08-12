@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { mkdir, open, rm, stat, type FileHandle } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { mkdir, open, rm, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   AttachmentCacheError,
@@ -33,7 +33,9 @@ export class ContentAddressedStore {
   }
 
   async writeBase64(encoded: string, options: WriteBase64Options = {}) {
+    throwIfCancelled(options.signal, "write");
     await this.repository.initialize();
+    throwIfCancelled(options.signal, "write");
     const maxBytes = boundedFileLimit(options.maxBytes, this.maxFileBytes);
     const layout = inspectBase64(encoded);
     if (layout.decodedBytes > maxBytes) {
@@ -45,11 +47,13 @@ export class ContentAddressedStore {
     let fileHandle: FileHandle | undefined;
 
     try {
+      throwIfCancelled(options.signal, "write");
       await mkdir(this.repository.temporaryDir, { recursive: true, mode: 0o700 });
       fileHandle = await open(partPath, "wx", 0o600);
       const hash = createHash("sha256");
       let sizeBytes = 0;
       for (let offset = layout.contentOffset; offset < encoded.length; offset += chunkCharacters) {
+        throwIfCancelled(options.signal, "write");
         const chunk = encoded.slice(offset, Math.min(encoded.length, offset + chunkCharacters));
         const bytes = Buffer.from(chunk, "base64");
         const expectedBytes = decodedBase64Length(chunk);
@@ -58,6 +62,7 @@ export class ContentAddressedStore {
         if (nextSize > maxBytes) throw new AttachmentTooLargeError(maxBytes, nextSize);
         await this.janitor.ensureAvailableSpace(bytes.length);
         await writeAll(fileHandle, bytes);
+        throwIfCancelled(options.signal, "write");
         hash.update(bytes);
         sizeBytes = nextSize;
       }
@@ -65,6 +70,7 @@ export class ContentAddressedStore {
       if (sizeBytes !== layout.decodedBytes) throw new InvalidBase64Error();
       await fileHandle.close();
       fileHandle = undefined;
+      throwIfCancelled(options.signal, "write");
       return await this.commitCompletedPart({
         partPath,
         sha256: hash.digest("hex"),
@@ -74,6 +80,11 @@ export class ContentAddressedStore {
       await fileHandle?.close().catch(() => undefined);
       await rm(partPath, { force: true }).catch(() => undefined);
       if (error instanceof AttachmentCacheError) throw error;
+      if (options.signal?.aborted) {
+        throw new AttachmentCacheError("cancelled", "Attachment write was cancelled.", {
+          cause: error
+        });
+      }
       throw new AttachmentCacheError("write_failed", "Attachment cache write failed.", {
         cause: error
       });
@@ -87,22 +98,36 @@ export class ContentAddressedStore {
     const maxBytes = boundedFileLimit(options.maxBytes, this.maxFileBytes);
     const partPath = this.createPartPath();
     let fileHandle: FileHandle | undefined;
-    let sourceStream: ReturnType<typeof createReadStream> | undefined;
+    let sourceHandle: FileHandle | undefined;
+    let sourceStream: ReturnType<FileHandle["createReadStream"]> | undefined;
     let releaseReservation: (() => Promise<void>) | undefined;
     if (options.signal?.aborted) {
       throw new AttachmentCacheError("cancelled", "Attachment import was cancelled.");
     }
 
     try {
-      const sourceStat = await stat(filePath);
-      if (!sourceStat.isFile()) {
+      sourceHandle = await open(
+        filePath,
+        fsConstants.O_RDONLY | requiredNoFollowFlag()
+      );
+      const sourceBefore = await sourceHandle.stat({ bigint: true });
+      if (!sourceBefore.isFile() || sourceBefore.nlink !== 1n) {
         throw new AttachmentCacheError("import_failed", "Attachment source is not a file.");
       }
-      if (sourceStat.size > maxBytes) throw new AttachmentTooLargeError(maxBytes, sourceStat.size);
-      releaseReservation = await this.janitor.reserveWriteBytes(sourceStat.size);
+      if (sourceBefore.size > BigInt(maxBytes)) {
+        throw new AttachmentTooLargeError(maxBytes, Number(sourceBefore.size));
+      }
+      const expectedSize = Number(sourceBefore.size);
+      if (!Number.isSafeInteger(expectedSize) || expectedSize < 0) {
+        throw new AttachmentCacheError("import_failed", "Attachment source size is invalid.");
+      }
+      releaseReservation = await this.janitor.reserveWriteBytes(expectedSize);
       await mkdir(this.repository.temporaryDir, { recursive: true, mode: 0o700 });
       fileHandle = await open(partPath, "wx", 0o600);
-      sourceStream = createReadStream(filePath, { signal: options.signal });
+      sourceStream = sourceHandle.createReadStream({
+        autoClose: false,
+        signal: options.signal
+      });
       const hash = createHash("sha256");
       let sizeBytes = 0;
 
@@ -119,8 +144,22 @@ export class ContentAddressedStore {
         sizeBytes = nextSize;
       }
 
+      const sourceAfter = await sourceHandle.stat({ bigint: true });
+      throwIfCancelled(options.signal, "import");
+      if (
+        sourceBefore.dev !== sourceAfter.dev
+        || sourceBefore.ino !== sourceAfter.ino
+        || sourceBefore.size !== sourceAfter.size
+        || sourceBefore.ctimeNs !== sourceAfter.ctimeNs
+        || sourceBefore.mtimeNs !== sourceAfter.mtimeNs
+        || sourceBefore.nlink !== sourceAfter.nlink
+        || sizeBytes !== expectedSize
+      ) {
+        throw new AttachmentCacheError("import_failed", "Attachment source changed during import.");
+      }
       await fileHandle.close();
       fileHandle = undefined;
+      throwIfCancelled(options.signal, "import");
       return await this.commitCompletedPart({
         partPath,
         sha256: hash.digest("hex"),
@@ -140,6 +179,7 @@ export class ContentAddressedStore {
         cause: error
       });
     } finally {
+      await sourceHandle?.close().catch(() => undefined);
       await releaseReservation?.();
     }
   }
@@ -150,13 +190,35 @@ export class ContentAddressedStore {
 
   async commitCompletedPart(completed: CompletedAttachmentPart, retainActiveTask = false) {
     const cached = await this.repository.commitPart(completed);
+    let handedOffActiveTask = false;
     try {
       await this.janitor.cleanup();
+      handedOffActiveTask = retainActiveTask;
       return retainActiveTask ? { ...cached, activeTaskRetained: true as const } : cached;
     } finally {
-      if (!retainActiveTask) await this.repository.endActiveTask(cached.sha256);
+      if (!handedOffActiveTask) await this.repository.endActiveTask(cached.sha256);
     }
   }
+}
+
+function throwIfCancelled(signal: AbortSignal | undefined, operation: "write" | "import") {
+  if (!signal?.aborted) return;
+  throw new AttachmentCacheError(
+    "cancelled",
+    `Attachment ${operation} was cancelled.`,
+    { cause: signal.reason }
+  );
+}
+
+function requiredNoFollowFlag() {
+  const value = fsConstants.O_NOFOLLOW;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new AttachmentCacheError(
+      "import_failed",
+      "Attachment import requires no-follow file support."
+    );
+  }
+  return value;
 }
 
 function boundedFileLimit(value: number | undefined, fallback: number) {

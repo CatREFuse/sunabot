@@ -96,6 +96,67 @@ describe("image generation retry policy", () => {
     await expect(runImageGenerationWithRetry(operation, { sleep: vi.fn() })).rejects.toBe(generic);
     expect(operation).toHaveBeenCalledOnce();
   });
+
+  it("does not retry a shared model-response timeout", async () => {
+    const timeout = new Error("model response timed out");
+    timeout.name = "TimeoutError";
+    const operation = vi.fn(async () => {
+      throw timeout;
+    });
+
+    await expect(runImageGenerationWithRetry(operation)).rejects.toBe(timeout);
+
+    expect(isImageGenerationCancellation(timeout)).toBe(true);
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
+  it("stops immediately when cancellation arrives during retry backoff", async () => {
+    const controller = new AbortController();
+    const operation = vi.fn(async () => {
+      throw new ImageGenerationTransportError(networkError("ECONNRESET"));
+    });
+    const sleep = vi.fn(() => new Promise<void>(() => undefined));
+    const pending = runImageGenerationWithRetry(operation, {
+      signal: controller.signal,
+      sleep
+    });
+    await vi.waitFor(() => expect(sleep).toHaveBeenCalledOnce());
+    const reason = new DOMException("cancelled", "AbortError");
+
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
+  it("does not start retry sleep when cancellation wins the listener race", async () => {
+    const reason = new DOMException("timed out", "TimeoutError");
+    let aborted = false;
+    const signal = {
+      get aborted() {
+        return aborted;
+      },
+      reason,
+      throwIfAborted() {
+        if (aborted) throw reason;
+      },
+      addEventListener(_type: string, listener: EventListenerOrEventListenerObject) {
+        aborted = true;
+        if (typeof listener === "function") listener(new Event("abort"));
+        else listener.handleEvent(new Event("abort"));
+      },
+      removeEventListener: vi.fn()
+    } as unknown as AbortSignal;
+    const operation = vi.fn(async () => {
+      throw new ImageGenerationTransportError(networkError("ECONNRESET"));
+    });
+    const sleep = vi.fn(async () => undefined);
+
+    await expect(runImageGenerationWithRetry(operation, { signal, sleep })).rejects.toBe(reason);
+
+    expect(operation).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
 });
 
 function networkError(code: string) {

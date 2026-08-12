@@ -68,9 +68,7 @@ const metrics = computed<SummaryMetric[]>(() => {
 .token-card--metric:nth-child(odd) { border-left: 1px solid rgb(var(--color-line)); }
 .token-card--request { grid-column: 1 / -1; min-height: 112px; border-bottom: 0; border-left: 0; padding-inline: 0; }
 .token-card__icon { display: grid; width: 28px; height: 28px; place-items: center; background: transparent; color: rgb(var(--color-mute)); font-size: 25px; }
-.token-card--metric[data-tone="interactive"] .token-card__icon { color: rgb(var(--color-interactive)); }
-.token-card--metric[data-tone="success"] .token-card__icon { color: rgb(var(--color-success)); }
-.token-card--metric[data-tone="warning"] .token-card__icon { color: rgb(var(--color-warning)); }
+.token-card--metric .token-card__icon { color: rgb(var(--color-mute)); }
 .token-card--metric .token-card__label { margin-top: 14px; }
 .token-card--metric strong { margin-top: 10px; font-size: 24px; letter-spacing: -.03em; }
 @media (min-width: 640px) {

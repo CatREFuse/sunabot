@@ -4,19 +4,28 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import dotenv from "dotenv";
-import { installGlobalProxyDispatcher, resolveProxyConfiguration } from "../../packages/platform/proxy.mjs";
+import { installGlobalProxyDispatcher } from "../../packages/platform/proxy.mjs";
 import { validateMultiAgentWorkspacePath } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
-import { recoverStaleDockerOneoffs } from "./docker-recovery.mjs";
 import {
   listNativeCoreProcessGroups,
   stopNativeCoreProcessGroups
 } from "./native-core-process.mjs";
+import {
+  createNativeWebfetchRendererLaunch,
+  prepareNativeWebfetchRendererInstallation,
+  verifyNativeWebfetchRendererIsolation
+} from "./native-webfetch-renderer.mjs";
+import {
+  listNativeWebfetchRendererProcessGroups,
+  stopNativeWebfetchRendererProcessGroups
+} from "./native-webfetch-renderer-process.mjs";
 import { buildRuntimeProbe, collectWorkspaceProbeFacts } from "./probe.mjs";
 import { accountRuntimeState, planAccountReconciliation } from "./account-reconciler.mjs";
 import {
@@ -28,8 +37,10 @@ import {
 } from "./account-runtime-daemon.mjs";
 import {
   beginFirstRunBootstrap,
+  completeFirstRunBootstrap,
   rollbackFirstRunBootstrap
 } from "./first-run-state.mjs";
+import { validateReleaseManifest } from "./release-integrity.mjs";
 import {
   composeProjectName,
   databasePathOverrideConfigured,
@@ -52,9 +63,21 @@ const STARTUP_REQUIRED_CHECK_IDS = new Set([
   "onebot-listener",
   "account-reconciler"
 ]);
+const LINUX_STARTUP_REQUIRED_CHECK_IDS = new Set([
+  ...STARTUP_REQUIRED_CHECK_IDS,
+  "webfetch-dynamic-renderer"
+]);
 const STARTUP_STABILITY_WINDOW_MS = 3_000;
 const STARTUP_STABILITY_POLL_MS = 250;
 const STARTUP_STABILITY_TIMEOUT_MS = 10_000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+const DOCKER_CONTROL_TIMEOUT_MS = 10_000;
+const DOCKER_EXEC_TIMEOUT_MS = 45_000;
+const DOCKER_COMPOSE_TIMEOUT_MS = 5 * 60_000;
+const BUILD_COMMAND_TIMEOUT_MS = 15 * 60_000;
+const INTERACTIVE_COMMAND_TIMEOUT_MS = 15 * 60_000;
+const COMMAND_TERMINATE_GRACE_MS = 1_000;
+const DEFAULT_COMMAND_OUTPUT_BYTES = 1 * 1024 * 1024;
 
 export async function runLauncher(argv = process.argv.slice(2), environment = process.env) {
   const parsed = parseLauncherArguments(argv, environment);
@@ -65,9 +88,6 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
   }
   const wsl = isWslRuntime({ platform: process.platform, environment });
   const mode = resolveCoreMode(parsed.requestedMode, { platform: process.platform });
-  if (parsed.dev && mode !== "native") {
-    throw new Error("--dev 仅支持 Native Core；Docker Core 使用生产构建。");
-  }
   const contract = resolveLauncherContract(rawContract, {
     root,
     platform: process.platform,
@@ -90,9 +110,11 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
     coreLog: path.join(workspace, contract.paths.logs ?? "runtime/logs", parsed.dev ? "core-dev.log" : "core.log"),
     reconcilerLog: path.join(workspace, contract.paths.logs ?? "runtime/logs", "account-reconciler.log"),
     apiEntry: path.join(root, "dist/apps/api/main.js"),
-    webEntry: path.join(root, "apps/admin-web/dist/index.html")
+    webEntry: path.join(root, "apps/admin-web/dist/index.html"),
+    packaged: await exists(path.join(root, "release-manifest.json"))
   };
   context.runtimeEnvironment = await readRuntimeEnvironment(context.runtimeEnv);
+  context.bubblewrapExecutable = bubblewrapExecutable(context);
   context.composeOverrides = {};
   await installGlobalProxyDispatcher({
     env: nativeProcessEnvironment(context),
@@ -121,10 +143,10 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
       printHelp();
       break;
     case "bootstrap":
-      console.log("运行依赖已准备。");
+      await bootstrapRuntime(context);
       break;
     case "reconcile-account":
-      await reconcileAccount(context, parsed.accountId);
+      await reconcileAccount(context, parsed.accountId, parsed.forceRestart);
       break;
     case "probe-runtime": {
       const facts = await collectRuntimeProbeFacts(context);
@@ -139,19 +161,27 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
   }
 }
 
+export function napcatAccountUpArguments(action, service) {
+  return [
+    "up", "-d", "--no-build", "--pull", "never",
+    ...(action === "restart" ? ["--force-recreate"] : []),
+    service
+  ];
+}
+
 async function restartRuntime(context) {
   if (databasePathOverrideConfigured(context.environment, context.runtimeEnvironment)) {
     throw new Error("SUNABOT_DATABASE_PATH 已停止支持；主库固定为 workspace/business/data/sunabot.sqlite。");
   }
   assertNonRootRuntimeUser();
-  await assertDockerAvailable();
-  await recoverStaleDockerOneoffs({
-    identity: context.identity,
-    runCommand: command
-  });
+  await assertDockerAvailable(context);
   assertExpectedProject(context, await inspectRuntime(context));
+  await validatePackagedRelease(context);
+  await assertLinuxBubblewrapNamespace(context);
+  if (context.packaged) await assertNativeWebfetchRendererCapability(context);
+  await assertNapcatImageAvailable(context);
   await initializeWorkspace(context);
-  await beginFirstRunBootstrap(context.workspace);
+  const firstRunBootstrap = await beginFirstRunBootstrap(context.workspace);
   const secrets = await prepareSecrets(context);
   await ensureAdminCredentials(context);
   await assertComposeServices(context);
@@ -159,12 +189,18 @@ async function restartRuntime(context) {
   const baseline = await assertRuntimeEmpty(context);
   await waitForRuntimePortsClosed(context, { dev: context.dev });
   await ensureRuntimeNetwork(context);
-  if (context.mode === "native") await upNative(context, baseline, secrets.values);
-  else await upDocker(context, baseline, secrets.values);
+  await upNative(context, baseline, secrets.values);
   try {
     await startAccountRuntimeDaemon(context);
-    const report = await waitForStableStartup(context);
+    const stableStartup = await waitForStableStartup(context);
+    const report = stableStartup.report;
+    const readiness = firstRunCompletionReadiness(report, stableStartup.stableForMs);
     printRuntimeReport(context, report);
+    const firstRun = await completeFirstRunBootstrap(context.workspace, { readiness });
+    if (firstRunBootstrap.state === "active" && firstRun.state !== "completed") {
+      const missing = firstRun.state === "pending" ? firstRun.missing.join(",") : firstRun.state;
+      throw new Error(`FIRST_RUN_INCOMPLETE:${missing}`);
+    }
   } catch (error) {
     await down(context).catch(() => {});
     throw error;
@@ -184,13 +220,13 @@ async function upNative(context, before, secrets) {
   }
   await ensureNativeDependencies(context);
   if (!context.dev) await ensureNativeBuild(context);
-  await compose(context, ["build", context.contract.napcatService]);
+  const renderer = await prepareNativeWebfetchRenderer(context);
   const onebotListenHost = await resolveNativeOnebotListenHost(context);
   if (await tcpOpen(onebotListenHost, context.contract.onebotPort)) {
     throw new Error(`${onebotListenHost}:${context.contract.onebotPort} 已被非当前 launcher 管理的进程占用。`);
   }
   try {
-    native = await startNativeCore(context, onebotListenHost);
+    native = await startNativeCore(context, onebotListenHost, renderer?.token);
     await waitForHttp(
       `http://127.0.0.1:${context.contract.adminPort}${context.contract.healthPath}`,
       context.contract.coreReadyTimeoutSeconds * 1_000
@@ -217,55 +253,160 @@ async function upNative(context, before, secrets) {
     });
   } catch (error) {
     await stopNapcatContainers(context).catch(() => {});
-    await compose(context, ["--profile", context.contract.coreProfile, "down", "--remove-orphans"]).catch(() => {});
     await stopNativeCore(context, native.record, { removeState: true }).catch(() => {});
+    const rendererGroups = await listNativeWebfetchRendererProcessGroups({
+      workspaceId: context.identity
+    }).catch(() => []);
+    if (rendererGroups.length > 0) {
+      await stopNativeWebfetchRendererProcessGroups({
+        workspaceId: context.identity,
+        groups: rendererGroups,
+        timeoutMs: context.contract.shutdownTimeoutSeconds * 1_000
+      }).catch(() => {});
+    }
+    if (renderer?.record?.runRoot) {
+      await fs.rm(renderer.record.runRoot, { recursive: true, force: true }).catch(() => {});
+    }
     throw error;
   }
 }
 
-async function upDocker(context, before, secrets) {
-  if (!before.dockerCore.running && await tcpOpen("127.0.0.1", context.contract.adminPort)) {
-    throw new Error(`127.0.0.1:${context.contract.adminPort} 已被非当前 Docker Core 占用。`);
-  }
+async function bootstrapRuntime(context) {
+  assertNonRootRuntimeUser();
+  await validatePackagedRelease(context);
+  await assertLinuxBubblewrapNamespace(context);
+  await ensureNativeDependencies(context);
+  await ensureNativeBuild(context);
+  await assertDockerAvailable(context);
+  await assertNapcatImageAvailable(context);
+  await assertNativeWebfetchRendererCapability(context);
+  console.log("Native Core、Bubblewrap namespace、Lightpanda 与 NapCat 锁定镜像已就绪。");
+}
+
+async function assertLinuxBubblewrapNamespace(context) {
+  if (process.platform !== "linux") return;
   try {
-    await prepareWslDockerProxy(context);
-    await compose(context, [
-      "--profile",
-      context.contract.coreProfile,
-      "up",
-      "-d",
-      "--build",
-      context.contract.coreService
-    ]);
-    await waitForHttp(
-      `http://127.0.0.1:${context.contract.adminPort}${context.contract.healthPath}`,
+    await command(
+      bubblewrapExecutable(context),
+      bubblewrapProbeArguments(context.workspace, true),
+      { capture: true }
+    );
+  } catch (error) {
+    throw runtimeError(
+      "BUBBLEWRAP_NAMESPACE_UNAVAILABLE",
+      `Bubblewrap namespace 隔离不可用：${message(error)}`
+    );
+  }
+}
+
+async function assertNativeWebfetchRendererCapability(context) {
+  if (process.platform !== "linux") return;
+  const installation = await prepareNativeWebfetchRendererInstallation(context, { command });
+  const launch = await createNativeWebfetchRendererLaunch(context, installation);
+  try {
+    await verifyNativeWebfetchRendererIsolation(context, launch, command);
+  } catch (error) {
+    throw runtimeError(
+      "WEBFETCH_DYNAMIC_ISOLATION_UNAVAILABLE",
+      `Lightpanda 动态抓取隔离不可用：${message(error)}`
+    );
+  } finally {
+    await fs.rm(launch.runRoot, { recursive: true, force: true });
+  }
+}
+
+async function validatePackagedRelease(context) {
+  if (!context.packaged) return;
+  const manifest = await readJson(path.join(context.root, "release-manifest.json"));
+  await validateReleaseManifest({ root: context.root, manifest });
+}
+
+async function assertNapcatImageAvailable(context) {
+  try {
+    await dockerCommand(context, ["image", "inspect", context.contract.napcatImage], {
+      capture: true,
+      timeoutMs: DOCKER_CONTROL_TIMEOUT_MS
+    });
+  } catch {
+    throw runtimeError(
+      "NAPCAT_IMAGE_MISSING",
+      "锁定的 NapCat 镜像未安装；请重新执行发行版 install.sh，启动过程不会下载镜像。"
+    );
+  }
+}
+
+async function prepareNativeWebfetchRenderer(context) {
+  const token = crypto.randomBytes(32).toString("base64url");
+  let launch;
+  let child;
+  try {
+    const installation = await prepareNativeWebfetchRendererInstallation(context, { command });
+    launch = await createNativeWebfetchRendererLaunch(context, installation);
+    await verifyNativeWebfetchRendererIsolation(context, launch, command);
+    const log = await fs.open(launch.logPath, "a", 0o600);
+    child = spawn(launch.executable, launch.args, {
+      cwd: launch.runRoot,
+      detached: true,
+      env: launch.environment,
+      stdio: ["ignore", log.fd, log.fd, "pipe"]
+    });
+    await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("spawn", resolve);
+    });
+    child.stdio[3].end(token);
+    child.unref();
+    await log.close();
+    const observed = await waitForProcessObservation(child.pid, 3_000);
+    const record = {
+      pid: child.pid,
+      signature: observed.signature,
+      entry: installation.supervisorEntry,
+      processGroup: child.pid,
+      startedAt: new Date().toISOString(),
+      isolation: launch.runtimeIsolation,
+      logPath: launch.logPath,
+      runRoot: launch.runRoot
+    };
+    const state = await readState(context.statePath);
+    await writeState(context, {
+      ...withoutUpdatedAt(state),
+      mode: "native",
+      dev: context.dev,
+      webfetchRenderer: record
+    });
+    const health = await waitForRendererHealth(
+      `http://127.0.0.1:${context.contract.webfetchRendererPort}/healthz`,
       context.contract.coreReadyTimeoutSeconds * 1_000
     );
-    await waitForComponentHealth(context, "core", context.contract.coreReadyTimeoutSeconds * 1_000);
-    await assertDockerCoreBwrap(context);
-    await assertDockerCoreCodex(context);
-    const accounts = await loadNapcatAccounts(context);
-    await startNapcatAccounts(context, accounts, context.contract.dockerReverseWebSocket, secrets);
-    await writeState(context, {
-      mode: "docker",
-      dev: false,
-      reverseWebSocket: context.contract.dockerReverseWebSocket,
-      accounts: accounts.map(({ id, webuiPort }) => ({ id, webuiPort }))
-    });
+    if (health.engine !== "lightpanda" || health.runtimeIsolation !== launch.runtimeIsolation) {
+      throw new Error("WEBFETCH_RENDERER_ISOLATION_UNVERIFIED");
+    }
+    return { record, token };
   } catch (error) {
-    await stopNapcatContainers(context).catch(() => {});
-    await compose(context, ["--profile", context.contract.coreProfile, "down", "--remove-orphans"]).catch(() => {});
-    await fs.rm(context.statePath, { force: true });
-    throw error;
+    if (child?.pid) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {}
+    }
+    if (launch?.runRoot) await fs.rm(launch.runRoot, { recursive: true, force: true }).catch(() => {});
+    if (process.platform === "linux") {
+      throw runtimeError(
+        "WEBFETCH_DYNAMIC_ISOLATION_UNAVAILABLE",
+        `Lightpanda 动态抓取隔离不可用：${message(error)}`
+      );
+    }
+    console.warn(`WebFetch Native 动态渲染服务准备失败，静态抓取保持可用：${message(error)}`);
+    return undefined;
   }
+}
+
+export function nativeWebfetchRendererDeployment(platform = process.platform) {
+  return platform === "linux" ? "native" : "unavailable";
 }
 
 async function down(context) {
-  await assertDockerAvailable();
-  await recoverStaleDockerOneoffs({
-    identity: context.identity,
-    runCommand: command
-  });
+  await assertDockerAvailable(context);
   const runtime = await inspectRuntime(context);
   if (runtime.reconciler.owner.status === "running"
     && !runtime.reconciler.processes.some((item) => item.pid === runtime.reconciler.owner.record.pid)) {
@@ -295,7 +436,17 @@ async function down(context) {
       timeoutMs: context.contract.shutdownTimeoutSeconds * 1_000
     });
   }
-  await removeWorkspaceContainers(context);
+  if (runtime.nativeWebfetchRendererGroups.length > 0) {
+    await stopNativeWebfetchRendererProcessGroups({
+      workspaceId: context.identity,
+      groups: runtime.nativeWebfetchRendererGroups,
+      timeoutMs: context.contract.shutdownTimeoutSeconds * 1_000
+    });
+  }
+  if (runtime.state?.webfetchRenderer?.runRoot) {
+    await fs.rm(runtime.state.webfetchRenderer.runRoot, { recursive: true, force: true });
+  }
+  await stopNapcatContainers(context);
   await removeRuntimeNetwork(context);
   if (runtime.state || runtime.nativeProcessGroups.length > 0) {
     await waitForRuntimePortsClosed(context, runtime.state);
@@ -320,16 +471,23 @@ async function assertRuntimeEmpty(context) {
   if (runtime.nativeProcessGroups.length > 0) {
     residuals.push(`Native Core 进程组 ${runtime.nativeProcessGroups.map((item) => item.processGroup).join(", ")}`);
   }
+  if (runtime.nativeWebfetchRendererGroups.length > 0) {
+    residuals.push(`Native Renderer 进程组 ${runtime.nativeWebfetchRendererGroups.map((item) => item.processGroup).join(", ")}`);
+  }
   if (runtime.reconciler.processes.length > 0) {
     residuals.push(`账号调和进程 ${runtime.reconciler.processes.map((item) => item.pid).join(", ")}`);
   }
   if (runtime.reconciler.owner.status !== "missing") {
     residuals.push(`账号调和 owner ${runtime.reconciler.owner.status}`);
   }
-  if (runtime.containers.length > 0) {
-    residuals.push(`Docker 容器 ${runtime.containers.map((item) => item.id).join(", ")}`);
+  if (runtime.napcat.matches.length > 0) {
+    residuals.push(`NapCat 容器 ${runtime.napcat.matches.map((item) => item.id).join(", ")}`);
   }
-  if (await runtimeNetworkExists(context)) residuals.push(`Docker 网络 ${context.project}-runtime`);
+  const unsupportedContainers = runtime.containers.filter((item) => item.component !== "napcat");
+  if (unsupportedContainers.length > 0) {
+    residuals.push(`已移除组件的旧容器 ${unsupportedContainers.map((item) => item.id).join(", ")}`);
+  }
+  if (await runtimeNetworkExists(context)) residuals.push(`NapCat 网络 ${context.project}-runtime`);
   if (residuals.length > 0) {
     throw runtimeError("RUNTIME_NOT_EMPTY", `当前 workspace 未清空：${residuals.join("；")}。`);
   }
@@ -355,7 +513,7 @@ function printRuntimeReport(context, report) {
   }
 }
 
-export function startupReportFailures(report) {
+export function startupReportFailures(report, platform = process.platform) {
   const checks = new Map((report?.checks ?? []).map((item) => [item.id, item]));
   const failures = [];
   const seen = new Set();
@@ -364,7 +522,10 @@ export function startupReportFailures(report) {
     seen.add(check.id);
     failures.push(check);
   };
-  for (const id of STARTUP_REQUIRED_CHECK_IDS) {
+  const requiredCheckIds = platform === "linux"
+    ? LINUX_STARTUP_REQUIRED_CHECK_IDS
+    : STARTUP_REQUIRED_CHECK_IDS;
+  for (const id of requiredCheckIds) {
     const check = checks.get(id);
     if (!check || check.status !== "pass") {
       add(check ?? {
@@ -381,14 +542,46 @@ export function startupReportFailures(report) {
   return failures;
 }
 
-export function assertStartupReportReady(report) {
-  const failures = startupReportFailures(report);
+export function assertStartupReportReady(report, platform = process.platform) {
+  const failures = startupReportFailures(report, platform);
   if (failures.length === 0) return;
   const detail = failures.map((item) => {
     const action = item.action ? `；修复：${item.action}` : "";
     return `[${item.code ?? "STARTUP_NOT_READY"}] ${item.detail ?? item.id}${action}`;
   }).join("；");
   throw runtimeError("STARTUP_NOT_READY", detail);
+}
+
+export function firstRunCompletionReadiness(report, stableForMs) {
+  assertStartupReportReady(report);
+  if (!Number.isFinite(stableForMs) || stableForMs < STARTUP_STABILITY_WINDOW_MS) {
+    throw runtimeError(
+      "FIRST_RUN_RUNTIME_NOT_STABLE",
+      `首次运行的完整启动状态未连续稳定 ${STARTUP_STABILITY_WINDOW_MS}ms。`
+    );
+  }
+  const checks = new Map((report?.checks ?? []).map((item) => [item.id, item]));
+  const accounts = Array.isArray(report?.accounts) ? report.accounts : [];
+  const primary = accounts.find((account) => account.id === "primary");
+  const napcatReady = primary?.desiredState === "running"
+    && primary.observedState === "running"
+    && primary.reconcileRequired !== true
+    && accounts.every((account) => (
+      account.reconcileRequired !== true
+      && (account.desiredState !== "running" || account.observedState === "running")
+    ));
+  if (!napcatReady) {
+    throw runtimeError("FIRST_RUN_NAPCAT_NOT_READY", "首次运行的 NapCat 账号尚未通过运行状态检查。");
+  }
+  return {
+    coreListening: checks.get("core-process")?.status === "pass"
+      && checks.get("core-api")?.status === "pass",
+    onebotListening: checks.get("onebot-listener")?.status === "pass",
+    accountRuntimeReady: checks.get("account-reconciler")?.status === "pass",
+    napcatReady: true,
+    runtimeReady: true,
+    stable: true
+  };
 }
 
 async function waitForStableStartup(context) {
@@ -400,7 +593,7 @@ async function waitForStableStartup(context) {
       if (Date.now() - stableSince >= STARTUP_STABILITY_WINDOW_MS) {
         const report = buildRuntimeProbe(await collectRuntimeProbeFacts(context));
         assertStartupReportReady(report);
-        return report;
+        return { report, stableForMs: Date.now() - stableSince };
       }
     } else {
       stableSince = undefined;
@@ -414,19 +607,13 @@ async function waitForStableStartup(context) {
 
 async function startupComponentsReady(context) {
   const runtime = await inspectRuntime(context);
-  const coreRunning = context.mode === "native" ? runtime.native.running : runtime.dockerCore.running;
-  if (!coreRunning || !runtime.reconciler.healthy) return false;
+  if (!runtime.native.running || !runtime.reconciler.healthy) return false;
   const apiReady = await httpReady(
     `http://127.0.0.1:${context.contract.adminPort}${context.contract.healthPath}`
   );
   if (!apiReady) return false;
-  if (context.mode === "docker") {
-    return runtime.dockerCore.matches.length === 1
-      && await componentHealthStatus(runtime.dockerCore.matches[0].id)
-        .then((status) => status === "healthy")
-        .catch(() => false);
-  }
-  const onebotHost = runtime.state?.onebotListenHost ?? context.contract.onebotHost;
+  const onebotHost = runtime.state?.onebotListenHost
+    ?? defaultNativeOnebotHealthHost(context.contract.onebotHost);
   return httpReady(
     `http://${onebotHost}:${context.contract.onebotPort}${context.contract.onebotHealthPath}`
   );
@@ -442,20 +629,25 @@ async function collectRuntimeProbeFacts(context) {
   const runtime = await inspectRuntime(context);
   const apiPath = `http://127.0.0.1:${context.contract.adminPort}${context.contract.healthPath}`;
   const onebotHealthHost = runtime.state?.onebotListenHost
-    ?? (context.contract.onebotHost === "docker-network-gateway" ? "127.0.0.1" : context.contract.onebotHost);
+    ?? defaultNativeOnebotHealthHost(context.contract.onebotHost);
   const onebotPath = `http://${onebotHealthHost}:${context.contract.onebotPort}${context.contract.onebotHealthPath}`;
   const apiReady = await httpReady(apiPath);
-  let dockerCoreHealthy = false;
-  if (runtime.dockerCore.matches.length > 0) {
-    dockerCoreHealthy = await componentHealthStatus(runtime.dockerCore.matches[0].id)
-      .then((status) => status === "healthy")
-      .catch(() => false);
-  }
-  const onebotReady = runtime.native.running ? await httpReady(onebotPath) : dockerCoreHealthy;
+  const onebotReady = runtime.native.running && await httpReady(onebotPath);
+  const rendererHealth = await readRendererHealth(
+    `http://127.0.0.1:${context.contract.webfetchRendererPort}/healthz`
+  );
+  const webfetchRendererReady = runtime.nativeWebfetchRendererGroups.some((group) => group.members.some(
+      (member) => member.pid === runtime.state?.webfetchRenderer?.pid
+    ))
+      && rendererHealth?.engine === "lightpanda"
+      && rendererHealth?.runtimeIsolation === "linux-bubblewrap"
+  ;
   const conflicts = accountRuntimeConflicts(runtime.reconciler, context);
 
-  const docker = await dockerAvailable();
-  const compose = docker && await commandSucceeds("docker", ["compose", "version"]);
+  const docker = await dockerAvailable(context);
+  const compose = docker && await commandSucceeds("docker", ["compose", "version"], {
+    env: nativeProcessEnvironment(context)
+  });
   const capabilities = {};
   capabilities.accountReconciler = {
     ok: runtime.reconciler.healthy,
@@ -466,28 +658,12 @@ async function collectRuntimeProbeFacts(context) {
         ? `检测到 ${runtime.reconciler.processes.length} 个未完全登记的 host reconciler`
         : "host reconciler is not running"
   };
-  if (context.mode === "native") {
-    const native = await inspectNativeCapabilities(context);
-    Object.assign(capabilities, {
-      codexCli: native.codexCli,
-      codexAuth: native.codexAuth,
-      workspaceBash: native.workspaceBash
-    });
-  } else if (runtime.dockerCore.running) {
-    const codex = await inspectDockerCodex(context);
-    let workspaceBash;
-    try {
-      await assertDockerCoreBwrap(context);
-      workspaceBash = { ok: true, detail: "bubblewrap namespace probe passed" };
-    } catch (error) {
-      workspaceBash = { ok: false, detail: message(error) };
-    }
-    Object.assign(capabilities, {
-      codexCli: codex.cli,
-      codexAuth: codex.auth,
-      workspaceBash
-    });
-  }
+  const native = await inspectNativeCapabilities(context);
+  Object.assign(capabilities, {
+    codexCli: native.codexCli,
+    codexAuth: native.codexAuth,
+    workspaceBash: native.workspaceBash
+  });
 
   const legacyRunning = runtime.legacyContainers.filter((item) => item.state === "running");
   if (legacyRunning.length > 0) {
@@ -506,15 +682,7 @@ async function collectRuntimeProbeFacts(context) {
       detail: runtime.foreignProjects.join(", ")
     });
   }
-  if (runtime.native.running && runtime.dockerCore.running) {
-    conflicts.push({
-      id: "core-split-brain",
-      code: "CORE_SPLIT_BRAIN",
-      action: "./sunabot.sh down",
-      detail: "Native Core 与 Docker Core 同时运行"
-    });
-  }
-  if (!runtime.native.running && !runtime.dockerCore.running && apiReady) {
+  if (!runtime.native.running && apiReady) {
     conflicts.push({
       id: "admin-port-owner",
       code: "ADMIN_PORT_FOREIGN_OWNER",
@@ -537,8 +705,8 @@ async function collectRuntimeProbeFacts(context) {
   return {
     ...workspaceFacts,
     core: {
-      mode: runtime.native.running ? "native" : runtime.dockerCore.running ? "docker" : "stopped",
-      running: runtime.native.running || runtime.dockerCore.running,
+      mode: runtime.native.running ? "native" : "stopped",
+      running: runtime.native.running,
       apiReady,
       onebotReady,
       apiPath,
@@ -553,7 +721,16 @@ async function collectRuntimeProbeFacts(context) {
       docker: { ok: docker, detail: docker ? "available" : "unavailable" },
       compose: { ok: compose, detail: compose ? "available" : "unavailable" }
     },
-    capabilities: { ...workspaceFacts.capabilities, ...capabilities }
+    capabilities: {
+      ...workspaceFacts.capabilities,
+      ...capabilities,
+      webfetchDynamicRenderer: {
+        ok: webfetchRendererReady,
+        detail: webfetchRendererReady
+          ? `renderer healthy (${rendererHealth.runtimeIsolation}, lightpanda)`
+          : "renderer unavailable or isolation unverified"
+      }
+    }
   };
 }
 
@@ -586,26 +763,27 @@ async function loadRegisteredAccounts(context) {
 }
 
 function printHelp() {
-  console.log("用法：./sunabot.sh <up|start|down|restart|status|doctor|logs|bootstrap|help> [--core=auto|native|docker] [--dev]");
+  console.log("用法：./sunabot.sh <up|start|down|restart|status|doctor|logs|bootstrap|help> [--dev]");
 }
 
 async function logs(context) {
   const runtime = await inspectRuntime(context);
-  if (!runtime.native.running && !runtime.dockerCore.running && !runtime.napcat.running) {
+  if (!runtime.native.running
+    && !runtime.napcat.running
+    && runtime.nativeWebfetchRendererGroups.length === 0) {
     throw new Error("Sunabot 尚未运行。");
   }
   const children = [];
   if (runtime.native.running && await exists(context.coreLog)) {
     children.push(spawn("tail", ["-n", "120", "-F", context.coreLog], { stdio: "inherit" }));
   }
-  if (runtime.containers.length > 0) {
-    const services = [
-      ...(runtime.dockerCore.running ? [context.contract.coreService] : [])
-    ];
-    if (services.length) children.push(spawnCompose(context, ["--profile", context.contract.coreProfile, "logs", "-f", ...services]));
-    for (const container of runtime.napcat.matches.filter((item) => item.state === "running")) {
-      children.push(spawn("docker", ["logs", "-f", "--tail", "120", container.id], { stdio: "inherit" }));
-    }
+  if (runtime.nativeWebfetchRendererGroups.length > 0
+    && runtime.state?.webfetchRenderer?.logPath
+    && await exists(runtime.state.webfetchRenderer.logPath)) {
+    children.push(spawn("tail", ["-n", "120", "-F", runtime.state.webfetchRenderer.logPath], { stdio: "inherit" }));
+  }
+  for (const container of runtime.napcat.matches.filter((item) => item.state === "running")) {
+    children.push(spawn("docker", ["logs", "-f", "--tail", "120", container.id], { stdio: "inherit" }));
   }
   await followChildren(children);
 }
@@ -629,20 +807,18 @@ async function prepareSecrets(context) {
 async function ensureAdminCredentials(context) {
   const credentialsPath = path.join(context.workspace, "secrets/admin-credentials.json");
   if (await exists(credentialsPath)) return;
-  const username = process.env.SUNABOT_ADMIN_USERNAME?.trim() || "admin";
-  if (!/^[A-Za-z0-9._-]{1,128}$/.test(username)) {
-    throw new Error("SUNABOT_ADMIN_USERNAME 只能包含字母、数字、点、下划线和短横线。");
-  }
   if (!process.stdin.isTTY) {
-    throw new Error(`管理员凭据不存在；请执行 npm run admin:set-password -- ${username}`);
+    throw new Error("管理员凭据不存在；请在交互终端执行 ./sunabot.sh up 完成 Landing。");
   }
-  console.log(`首次启动需要设置管理员账号 ${username}。`);
+  console.log(`Sunabot ${context.contract.releaseVersion} 首次启动`);
+  console.log(`数据目录：${context.workspace}`);
   await command(process.execPath, [
     path.join(context.root, "tooling/admin/admin-credentials.mjs"),
-    username
+    "--landing"
   ], {
     cwd: context.root,
-    env: { ...process.env, SUNABOT_WORKSPACE: context.workspace }
+    env: { ...process.env, SUNABOT_WORKSPACE: context.workspace },
+    timeoutMs: INTERACTIVE_COMMAND_TIMEOUT_MS
   });
 }
 
@@ -650,7 +826,7 @@ async function startNapcatAccounts(context, accounts, reverseWebSocket, secrets)
   for (const account of accounts) {
     await configureNapcat(context, reverseWebSocket, secrets, account);
     await clearNapcatLoginQr(context, account);
-    await napcatCompose(context, account, ["up", "-d", "--build", context.contract.napcatService]);
+    await napcatCompose(context, account, napcatAccountUpArguments("start", context.contract.napcatService));
     await waitForNapcatAccountHealth(context, account.id, context.contract.napcatReadyTimeoutSeconds * 1_000);
     await writeAccountRuntimeState(
       path.join(context.workspace, "runtime/napcat/accounts", account.id),
@@ -664,7 +840,7 @@ async function startNapcatAccounts(context, accounts, reverseWebSocket, secrets)
   }
 }
 
-async function reconcileAccount(context, accountId) {
+async function reconcileAccount(context, accountId, forceRestart = false) {
   if (databasePathOverrideConfigured(context.environment, context.runtimeEnvironment)) {
     throw new Error("SUNABOT_DATABASE_PATH 已停止支持；账号调和只读取 canonical 主库。");
   }
@@ -676,16 +852,18 @@ async function reconcileAccount(context, accountId) {
   const plan = planAccountReconciliation({
     accountId,
     account,
-    containers: runtime.napcat.matches
+    containers: runtime.napcat.matches,
+    forceRestart
   });
   const accountRoot = path.join(context.workspace, "runtime/napcat/accounts", accountId);
 
   try {
-    await assertDockerAvailable();
+    await assertDockerAvailable(context);
+    await assertNapcatImageAvailable(context);
     let observedState = plan.observedState;
     if (plan.desiredState === "running") {
       if (!account) throw new Error(`QQ 账号 ${accountId} 未注册。`);
-      if (!runtime.native.running && !runtime.dockerCore.running) {
+      if (!runtime.native.running) {
         throw new Error("Sunabot Core 未运行；请执行 ./sunabot.sh up。");
       }
       const source = await fs.readFile(context.runtimeEnv, "utf8");
@@ -696,15 +874,13 @@ async function reconcileAccount(context, accountId) {
       if (!secrets.ONEBOT_ACCESS_TOKEN || !secrets.WEBUI_TOKEN) {
         throw new Error("运行密钥缺失；请执行 ./sunabot.sh up 完成初始化。");
       }
-      const reverseWebSocket = runtime.native.running
-        ? runtime.state?.reverseWebSocket
-        : context.contract.dockerReverseWebSocket;
+      const reverseWebSocket = runtime.state?.reverseWebSocket;
       if (!reverseWebSocket) throw new Error("Native OneBot 地址尚未写入 launcher 状态；请执行 ./sunabot.sh up。");
 
       const changed = await configureNapcat(context, reverseWebSocket, secrets, account);
-      if (plan.action === "start") await clearNapcatLoginQr(context, account);
-      if (plan.action === "start" || changed) {
-        await napcatCompose(context, account, ["up", "-d", "--build", context.contract.napcatService]);
+      if (plan.action === "start" || plan.action === "restart") await clearNapcatLoginQr(context, account);
+      if (plan.action === "start" || plan.action === "restart" || changed) {
+        await napcatCompose(context, account, napcatAccountUpArguments(plan.action, context.contract.napcatService));
       }
       await waitForNapcatAccountHealth(
         context,
@@ -714,8 +890,10 @@ async function reconcileAccount(context, accountId) {
       observedState = "running";
     } else {
       for (const containerId of plan.targetContainerIds) {
-        await command("docker", ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), containerId]);
-        await command("docker", ["rm", containerId]);
+        await dockerCommand(context, ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), containerId], {
+          timeoutMs: (context.contract.shutdownTimeoutSeconds + 5) * 1_000
+        });
+        await dockerCommand(context, ["rm", containerId]);
       }
       observedState = "missing";
     }
@@ -844,6 +1022,7 @@ async function probeNativeOneBot(context) {
     "run",
     "--rm",
     "--no-deps",
+    "--pull", "never",
     "-e", `SUNABOT_PROBE_HOST=${advertised.hostname}`,
     "-e", `SUNABOT_PROBE_PORT=${context.contract.onebotPort}`,
     "-e", `SUNABOT_PROBE_PATH=${context.contract.onebotHealthPath}`,
@@ -854,31 +1033,76 @@ async function probeNativeOneBot(context) {
   ], { capture: true, timeoutMs: 15_000 });
   const line = output.split(/\r?\n/).reverse()
     .find((value) => value.startsWith("SUNABOT_PROBE_SELECTED="));
-  if (!line) throw new Error("NapCat 容器无法访问 Native OneBot /healthz；请检查 Docker host-gateway。 ");
+  if (!line) {
+    throw runtimeError(
+      "ONEBOT_CONTAINER_PROBE_FAILED",
+      "NapCat 容器无法通过 host.docker.internal 或运行网络 gateway 访问 Native OneBot /healthz。"
+    );
+  }
   const host = line.slice("SUNABOT_PROBE_SELECTED=".length).trim();
   return reverseWebSocketWithHost(context.contract.nativeReverseWebSocket, host);
 }
 
 async function resolveNativeOnebotListenHost(context) {
-  if (context.contract.onebotHost !== "docker-network-gateway") return context.contract.onebotHost;
+  if (!isDynamicNativeOnebotHost(context.contract.onebotHost)) return context.contract.onebotHost;
   const network = `${context.project}-runtime`;
-  const gateway = (await command("docker", [
+  const gateway = (await dockerCommand(context, [
     "network",
     "inspect",
     network,
     "--format",
     "{{(index .IPAM.Config 0).Gateway}}"
   ], { capture: true })).trim();
-  if (net.isIP(gateway) !== 4) {
-    throw new Error(`无法解析 ${network} 的 IPv4 gateway；拒绝把 OneBot 监听发布到所有宿主接口。`);
+  return selectNativeOnebotListenHost({
+    configuredHost: context.contract.onebotHost,
+    dockerGateway: gateway,
+    wsl: context.wsl,
+    networkInterfaces: os.networkInterfaces(),
+    network
+  });
+}
+
+export function selectNativeOnebotListenHost({
+  configuredHost,
+  dockerGateway,
+  wsl,
+  networkInterfaces,
+  network = "NapCat runtime network"
+}) {
+  if (!isDynamicNativeOnebotHost(configuredHost)) return configuredHost;
+  if (net.isIP(dockerGateway) !== 4) {
+    throw runtimeError(
+      "ONEBOT_DOCKER_GATEWAY_INVALID",
+      `无法解析 ${network} 的 IPv4 gateway；拒绝扩大 OneBot 监听范围。`
+    );
   }
-  return gateway;
+  const localAddresses = Object.values(networkInterfaces ?? {})
+    .flatMap((entries) => entries ?? [])
+    .filter((entry) => entry.family === "IPv4" || entry.family === 4)
+    .map((entry) => entry.address);
+  if (localAddresses.includes(dockerGateway)) return dockerGateway;
+  if (wsl && configuredHost === "docker-network-gateway-or-loopback") return "127.0.0.1";
+  throw runtimeError(
+    "ONEBOT_DOCKER_GATEWAY_NOT_LOCAL",
+    `${network} gateway ${dockerGateway} 不属于 Native Core 网络命名空间；拒绝绑定不可用地址或公开 8788。`
+  );
+}
+
+function isDynamicNativeOnebotHost(host) {
+  return host === "docker-network-gateway"
+    || host === "docker-network-gateway-or-loopback";
+}
+
+function defaultNativeOnebotHealthHost(host) {
+  return isDynamicNativeOnebotHost(host) ? "127.0.0.1" : host;
 }
 
 async function ensureRuntimeNetwork(context) {
   const network = `${context.project}-runtime`;
-  if (await commandSucceeds("docker", ["network", "inspect", network])) return;
-  await command("docker", [
+  if (await commandSucceeds("docker", ["network", "inspect", network], {
+    env: nativeProcessEnvironment(context)
+  })) return;
+  await dockerCommand(context, [
     "network", "create",
     "--label", `io.sunabot.runtime-id=${context.contract.runtimeId}`,
     "--label", `io.sunabot.workspace-id=${context.identity}`,
@@ -888,10 +1112,12 @@ async function ensureRuntimeNetwork(context) {
 }
 
 async function stopNapcatContainers(context) {
-  const containers = (await labeledContainers(context.identity)).filter((item) => item.component === "napcat");
+  const containers = (await labeledContainers(context)).filter((item) => item.component === "napcat");
   for (const container of containers) {
-    await command("docker", ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), container.id]).catch(() => {});
-    await command("docker", ["rm", container.id]).catch(() => {});
+    await dockerCommand(context, ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), container.id], {
+      timeoutMs: (context.contract.shutdownTimeoutSeconds + 5) * 1_000
+    }).catch(() => {});
+    await dockerCommand(context, ["rm", container.id]).catch(() => {});
   }
 }
 
@@ -927,43 +1153,14 @@ async function loadRegisteredAccountIds(context) {
   }
 }
 
-async function prepareWslDockerProxy(context) {
-  if (!context.wsl || context.mode !== "docker") return;
-  const proxy = await resolveProxyConfiguration({
-    env: nativeProcessEnvironment(context),
-    platform: "linux"
-  });
-  if (proxy.source !== "wsl-host" || !proxy.httpProxy) return;
-  context.composeOverrides.SUNABOT_PROXY_MODE = "env";
-  context.composeOverrides.SUNABOT_PROXY_DISCOVERED_URL = proxy.httpProxy;
-}
-
-async function waitForComponentHealth(context, component, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  let lastStatus = "missing";
-  while (Date.now() < deadline) {
-    const containers = await labeledContainers(context.identity);
-    const match = containers.find((item) => item.component === component);
-    if (match) {
-      lastStatus = await componentHealthStatus(match.id).catch(() => "inspect-error");
-      if (lastStatus === "healthy") return;
-      if (["unhealthy", "exited", "dead"].includes(lastStatus)) {
-        throw new Error(`${component} 容器健康检查失败：${lastStatus}`);
-      }
-    }
-    await delay(250);
-  }
-  throw new Error(`${component} 容器健康检查超时：${lastStatus}`);
-}
-
 async function waitForNapcatAccountHealth(context, accountId, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastStatus = "missing";
   while (Date.now() < deadline) {
-    const match = (await labeledContainers(context.identity))
+    const match = (await labeledContainers(context))
       .find((item) => item.component === "napcat" && item.accountId === accountId);
     if (match) {
-      lastStatus = await componentHealthStatus(match.id).catch(() => "inspect-error");
+      lastStatus = await componentHealthStatus(context, match.id).catch(() => "inspect-error");
       if (lastStatus === "healthy") return;
       if (["unhealthy", "exited", "dead"].includes(lastStatus)) {
         throw new Error(`NapCat ${accountId} 容器健康检查失败：${lastStatus}`);
@@ -974,8 +1171,8 @@ async function waitForNapcatAccountHealth(context, accountId, timeoutMs) {
   throw new Error(`NapCat ${accountId} 容器健康检查超时：${lastStatus}`);
 }
 
-async function componentHealthStatus(containerId) {
-  const output = await command("docker", [
+async function componentHealthStatus(context, containerId) {
+  const output = await dockerCommand(context, [
     "inspect",
     "--format",
     "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
@@ -984,74 +1181,14 @@ async function componentHealthStatus(containerId) {
   return output.trim().toLowerCase();
 }
 
-async function assertDockerCoreBwrap(context) {
-  const containers = await labeledContainers(context.identity);
-  const core = containers.find((item) => item.component === "core" && item.state === "running");
-  if (!core) throw new Error("Docker Core 未运行，无法执行 bubblewrap namespace probe。");
-  try {
-    await command("docker", [
-      "exec",
-      core.id,
-      "/usr/bin/bwrap",
-      ...bubblewrapProbeArguments("/srv/sunabot/workspace")
-    ], { capture: true });
-  } catch (error) {
-    const detail = message(error);
-    if (process.platform === "darwin" && process.arch === "arm64" && /invalid argument|EINVAL/i.test(detail)) {
-      throw new Error("Apple Silicon Docker 的 linux/amd64 模拟内核拒绝 bubblewrap user namespace（EINVAL）；当前环境不能安全启用 workspace_bash。");
-    }
-    throw error;
-  }
-}
-
-async function assertDockerCoreCodex(context) {
-  const codex = await inspectDockerCodex(context);
-  if (!codex.cli.ok) throw new Error(`Docker Codex CLI 不可用：${codex.cli.detail}`);
-}
-
-async function inspectDockerCodex(context) {
-  const containers = await labeledContainers(context.identity);
-  const core = containers.find((item) => item.component === "core" && item.state === "running");
-  if (!core) {
-    const detail = "Docker Core 未运行。";
-    return { cli: { ok: false, detail }, auth: { ok: false, detail } };
-  }
-  const executable = context.contract.codexCli.executable;
-  let version;
-  try {
-    version = (await command("docker", ["exec", core.id, executable, "--version"], { capture: true })).trim();
-  } catch (error) {
-    const detail = message(error);
-    return { cli: { ok: false, detail }, auth: { ok: false, detail: "Codex CLI 不可用。" } };
-  }
-  const cli = codexVersionCheck(context, version, executable);
-  if (!cli.ok) return { cli, auth: { ok: false, detail: "Codex CLI 版本不匹配。" } };
-
-  const workspace = context.contract.paths.workspace ?? "/srv/sunabot/workspace";
-  const codexHome = path.posix.join(workspace, path.posix.dirname(context.contract.codexCli.authFile));
-  try {
-    await command("docker", [
-      "exec",
-      "--env", `CODEX_HOME=${codexHome}`,
-      core.id,
-      executable,
-      "login", "status"
-    ], { capture: true });
-    return { cli, auth: { ok: true, detail: codexHome } };
-  } catch (error) {
-    return { cli, auth: { ok: false, detail: message(error) } };
-  }
-}
-
-export function bubblewrapProbeArguments(workspace) {
-  return [
+export function bubblewrapProbeArguments(workspace, networkAccess = false) {
+  const args = [
     "--die-with-parent",
     "--new-session",
     "--unshare-user",
     "--unshare-pid",
     "--unshare-uts",
     "--unshare-ipc",
-    "--unshare-net",
     "--unshare-cgroup-try",
     "--uid", "0",
     "--gid", "0",
@@ -1064,9 +1201,16 @@ export function bubblewrapProbeArguments(workspace) {
     "--clearenv",
     "--", "/bin/bash", "--noprofile", "--norc", "-lc", ":"
   ];
+  if (!networkAccess) args.splice(args.indexOf("--unshare-cgroup-try"), 0, "--unshare-net");
+  return args;
 }
 
-async function startNativeCore(context, onebotListenHost) {
+export function bubblewrapExecutable(context) {
+  const bundled = path.join(context.root, "runtime/bubblewrap/bwrap");
+  return context.packaged ? bundled : "/usr/bin/bwrap";
+}
+
+async function startNativeCore(context, onebotListenHost, rendererToken) {
   await fs.mkdir(path.dirname(context.coreLog), { recursive: true, mode: 0o700 });
   const log = await fs.open(context.coreLog, "a", 0o600);
   const command = context.dev ? "npm" : process.execPath;
@@ -1075,23 +1219,16 @@ async function startNativeCore(context, onebotListenHost) {
   const child = spawn(command, args, {
     cwd: context.root,
     detached: true,
-    stdio: ["ignore", log.fd, log.fd],
-    env: {
-      ...nativeProcessEnvironment(context),
-      NODE_ENV: context.dev ? "development" : "production",
-      SUNABOT_RUNTIME_MODE: process.platform === "darwin" ? "macos" : "linux-native",
-      SUNABOT_RUNTIME_ID: context.contract.runtimeId,
-      SUNABOT_WORKSPACE: context.workspace,
-      SUNABOT_HOST: context.contract.adminHost,
-      SUNABOT_PORT: String(context.contract.adminPort),
-      SUNABOT_ONEBOT_HOST: onebotListenHost,
-      SUNABOT_ONEBOT_PORT: String(context.contract.onebotPort)
-    }
+    stdio: rendererToken
+      ? ["ignore", log.fd, log.fd, "pipe"]
+      : ["ignore", log.fd, log.fd],
+    env: nativeCoreEnvironment(context, onebotListenHost, process.platform, Boolean(rendererToken))
   });
   await new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("spawn", resolve);
   });
+  if (rendererToken) child.stdio[3].end(rendererToken);
   child.unref();
   await log.close();
   let observed;
@@ -1110,7 +1247,13 @@ async function startNativeCore(context, onebotListenHost) {
     processGroup: child.pid,
     startedAt: new Date().toISOString()
   };
-  await writeState(context, { mode: "native", dev: context.dev, core: record });
+  const state = await readState(context.statePath);
+  await writeState(context, {
+    ...withoutUpdatedAt(state),
+    mode: "native",
+    dev: context.dev,
+    core: record
+  });
   return { running: true, alive: true, pid: child.pid, record };
 }
 
@@ -1258,13 +1401,19 @@ async function inspectRuntime(context, options = {}) {
       record: state.core
     };
   }
-  const [reconciler, containers, legacyContainers, nativeProcessGroups] = await Promise.all([
+  const [
+    reconciler,
+    containers,
+    legacyContainers,
+    nativeProcessGroups,
+    nativeWebfetchRendererGroups
+  ] = await Promise.all([
     inspectAccountRuntime(context, state?.reconciler),
-    labeledContainers(context.identity, { includeOneoffs: options.includeOneoffs === true }),
-    findLegacyContainers(),
-    listNativeCoreProcessGroups({ root: context.root, workspace: context.workspace })
+    labeledContainers(context, { includeOneoffs: options.includeOneoffs === true }),
+    findLegacyContainers(context),
+    listNativeCoreProcessGroups({ root: context.root, workspace: context.workspace }),
+    listNativeWebfetchRendererProcessGroups({ workspaceId: context.identity })
   ]);
-  const dockerCore = componentStatus(containers, "core");
   const napcat = componentStatus(containers, "napcat");
   const foreignProjects = [...new Set(containers
     .map((item) => item.project)
@@ -1273,10 +1422,10 @@ async function inspectRuntime(context, options = {}) {
     state,
     native,
     nativeProcessGroups,
+    nativeWebfetchRendererGroups,
     reconciler,
     containers,
     legacyContainers,
-    dockerCore,
     napcat,
     foreignProjects
   };
@@ -1388,53 +1537,42 @@ function withoutUpdatedAt(state) {
   return rest;
 }
 
-async function labeledContainers(identity, options = {}) {
-  if (!await dockerAvailable()) return [];
+async function labeledContainers(context, options = {}) {
+  if (!await dockerAvailable(context)) return [];
   const format = [
     '{{.ID}}',
     '{{.Label "io.sunabot.component"}}',
     '{{.State}}',
     '{{.Label "com.docker.compose.project"}}',
     '{{.Label "io.sunabot.account-id"}}',
-    '{{.Label "com.docker.compose.oneoff"}}'
+    '{{.Label "com.docker.compose.oneoff"}}',
+    '{{.Names}}',
+    '{{.Label "io.sunabot.runtime-id"}}',
+    '{{.Label "io.sunabot.workspace-id"}}'
   ].join("\t");
-  const output = await command("docker", [
+  const output = await dockerCommand(context, [
     "ps", "-a",
-    "--filter", `label=io.sunabot.workspace-id=${identity}`,
+    "--filter", `label=io.sunabot.workspace-id=${context.identity}`,
     "--format", format
   ], { capture: true });
   return output.split(/\r?\n/).filter(Boolean).map((line) => {
-    const [id, component, state, project, accountId, oneoff] = line.split("\t");
-    return { id, component, state: state?.toLowerCase(), project, accountId, oneoff };
+    const [
+      id, component, state, project, accountId, oneoff,
+      name, runtimeId, workspaceId
+    ] = line.split("\t");
+    const item = {
+      id,
+      component,
+      state: state?.toLowerCase(),
+      project,
+      accountId,
+      oneoff,
+      name,
+      runtimeId,
+      workspaceId
+    };
+    return item;
   }).filter((item) => options.includeOneoffs === true || item.oneoff?.toLowerCase() !== "true");
-}
-
-async function removeWorkspaceContainers(context) {
-  let containers = await labeledContainers(context.identity, { includeOneoffs: true });
-  if (containers.length === 0) return;
-  const ids = containers.map((item) => item.id);
-  await command("docker", [
-    "stop",
-    "--timeout", String(context.contract.shutdownTimeoutSeconds),
-    ...ids
-  ], { timeoutMs: (context.contract.shutdownTimeoutSeconds + 5) * 1_000 }).catch(() => {});
-  containers = await labeledContainers(context.identity, { includeOneoffs: true });
-  const running = containers.filter((item) => item.state === "running");
-  if (running.length > 0) {
-    throw runtimeError(
-      "DOCKER_CONTAINER_STOP_FAILED",
-      `当前 workspace 的容器未停止：${running.map((item) => item.id).join(", ")}。`
-    );
-  }
-  if (containers.length === 0) return;
-  await command("docker", ["rm", ...containers.map((item) => item.id)]).catch(() => {});
-  const survivors = await labeledContainers(context.identity, { includeOneoffs: true });
-  if (survivors.length > 0) {
-    throw runtimeError(
-      "DOCKER_CONTAINER_REMOVE_FAILED",
-      `当前 workspace 的容器未移除：${survivors.map((item) => item.id).join(", ")}。`
-    );
-  }
 }
 
 async function runtimeNetworkWorkspaceId(context) {
@@ -1443,7 +1581,7 @@ async function runtimeNetworkWorkspaceId(context) {
     "{{.Name}}",
     '{{.Label "io.sunabot.workspace-id"}}'
   ].join("\t");
-  const output = await command("docker", ["network", "ls", "--format", format], { capture: true });
+  const output = await dockerCommand(context, ["network", "ls", "--format", format], { capture: true });
   const match = output.split(/\r?\n/u)
     .map((line) => line.split("\t"))
     .find(([name]) => name === network);
@@ -1463,18 +1601,18 @@ async function removeRuntimeNetwork(context) {
       `Docker 网络 ${context.project}-runtime 缺少当前 workspace 身份；未删除。`
     );
   }
-  await command("docker", ["network", "rm", `${context.project}-runtime`]);
+  await dockerCommand(context, ["network", "rm", `${context.project}-runtime`]);
 }
 
-async function findLegacyContainers() {
-  if (!await dockerAvailable()) return [];
+async function findLegacyContainers(context) {
+  if (!await dockerAvailable(context)) return [];
   const format = [
     '{{.ID}}',
     '{{.Names}}',
     '{{.State}}',
     '{{.Label "com.docker.compose.service"}}'
   ].join("\t");
-  const output = await command("docker", ["ps", "-a", "--format", format], { capture: true });
+  const output = await dockerCommand(context, ["ps", "-a", "--format", format], { capture: true });
   return output.split(/\r?\n/).filter(Boolean).map((line) => {
     const [id, name, state, service] = line.split("\t");
     return { id, name, state: state?.toLowerCase(), service };
@@ -1497,10 +1635,10 @@ async function assertComposeServices(context) {
   if (!(await exists(context.contract.composeFile))) {
     throw new Error(`Compose 文件不存在：${context.contract.composeFile}`);
   }
-  const output = await compose(context, ["--profile", context.contract.coreProfile, "config", "--services"], { capture: true });
+  const output = await compose(context, ["config", "--services"], { capture: true });
   const services = new Set(output.split(/\r?\n/).map((value) => value.trim()).filter(Boolean));
-  for (const expected of [context.contract.coreService, context.contract.napcatService]) {
-    if (!services.has(expected)) throw new Error(`Compose 缺少 ${expected} service。`);
+  if (services.size !== 1 || !services.has(context.contract.napcatService)) {
+    throw new Error("NapCat Compose 只能声明 napcat service。");
   }
 }
 
@@ -1517,6 +1655,7 @@ async function napcatCompose(context, account, args, options = {}) {
   const project = `${context.project}-napcat-${account.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`;
   return command("docker", composeArgs(context, args, project), {
     capture: options.capture,
+    timeoutMs: options.timeoutMs,
     cwd: context.root,
     env: {
       ...composeEnvironment(context, project),
@@ -1524,14 +1663,6 @@ async function napcatCompose(context, account, args, options = {}) {
       NAPCAT_ACCOUNT: account.qqId ?? "",
       NAPCAT_WEBUI_PORT: String(account.webuiPort)
     }
-  });
-}
-
-function spawnCompose(context, args) {
-  return spawn("docker", composeArgs(context, args), {
-    cwd: context.root,
-    env: composeEnvironment(context),
-    stdio: "inherit"
   });
 }
 
@@ -1548,15 +1679,17 @@ function composeArgs(context, args, project = context.project) {
 
 function composeEnvironment(context, project = context.project) {
   return {
-    ...process.env,
+    ...context.environment,
     ...context.runtimeEnvironment,
     ...context.composeOverrides,
     COMPOSE_PROJECT_NAME: project,
     SUNABOT_COMPOSE_PROJECT: project,
-    SUNABOT_DOCKER_NETWORK: `${context.project}-runtime`,
+    NAPCAT_IMAGE: context.contract.napcatImage,
+    SUNABOT_NAPCAT_NETWORK: `${context.project}-runtime`,
     SUNABOT_RUNTIME_ID: context.contract.runtimeId,
     SUNABOT_RUNTIME_UID: String(process.getuid?.() ?? 1000),
     SUNABOT_RUNTIME_GID: String(process.getgid?.() ?? 1000),
+    SUNABOT_PROJECT_ROOT: context.root,
     SUNABOT_WORKSPACE: context.workspace,
     SUNABOT_WORKSPACE_ID: context.identity,
     SUNABOT_RUNTIME_ENV: context.runtimeEnv
@@ -1565,9 +1698,40 @@ function composeEnvironment(context, project = context.project) {
 
 function nativeProcessEnvironment(context) {
   return {
-    ...process.env,
+    ...context.environment,
     ...context.runtimeEnvironment
   };
+}
+
+export function nativeCoreEnvironment(
+  context,
+  onebotListenHost,
+  platform = process.platform,
+  rendererTokenFd = false
+) {
+  const environment = {
+    ...nativeProcessEnvironment(context),
+    NODE_ENV: context.dev ? "development" : "production",
+    SUNABOT_RUNTIME_MODE: platform === "darwin" ? "macos" : "linux-native",
+    SUNABOT_RUNTIME_ID: context.contract.runtimeId,
+    SUNABOT_WORKSPACE: context.workspace,
+    SUNABOT_WORKSPACE_ID: context.identity,
+    SUNABOT_HOST: context.contract.adminHost,
+    SUNABOT_PORT: String(context.contract.adminPort),
+    SUNABOT_ONEBOT_HOST: onebotListenHost,
+    SUNABOT_ONEBOT_PORT: String(context.contract.onebotPort),
+    SUNABOT_BWRAP_EXECUTABLE: bubblewrapExecutable(context),
+    SUNABOT_PACKAGED_RELEASE: context.packaged ? "1" : "0"
+  };
+  delete environment.SUNABOT_WEBFETCH_RENDERER_TOKEN;
+  delete environment.SUNABOT_WEBFETCH_RENDERER_TOKEN_FD;
+  delete environment.SUNABOT_WEBFETCH_RENDERER_URL;
+  if (rendererTokenFd && platform === "linux") {
+    environment.SUNABOT_WEBFETCH_RENDERER_TOKEN_FD = "3";
+    environment.SUNABOT_WEBFETCH_RENDERER_URL = `http://127.0.0.1:${context.contract.webfetchRendererPort}`;
+  }
+  delete environment.SUNABOT_DOCKER_SOCKET;
+  return environment;
 }
 
 async function readRuntimeEnvironment(filePath) {
@@ -1582,24 +1746,43 @@ async function readRuntimeEnvironment(filePath) {
 async function ensureNativeDependencies(context) {
   const marker = path.join(context.root, "node_modules/.package-lock.json");
   const lock = path.join(context.root, "package-lock.json");
-  if (!(await exists(marker)) || await newerThan(lock, marker)) {
-    await command("npm", ["ci"], { cwd: context.root });
+  if (context.packaged) {
+    if (!await exists(marker)) throw new Error("RELEASE_DEPENDENCIES_MISSING");
+  } else if (!(await exists(marker)) || await newerThan(lock, marker)) {
+    await command("npm", ["ci"], { cwd: context.root, timeoutMs: BUILD_COMMAND_TIMEOUT_MS });
   }
   const capabilities = await inspectNativeCapabilities(context);
-  if (!capabilities.workspaceBash.ok) throw new Error(`Native Bash 隔离不可用：${capabilities.workspaceBash.detail}`);
   if (!capabilities.codexCli.ok) throw new Error(`Native Codex CLI 不可用：${capabilities.codexCli.detail}`);
+  if (process.platform === "linux" && !capabilities.workspaceBash.ok) {
+    throw runtimeError(
+      capabilities.workspaceBash.code ?? "BUBBLEWRAP_NAMESPACE_UNAVAILABLE",
+      `Bubblewrap namespace 隔离不可用：${capabilities.workspaceBash.detail}`
+    );
+  }
 }
 
 async function inspectNativeCapabilities(context) {
   const codex = await inspectNativeCodex(context);
-  let workspaceBash = { ok: true, detail: "disabled on macOS Native Core" };
-  if (process.platform === "linux") {
-    try {
-      await command("/usr/bin/bwrap", bubblewrapProbeArguments(context.workspace), { capture: true });
+  let workspaceBash;
+  try {
+    if (process.platform === "linux") {
+      await command(bubblewrapExecutable(context), bubblewrapProbeArguments(context.workspace, true), { capture: true });
       workspaceBash = { ok: true, detail: "bubblewrap namespace probe passed" };
-    } catch (error) {
-      workspaceBash = { ok: false, detail: message(error) };
+    } else if (process.platform === "darwin") {
+      await fs.access("/bin/bash", fs.constants.X_OK);
+      workspaceBash = { ok: true, detail: "approved administrator host Bash available" };
+    } else {
+      throw new Error(`unsupported platform ${process.platform}`);
     }
+  } catch (error) {
+    workspaceBash = {
+      ok: false,
+      code: process.platform === "linux" ? "BUBBLEWRAP_NAMESPACE_UNAVAILABLE" : "HOST_BASH_UNAVAILABLE",
+      action: process.platform === "linux"
+        ? "确认包内 Bubblewrap 运行库完整且内核允许 user namespace"
+        : "确认 /bin/bash 可执行",
+      detail: message(error)
+    };
   }
   return {
     workspaceBash,
@@ -1609,7 +1792,8 @@ async function inspectNativeCapabilities(context) {
 }
 
 async function inspectNativeCodex(context) {
-  const executable = context.runtimeEnvironment.SUNABOT_CODEX_EXECUTABLE?.trim() || "codex";
+  const configured = context.runtimeEnvironment.SUNABOT_CODEX_EXECUTABLE?.trim();
+  const executable = configured || path.resolve(context.root, context.contract.codexCli.executable);
   const codexHome = path.join(context.workspace, path.dirname(context.contract.codexCli.authFile));
   const environment = { ...nativeProcessEnvironment(context), CODEX_HOME: codexHome };
   let version;
@@ -1649,8 +1833,12 @@ function assertNonRootRuntimeUser() {
 async function ensureNativeBuild(context) {
   const outputs = [context.apiEntry, context.webEntry];
   const present = await Promise.all(outputs.map(exists));
+  if (context.packaged) {
+    if (present.some((value) => !value)) throw new Error("RELEASE_BUILD_OUTPUT_MISSING");
+    return;
+  }
   if (present.some((value) => !value) || await sourcesNewerThan(context.root, outputs)) {
-    await command("npm", ["run", "build"], { cwd: context.root });
+    await command("npm", ["run", "build"], { cwd: context.root, timeoutMs: BUILD_COMMAND_TIMEOUT_MS });
   }
 }
 
@@ -1756,6 +1944,47 @@ async function waitForHttp(url, timeoutMs) {
   throw new Error(`健康检查超时：${url}`);
 }
 
+async function waitForRendererHealth(url, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const health = await readRendererHealth(url);
+    if (health?.ok === true) return health;
+    await delay(250);
+  }
+  throw new Error(`WEBFETCH_RENDERER_HEALTH_TIMEOUT:${url}`);
+}
+
+function readRendererHealth(url) {
+  return new Promise((resolve) => {
+    const request = http.get(url, { timeout: 1_500 }, (response) => {
+      const chunks = [];
+      let bytes = 0;
+      response.on("data", (chunk) => {
+        bytes += chunk.length;
+        if (bytes > 4_096) response.destroy();
+        else chunks.push(chunk);
+      });
+      response.once("end", () => {
+        if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
+          resolve(null);
+          return;
+        }
+        try {
+          const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          resolve(value && typeof value === "object" ? value : null);
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    request.once("timeout", () => {
+      request.destroy();
+      resolve(null);
+    });
+    request.once("error", () => resolve(null));
+  });
+}
+
 function httpReady(url) {
   return new Promise((resolve) => {
     const request = http.get(url, { timeout: 1_500 }, (response) => {
@@ -1785,7 +2014,7 @@ function tcpOpen(host, port) {
 
 async function waitForRuntimePortsClosed(context, state) {
   const onebotHost = state?.onebotListenHost
-    ?? (context.contract.onebotHost === "docker-network-gateway" ? "127.0.0.1" : context.contract.onebotHost);
+    ?? defaultNativeOnebotHealthHost(context.contract.onebotHost);
   const endpoints = [
     { name: "管理 API", host: "127.0.0.1", port: context.contract.adminPort },
     { name: "OneBot", host: onebotHost, port: context.contract.onebotPort }
@@ -1808,35 +2037,48 @@ async function waitForRuntimePortsClosed(context, state) {
   );
 }
 
-async function assertDockerAvailable() {
-  if (!await dockerAvailable()) throw new Error("Docker Engine 不可用；请启动 Docker Desktop 或 Docker Engine。 ");
+async function assertDockerAvailable(context) {
+  if (await dockerAvailable(context)) return;
+  throw new Error("NAPCAT_DOCKER_UNAVAILABLE：NapCat 需要本机 Docker Engine 与 Compose 插件。");
 }
 
-async function dockerAvailable() {
+async function dockerAvailable(context) {
   try {
-    await command("docker", ["info", "--format", "{{.ServerVersion}}"], { capture: true });
+    await dockerCommand(context, ["info", "--format", "{{.ServerVersion}}"], {
+      capture: true,
+      timeoutMs: DOCKER_CONTROL_TIMEOUT_MS
+    });
     return true;
   } catch {
     return false;
   }
 }
 
-function command(executable, args, options = {}) {
+function dockerCommand(context, args, options = {}) {
+  return command("docker", args, {
+    ...options,
+    env: options.env ?? nativeProcessEnvironment(context)
+  });
+}
+
+export function command(executable, args, options = {}) {
   return new Promise((resolve, reject) => {
     const output = [];
+    let outputBytes = 0;
     let settled = false;
+    let terminating = false;
     let timeout;
     let forceKill;
-    let timeoutError;
-    const child = spawn(executable, args, {
+    let terminalError;
+    const timeoutMs = commandTimeoutMs(executable, args, options.timeoutMs);
+    const terminateGraceMs = positiveTimeout(options.terminateGraceMs, COMMAND_TERMINATE_GRACE_MS);
+    const maxOutputBytes = positiveTimeout(options.maxOutputBytes, DEFAULT_COMMAND_OUTPUT_BYTES);
+    const spawnProcess = options.spawnProcess ?? spawn;
+    const child = spawnProcess(executable, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
       stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit"
     });
-    if (options.capture) {
-      child.stdout.on("data", (chunk) => output.push(chunk));
-      child.stderr.on("data", (chunk) => output.push(chunk));
-    }
     const finish = (callback) => {
       if (settled) return;
       settled = true;
@@ -1844,28 +2086,68 @@ function command(executable, args, options = {}) {
       if (forceKill) clearTimeout(forceKill);
       callback();
     };
-    if (Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
+    const terminate = (error) => {
+      if (terminating || settled) return;
+      terminating = true;
+      terminalError = error;
+      try { child.kill("SIGTERM"); } catch {}
+      forceKill = setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch {}
+        child.stdin?.destroy?.();
+        child.stdout?.destroy?.();
+        child.stderr?.destroy?.();
+        child.unref?.();
+        finish(() => reject(terminalError));
+      }, terminateGraceMs);
+      forceKill.unref?.();
+    };
+    if (options.capture) {
+      const collect = (chunk) => {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        outputBytes += buffer.byteLength;
+        if (outputBytes > maxOutputBytes) {
+          terminate(runtimeError("COMMAND_OUTPUT_LIMIT", `${executable} 输出超过 ${maxOutputBytes} bytes。`));
+          return;
+        }
+        output.push(buffer);
+      };
+      child.stdout.on("data", collect);
+      child.stderr.on("data", collect);
+    }
+    if (timeoutMs > 0) {
       timeout = setTimeout(() => {
-        timeoutError = runtimeError(
+        terminate(runtimeError(
           "COMMAND_TIMEOUT",
-          `${executable} ${args.slice(0, 4).join(" ")} 超过 ${options.timeoutMs}ms 未结束。`
-        );
-        child.kill("SIGTERM");
-        forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
-        forceKill.unref?.();
-      }, options.timeoutMs);
+          `${executable} ${args.slice(0, 4).join(" ")} 超过 ${timeoutMs}ms 未结束。`
+        ));
+      }, timeoutMs);
       timeout.unref?.();
     }
-    child.once("error", (error) => finish(() => reject(error)));
+    child.once("error", (error) => finish(() => reject(terminalError ?? error)));
     child.once("exit", (code, signal) => {
       const text = Buffer.concat(output).toString("utf8");
       finish(() => {
-        if (timeoutError) reject(timeoutError);
+        if (terminalError) reject(terminalError);
         else if (code === 0) resolve(text);
         else reject(new Error(`${executable} ${args.slice(0, 4).join(" ")} 失败（${signal || code}）${text ? `：${text.trim()}` : ""}`));
       });
     });
   });
+}
+
+export function commandTimeoutMs(executable, args, explicitTimeoutMs) {
+  if (Number.isFinite(explicitTimeoutMs) && explicitTimeoutMs > 0) return Math.floor(explicitTimeoutMs);
+  if (path.basename(executable) !== "docker") return DEFAULT_COMMAND_TIMEOUT_MS;
+  if (args[0] === "compose") {
+    if (args.includes("build") || args.includes("--build")) return BUILD_COMMAND_TIMEOUT_MS;
+    return DOCKER_COMPOSE_TIMEOUT_MS;
+  }
+  if (args[0] === "run" || args[0] === "exec") return DOCKER_EXEC_TIMEOUT_MS;
+  return DOCKER_CONTROL_TIMEOUT_MS;
+}
+
+function positiveTimeout(value, fallback) {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
 async function commandSucceeds(executable, args, options = {}) {

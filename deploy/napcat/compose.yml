@@ -1,0 +1,72 @@
+name: sunabot-napcat
+
+services:
+  napcat:
+    image: ${NAPCAT_IMAGE:?Set NAPCAT_IMAGE to the locked upstream digest}
+    pull_policy: never
+    entrypoint: ["/usr/local/bin/sunabot-napcat-entrypoint"]
+    restart: unless-stopped
+    environment:
+      ACCOUNT: ${NAPCAT_ACCOUNT:-}
+      WEBUI_TOKEN: ${WEBUI_TOKEN:?Set WEBUI_TOKEN in workspace/secrets/runtime.env}
+      WEBUI_PREFIX: ${WEBUI_PREFIX:-}
+      NAPCAT_UID: ${SUNABOT_RUNTIME_UID:-1000}
+      NAPCAT_GID: ${SUNABOT_RUNTIME_GID:-1000}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${SUNABOT_PROJECT_ROOT:?Set SUNABOT_PROJECT_ROOT}/deploy/napcat/napcat-entrypoint.sh:/usr/local/bin/sunabot-napcat-entrypoint:ro
+      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE}/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/config-full:/app/napcat/config
+      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE}/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/qq:/app/.config/QQ
+      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE}/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/plugins:/app/napcat/plugins
+      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE}/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}:/app/napcat/cache
+    shm_size: 1gb
+    stop_grace_period: 35s
+    pids_limit: 512
+    mem_limit: ${NAPCAT_MEMORY_LIMIT:-2g}
+    cpus: ${NAPCAT_CPU_LIMIT:-2.0}
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m,mode=1777
+      - /app/.cache:rw,nosuid,nodev,size=256m,mode=0700,uid=${SUNABOT_RUNTIME_UID:-1000},gid=${SUNABOT_RUNTIME_GID:-1000}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/6099'"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 12
+    labels:
+      io.sunabot.runtime-id: ${SUNABOT_RUNTIME_ID:-sunabot-qq-runtime}
+      io.sunabot.workspace-id: ${SUNABOT_WORKSPACE_ID:?Set SUNABOT_WORKSPACE_ID through the launcher}
+      io.sunabot.component: napcat
+      io.sunabot.account-id: ${NAPCAT_ACCOUNT_ID:-primary}
+    logging:
+      driver: local
+      options:
+        max-size: ${SUNABOT_LOG_MAX_SIZE:-20m}
+        max-file: ${SUNABOT_LOG_MAX_FILES:-5}
+    networks:
+      runtime:
+        aliases:
+          - napcat-${NAPCAT_ACCOUNT_ID:-primary}
+
+networks:
+  runtime:
+    name: ${SUNABOT_NAPCAT_NETWORK:-sunabot-napcat}
+    external: true

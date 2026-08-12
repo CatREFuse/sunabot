@@ -20,7 +20,7 @@ cd sunabot
 
 首次启动会初始化 workspace、运行令牌和管理员凭据。开发终端使用自己的 QQ 测试账号和 Provider 凭据，不能挂载生产 workspace。
 
-接管已有业务时，先在源终端执行 `./sunabot.sh down`，按 `docs/operations/sqlite-backup-recovery.md` 创建并验证双库恢复点，再复制以下内容到目标终端的空 workspace：
+接管已有业务时，先在源终端执行 `./sunabot.sh down`，按 `docs/operations/sqlite-backup-recovery.md` 创建并验证双库恢复点，再把以下目录直接复制到目标终端的空 workspace：
 
 ```text
 business/
@@ -28,7 +28,13 @@ runtime/napcat/
 secrets/
 ```
 
-`cache/`、运行日志、PID 与临时文件不需要迁移。凭据和 QQ 登录态必须加密传输，不能上传到公共仓库或普通共享目录。
+`cache/`、运行日志、PID 与临时文件不需要迁移。复制目录必须保持在受控访问路径中，不能上传到公共仓库或普通共享目录。
+
+## Agent 配置文件夹
+
+跨终端新增或迁移单个 Agent 时，直接复制该 Agent 的配置文件夹到目标机的本地受控目录，再在管理台“新增 Agent”中选择“选择文件夹”。文件夹是唯一推荐和支持的配置包模型；ZIP 只用于无法选择目录时的管理台兼容输入。不要把配置文件夹直接放进活动 `workspace/business/agents/<agentId>/`：新增 Agent 需要经过服务端预检、默认值补齐、原子发布和注册表登记。
+
+复制前只保留角色配置：`agent.json`、人格 Markdown、最终提示词、允许的系统提示词覆盖、头像和自拍参考图。不得复制 `.env`、Provider/管理员密钥、SQLite、队列、请求日志、备份、QQ 登录态、NapCat 配置或运行目录。管理台会列出缺失组件并以目标当前默认值补齐；未知文件、路径穿越、重复或 Unicode/控制字符异常、链接、超量或损坏 ZIP、无效 JSON/UTF-8/图片均会拒绝，目标已有 Agent ID 或工作区也不会被覆盖。
 
 ## 更新代码
 
@@ -40,6 +46,26 @@ git pull --ff-only
 ```
 
 存在数据库或 workspace 前向迁移时，按发布文档先停服、备份和校验，再执行迁移。发现旧 `sunabot-qq-runtime` 容器时，改用 `docs/migrations/one-container-to-split-runtime.md`，不能直接启动新运行时。
+
+跨多个版本升级，或需要把 `0.1.0`—`0.2.0` 老实例接入当前双 Workbench 资源寻址时，统一从 `docs/migrations/upgrade-old-versions-to-current.md` 选择起点、目标代码包、恢复点和回滚路径。
+
+从 `0.1.0` 或 `0.1.1` 升级到 `0.1.2` 使用版本专用命令：
+
+```bash
+npm run upgrade:0.1.2 -- plan
+npm run upgrade:0.1.2 -- apply
+```
+
+完整前置条件、恢复点、验收和回滚步骤见 `docs/migrations/upgrade-0.1.0-to-0.1.2.md`。
+
+从 `0.1.2` 升级到 `0.1.3` 使用：
+
+```bash
+npm run upgrade:0.1.3 -- plan
+npm run upgrade:0.1.3 -- apply
+```
+
+该版本不修改 SQLite schema 或资源布局；`apply` 仍先停服创建全 Agent 恢复点，再由启动期提示词迁移补齐聊天媒体规则，完整步骤见 `docs/migrations/upgrade-0.1.2-to-0.1.3.md`。
 
 ## 终端角色
 

@@ -9,8 +9,9 @@ import {
   captureSkillScriptMountIdentity,
   type AgentSkillScriptProjection
 } from "../../adapters/filesystem/agentSkillScriptProjection.js";
+import { testTempRoot } from "./test-temp-root.js";
 
-const TEST_ROOT = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/skill-script-executor";
+const TEST_ROOT = testTempRoot("skill-script-executor");
 const digest = "a".repeat(64);
 const source = "#!/bin/bash\nprintf 'done\\n'\n";
 const resource = {

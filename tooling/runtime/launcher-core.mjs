@@ -16,7 +16,7 @@ export const LAUNCHER_COMMANDS = new Set([
   "probe-runtime",
   "rollback-first-run"
 ]);
-export const CORE_MODES = new Set(["auto", "native", "docker"]);
+export const CORE_MODES = new Set(["native"]);
 
 export function parseLauncherArguments(argv, environment = {}) {
   const values = [...argv];
@@ -30,22 +30,21 @@ export function parseLauncherArguments(argv, environment = {}) {
     throw new Error(`未知命令 ${command}。可用命令：${[...LAUNCHER_COMMANDS].join(", ")}。`);
   }
 
-  let requestedMode = environment.SUNABOT_CORE_MODE?.trim() || "auto";
+  if (environment.SUNABOT_CORE_MODE?.trim()) {
+    throw new Error("SUNABOT_CORE_MODE 已移除；Sunabot Core 固定使用 Native 运行时。");
+  }
+  const requestedMode = "native";
   let dev = /^(?:1|true|yes)$/i.test(environment.SUNABOT_DEV?.trim() || "");
   let accountId;
+  let forceRestart = false;
   while (values.length > 0) {
     const value = values.shift();
     if (value === "--dev") {
       dev = true;
       continue;
     }
-    if (value === "--core") {
-      requestedMode = values.shift() ?? "";
-      continue;
-    }
-    if (value?.startsWith("--core=")) {
-      requestedMode = value.slice("--core=".length);
-      continue;
+    if (value === "--core" || value?.startsWith("--core=")) {
+      throw new Error("--core 已移除；Sunabot Core 固定使用 Native 运行时。");
     }
     if (value === "--account") {
       accountId = values.shift() ?? "";
@@ -55,10 +54,11 @@ export function parseLauncherArguments(argv, environment = {}) {
       accountId = value.slice("--account=".length);
       continue;
     }
-    throw new Error(`不支持的参数 ${value}。仅支持 --core=auto|native|docker、--dev 和 --account=<id>。`);
-  }
-  if (!CORE_MODES.has(requestedMode)) {
-    throw new Error(`SUNABOT_CORE_MODE 必须是 auto、native 或 docker，当前为 ${requestedMode || "空值"}。`);
+    if (value === "--force-restart") {
+      forceRestart = true;
+      continue;
+    }
+    throw new Error(`不支持的参数 ${value}。仅支持 --dev、--account=<id> 和 --force-restart。`);
   }
   if (command === "reconcile-account" && !/^[A-Za-z0-9_-]{1,64}$/.test(accountId ?? "")) {
     throw new Error("reconcile-account 需要合法的 --account=<id>。");
@@ -66,7 +66,10 @@ export function parseLauncherArguments(argv, environment = {}) {
   if (command !== "reconcile-account" && accountId != null) {
     throw new Error("--account 仅支持 reconcile-account。");
   }
-  return { command, requestedMode, dev, ...(accountId ? { accountId } : {}) };
+  if (command !== "reconcile-account" && forceRestart) {
+    throw new Error("--force-restart 仅支持 reconcile-account。");
+  }
+  return { command, requestedMode, dev, ...(accountId ? { accountId } : {}), ...(forceRestart ? { forceRestart: true } : {}) };
 }
 
 export function isWslRuntime(options = {}) {
@@ -82,9 +85,10 @@ export function resolveCoreMode(requestedMode, options = {}) {
   if (platform === "win32") {
     throw new Error("Windows 主机请在 WSL2 终端中运行 sunabot.sh。");
   }
-  if (requestedMode !== "auto") return requestedMode;
-  if (platform === "darwin") return "native";
-  if (platform === "linux") return "docker";
+  if (requestedMode && requestedMode !== "native" && requestedMode !== "auto") {
+    throw new Error("Docker Core 已移除；Sunabot Core 固定使用 Native 运行时。");
+  }
+  if (platform === "darwin" || platform === "linux") return "native";
   throw new Error(`暂不支持 ${platform}；支持 macOS、Linux 和 Windows WSL2。`);
 }
 
@@ -110,10 +114,8 @@ export function resolveLauncherContract(contract, options) {
   const admin = network.admin ?? {};
   const onebot = network.onebot ?? {};
   const napcatWebui = network.napcatWebui ?? {};
-  const docker = contract.docker ?? {};
-  const dockerServices = docker.services ?? {};
-  const coreService = dockerServices.core ?? {};
-  const napcatService = dockerServices.napcat ?? {};
+  const napcat = contract.napcat ?? {};
+  const webfetchRenderer = contract.native?.webfetchRenderer ?? {};
   const codexCli = contract.capabilities?.codexCli ?? {};
   const nativeUrls = onebot.nativeAdvertisedUrls ?? {};
   const nativeKey = options.platform === "darwin"
@@ -130,14 +132,12 @@ export function resolveLauncherContract(contract, options) {
     ?? nativeUrls[nativeKey]
     ?? network.onebotReverseWebSocket
     ?? `ws://host.docker.internal:${onebotPort}${onebotPath}`;
-  const dockerReverseWebSocket = network.onebotDockerReverseWebSocket
-    ?? onebot.dockerAdvertisedUrl
-    ?? `ws://core:${onebotPort}${onebotPath}`;
   const webuiPort = positivePort(napcatWebui.port ?? network.napcatWebuiPort ?? 6099, "NapCat WebUI 端口");
-  const composeBase = docker.composeProject ?? docker.project ?? contract.runtimeId ?? "sunabot";
+  const composeBase = napcat.composeProject ?? contract.runtimeId ?? "sunabot-napcat";
 
   return {
     runtimeId: contract.runtimeId ?? "sunabot-runtime",
+    releaseVersion: contract.releaseVersion,
     nodeVersion: contract.nodeVersion,
     adminHost,
     adminPort,
@@ -148,7 +148,6 @@ export function resolveLauncherContract(contract, options) {
     onebotPort,
     onebotPath,
     nativeReverseWebSocket,
-    dockerReverseWebSocket,
     webuiPort,
     healthPath: contract.health?.services?.admin?.path
       ?? contract.health?.services?.core?.path
@@ -157,11 +156,12 @@ export function resolveLauncherContract(contract, options) {
     onebotHealthPath: contract.health?.services?.onebot?.path
       ?? onebot.healthPath
       ?? "/healthz",
-    composeFile: path.resolve(options.root, docker.composeFile ?? "deploy/docker/compose.yml"),
+    composeFile: path.resolve(options.root, napcat.composeFile ?? "deploy/napcat/compose.yml"),
     composeBase,
-    coreService: coreService.name ?? docker.coreService ?? "core",
-    coreProfile: coreService.profile ?? docker.coreProfile ?? "core-docker",
-    napcatService: napcatService.name ?? docker.napcatService ?? "napcat",
+    napcatService: napcat.service ?? "napcat",
+    napcatNetwork: napcat.network?.name ?? "sunabot-napcat",
+    napcatImage: `${napcat.image}@${napcat.digest}`,
+    webfetchRendererPort: positivePort(webfetchRenderer.port ?? 8790, "WebFetch Renderer 端口"),
     coreReadyTimeoutSeconds: positiveInteger(
       contract.startup?.coreReadyTimeoutSeconds ?? 60
     ),
@@ -174,7 +174,7 @@ export function resolveLauncherContract(contract, options) {
     paths: contract.paths ?? {},
     codexCli: {
       version: String(codexCli.version ?? "").trim(),
-      executable: codexCli.executable ?? "/usr/local/bin/codex",
+      executable: codexCli.executable ?? "node_modules/@openai/codex/bin/codex.js",
       authFile: codexCli.authFile ?? "secrets/codex/auth.json"
     }
   };

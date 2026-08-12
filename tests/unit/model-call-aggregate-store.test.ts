@@ -56,7 +56,7 @@ describe("model call SQLite aggregates", () => {
 
     const database = new DatabaseSync(databasePath);
     expect(database.prepare("SELECT value FROM app_metadata WHERE key = 'storage-schema-version'").get())
-      .toMatchObject({ value: "11" });
+      .toMatchObject({ value: "17" });
     const indexes = database.prepare("PRAGMA index_list('model_call_aggregates')").all() as Array<{ name?: unknown }>;
     expect(indexes.map((row) => String(row.name))).toContain("model_call_aggregates_behavior");
     const modelIndexes = database.prepare("PRAGMA index_list('model_call_model_aggregates')").all() as Array<{ name?: unknown }>;
@@ -78,7 +78,7 @@ describe("model call SQLite aggregates", () => {
 
     const database = new DatabaseSync(databasePath);
     expect(database.prepare("SELECT value FROM app_metadata WHERE key = 'storage-schema-version'").get())
-      .toMatchObject({ value: "11" });
+      .toMatchObject({ value: "17" });
     database.close();
   });
 });

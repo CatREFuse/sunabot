@@ -17,8 +17,8 @@ const appendRequestLogStrict = vi.hoisted(() => vi.fn(async () => undefined));
 const recallMemory = vi.hoisted(() => vi.fn(async () => ({ ok: true, matches: [] })));
 const readUserProfileForUser = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("../../src/requestLog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../src/requestLog.js")>()),
+vi.mock("../../adapters/observability/requestLog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../adapters/observability/requestLog.js")>()),
   appendRequestLog,
   appendRequestLogStrict
 }));
@@ -33,6 +33,7 @@ let workspaceDirectory = "";
 let imagePath = "";
 let imageBytes: Buffer;
 let emojiFileName = "";
+let emojiArchiveUrl = "";
 let config: AppConfig;
 let closeApplicationDataStores: typeof import("../../adapters/sqlite/applicationDataStore.js").closeApplicationDataStores;
 let SessionStore: typeof import("../../services/sessions/sessionStore.js").SessionStore;
@@ -43,6 +44,7 @@ let ReplyGateEpochs: typeof import("../../services/orchestration/groupReplyPolic
 let decodeAssistantReply: typeof import("../../packages/contracts/session/runtimeMessages.js").decodeAssistantReply;
 let planEmojiMarkers: typeof import("../../services/emojis/emojiCatalog.js").planEmojiMarkers;
 let runtimeReplyDeliveryDraft: typeof import("../../src/runtime/delivery.js").runtime_replyDeliveryDraft;
+let runtimeDeliverReplyOutbox: typeof import("../../src/runtime/delivery.js").runtime_deliverReplyOutbox;
 let runtimeSendAssistantReply: typeof import("../../src/runtime/delivery.js").runtime_sendAssistantReply;
 let outboundForIncoming: typeof import("../../src/runtime/messagingAttachmentHelpers.js").outboundForIncoming;
 
@@ -60,6 +62,7 @@ beforeAll(async () => {
   ({ decodeAssistantReply } = await import("../../packages/contracts/session/runtimeMessages.js"));
   ({ planEmojiMarkers } = await import("../../services/emojis/emojiCatalog.js"));
   ({
+    runtime_deliverReplyOutbox: runtimeDeliverReplyOutbox,
     runtime_replyDeliveryDraft: runtimeReplyDeliveryDraft,
     runtime_sendAssistantReply: runtimeSendAssistantReply
   } = await import("../../src/runtime/delivery.js"));
@@ -70,6 +73,7 @@ beforeAll(async () => {
   const { createAdminTestConfig } = await import("./admin-fixtures.js");
 
   config = createAdminTestConfig(path.join(temporaryDirectory, "runtime"));
+  config.bot.emojiSendSize = 1024;
   config.persona.defaultAgentId = "koharu";
   config.persona.name = "小春";
   config.persona.agentWorkspace = path.join(workspaceDirectory, "business", "agents", "koharu");
@@ -86,6 +90,7 @@ beforeAll(async () => {
     }
   }).png().toBuffer();
   emojiFileName = `emoji-${createHash("sha256").update(imageBytes).digest("hex")}.png`;
+  emojiArchiveUrl = `/generated-images/conversation-assets/agents/koharu/${emojiFileName.slice("emoji-".length)}`;
   imagePath = emojiMediaLocation(config, emojiFileName).filePath;
   await fs.mkdir(path.dirname(imagePath), { recursive: true });
   await fs.writeFile(imagePath, imageBytes);
@@ -108,6 +113,217 @@ afterAll(async () => {
 });
 
 describe("emoji durable delivery chain", () => {
+  it("records sent emojis as reusable conversation media while keeping pure emojis out of memory", async () => {
+    const incoming = privateIncoming();
+    const providerText = "收到[/开心]";
+    const host = deliveryHost(vi.fn(async (value: string) => value), providerText);
+    const recordAssistantMessage = vi.fn(() => ({ id: "private:42" }));
+    Object.assign(host, { recordAssistantMessage });
+
+    await runtimeSendAssistantReply.call(
+      host as unknown as SunaRuntimeType,
+      "private:42",
+      incoming,
+      { send: vi.fn(async () => ({ accepted: true as const, messageId: "sent-emoji" })) } as unknown as MessagingPort,
+      providerText,
+      false,
+      [],
+      undefined,
+      () => true,
+      undefined,
+      false,
+      { messageOrigin: "text" },
+      "buffered",
+      undefined,
+      emojiPlanFor(providerText)
+    );
+
+    expect(recordAssistantMessage).toHaveBeenCalledWith(
+      incoming,
+      "收到",
+      [emojiArchiveUrl],
+      undefined,
+      undefined,
+      { messageOrigin: "text" },
+      expect.objectContaining({ messageId: "sent-emoji" })
+    );
+    await expect(fs.readFile(path.join(
+      workspaceDirectory,
+      "business/media/images/conversation-assets/agents/koharu",
+      emojiFileName.slice("emoji-".length)
+    ))).resolves.toEqual(imageBytes);
+
+    const pureEmojiText = "[/开心]";
+    recordAssistantMessage.mockClear();
+    const pureEmojiHost = deliveryHost(vi.fn(async (value: string) => value), pureEmojiText);
+    Object.assign(pureEmojiHost, { recordAssistantMessage });
+    await runtimeSendAssistantReply.call(
+      pureEmojiHost as unknown as SunaRuntimeType,
+      "private:42",
+      incoming,
+      { send: vi.fn(async () => ({ accepted: true as const, messageId: "direct-pure-emoji" })) } as unknown as MessagingPort,
+      pureEmojiText,
+      false,
+      [],
+      undefined,
+      () => true,
+      undefined,
+      false,
+      { messageOrigin: "text" },
+      "buffered",
+      undefined,
+      emojiPlanFor(pureEmojiText)
+    );
+    expect(recordAssistantMessage).toHaveBeenCalledWith(
+      incoming,
+      "[图片]",
+      [emojiArchiveUrl],
+      undefined,
+      undefined,
+      { messageOrigin: "text" },
+      expect.objectContaining({ messageId: "direct-pure-emoji" })
+    );
+
+    recordAssistantMessage.mockClear();
+    Object.assign(host, {
+      conversationRecords: new Map(),
+      protectedConversationIds: () => new Set<string>(),
+      hooks: {
+        run: vi.fn(async () => ({ text: providerText })),
+        runEach: vi.fn(async () => undefined)
+      }
+    });
+    const durableDraft = runtimeReplyDeliveryDraft.call(
+      host as unknown as SunaRuntimeType,
+      incoming,
+      "",
+      false,
+      [{
+        url: emojiArchiveUrl,
+        filePath: imagePath
+      }],
+      undefined,
+      undefined,
+      false,
+      { messageOrigin: "text" },
+      undefined,
+      [{ type: "sticker", imageIndex: 0 }]
+    );
+    await runtimeDeliverReplyOutbox.call(
+      host as unknown as SunaRuntimeType,
+      durableDraft.payload.payload,
+      undefined,
+      {
+        signal: new AbortController().signal,
+        phase: "settle",
+        remoteReceipt: { accepted: true, messageId: "durable-emoji" },
+        async sendRemote(operation) {
+          return operation();
+        },
+        async settleStep(_step, operation) {
+          return operation(`pure-emoji:${_step}`);
+        },
+        async settleEffectStep(_step, operation) {
+          return operation(`pure-emoji:${_step}`);
+        }
+      }
+    );
+    expect(recordAssistantMessage).toHaveBeenCalledWith(
+      incoming,
+      "[图片]",
+      [emojiArchiveUrl],
+      undefined,
+      undefined,
+      { messageOrigin: "text", toolNames: undefined },
+      expect.objectContaining({ messageId: "durable-emoji", persist: false })
+    );
+  });
+
+  it("creates a second durable message for emojis when separate sending is enabled", async () => {
+    const incoming = privateIncoming();
+    const providerText = "收到[/开心]";
+    const host = deliveryHost(vi.fn(async (value: string) => value), providerText);
+    host.config = structuredClone(config);
+    host.config.bot.emojiSendSeparately = true;
+    const delivery = { outbox: [] } satisfies ReplyDelivery;
+
+    await runtimeSendAssistantReply.call(
+      host as unknown as SunaRuntimeType,
+      "private:42",
+      incoming,
+      { send: vi.fn() } as unknown as MessagingPort,
+      providerText,
+      false,
+      [],
+      "emoji-separate-message",
+      () => true,
+      delivery,
+      true,
+      { messageOrigin: "text" },
+      "buffered",
+      undefined,
+      emojiPlanFor(providerText)
+    );
+
+    expect(delivery.outbox).toHaveLength(2);
+    expect(delivery.outbox.map((draft) => draft.kind === "onebot.reply" && draft.payload.payload)).toEqual([
+      expect.objectContaining({ text: "收到", generatedImages: [], quoteReply: true }),
+      expect.objectContaining({
+        text: "",
+        quoteReply: false,
+        replyToMessageId: null,
+        generatedImages: [expect.objectContaining({ url: emojiArchiveUrl, filePath: imagePath })],
+        contentSegments: [{ type: "sticker", imageIndex: 0 }]
+      })
+    ]);
+  });
+
+  it.each([
+    "<exp>[/开心]</exp>",
+    '<exp key="[/开心]"/>'
+  ])("marks both segmented expression forms as stickers: %s", async (expressionXml) => {
+    const incoming = privateIncoming();
+    const providerText = "[/开心]";
+    const host = deliveryHost(vi.fn(async (value: string) => value), providerText);
+    host.config = structuredClone(config);
+    host.config.bot.tone.enabled = true;
+    host.config.bot.tone.segmentedReply = true;
+    Object.assign(host, {
+      rewriteToneDelivery: vi.fn(async () => ({
+        segmented: true as const,
+        content: expressionXml
+      }))
+    });
+    const delivery = { outbox: [] } satisfies ReplyDelivery;
+
+    await runtimeSendAssistantReply.call(
+      host as unknown as SunaRuntimeType,
+      "private:42",
+      incoming,
+      { send: vi.fn() } as unknown as MessagingPort,
+      providerText,
+      false,
+      [],
+      "emoji-segmented-message",
+      () => true,
+      delivery,
+      false,
+      { messageOrigin: "text" },
+      "buffered",
+      undefined,
+      emojiPlanFor(providerText)
+    );
+
+    expect(delivery.outbox).toHaveLength(1);
+    const draft = delivery.outbox[0];
+    if (draft?.kind !== "onebot.reply") throw new Error("expected onebot reply draft");
+    expect(draft.payload.payload).toMatchObject({
+      text: "",
+      generatedImages: [{ url: emojiArchiveUrl, filePath: imagePath }],
+      contentSegments: [{ type: "sticker", imageIndex: 0 }]
+    });
+  });
+
   it("rejects the fifth known marker before hooks, tone, asset reads, outbox, or OneBot", async () => {
     const incoming = privateIncoming();
     const providerText = `正文${"[/开心]".repeat(5)}`;
@@ -153,7 +369,7 @@ describe("emoji durable delivery chain", () => {
       listAvailable: () => [{
         key: "开心",
         image: {
-          url: `/generated-images/agents/koharu/${emojiFileName}`,
+          url: `/generated-images/workbench/koharu/emoji/${emojiFileName}`,
           filePath: imagePath
         }
       }]
@@ -162,8 +378,12 @@ describe("emoji durable delivery chain", () => {
     const rewriteToneText = vi.fn(async (value: string) => value
       .replace("正在处理", "正在认真处理")
       .replace("很快回来", "马上回来"));
+    const deliveryConfig: AppConfig = {
+      ...config,
+      bot: { ...config.bot, emojiSendSize: 256 }
+    };
     const host = {
-      config,
+      config: deliveryConfig,
       isReplySenderAllowed: () => true,
       hooks,
       rewriteToneText,
@@ -207,11 +427,16 @@ describe("emoji durable delivery chain", () => {
       text: "正在认真处理马上回来",
       contentSegments: [
         { type: "text", text: "正在认真处理" },
-        { type: "image", imageIndex: 0 },
+        { type: "sticker", imageIndex: 0 },
         { type: "text", text: "马上回来" }
       ],
-      generatedImages: [{ filePath: imagePath }]
+      generatedImages: [{ filePath: expect.stringMatching(/emoji-[a-f0-9]{64}\.png$/u) }]
     });
+    const resizedPath = draft.payload.payload.generatedImages[0]?.filePath;
+    expect(resizedPath).toBeTruthy();
+    expect(resizedPath).not.toBe(imagePath);
+    const resizedBytes = await fs.readFile(resizedPath!);
+    await expect(sharp(resizedBytes).metadata()).resolves.toMatchObject({ width: 256, height: 256, format: "png" });
 
     const databasePath = path.join(temporaryDirectory, "session-queue.sqlite");
     const before = new SessionStore({ databasePath });
@@ -241,7 +466,7 @@ describe("emoji durable delivery chain", () => {
         ...decoded,
         contentSegments: [
           { type: "text", text: "正在认真处理" },
-          { type: "image", imageIndex: 1 },
+          { type: "sticker", imageIndex: 1 },
           { type: "text", text: "马上回来" }
         ]
       }
@@ -250,11 +475,12 @@ describe("emoji durable delivery chain", () => {
     const server = http.createServer();
     const gateway = new OneBotGateway(
       server,
-      config,
+      deliveryConfig,
       { handleInboundMessage: vi.fn(async () => undefined) },
       {
         outboundMedia: new OutboundMediaDelivery({
-          rootDir: path.join(workspaceDirectory, "business", "media", "images")
+          rootDir: path.join(workspaceDirectory, "business", "media", "images"),
+          workspaceRoot: workspaceDirectory
         })
       }
     );
@@ -274,7 +500,8 @@ describe("emoji durable delivery chain", () => {
     }>;
     expect(message.map((segment) => segment.type)).toEqual(["text", "image", "text"]);
     expect(message[0]?.data.text).toBe("正在认真处理");
-    expect(message[1]?.data.file).toBe(`base64://${imageBytes.toString("base64")}`);
+    expect(message[1]?.data.file).toBe(`base64://${resizedBytes.toString("base64")}`);
+    expect(message[1]?.data.sub_type).toBe(1);
     expect(message[2]?.data.text).toBe("马上回来");
     after.close();
   });
@@ -287,6 +514,8 @@ describe("emoji durable delivery chain", () => {
       throw new Error("pure marker reply must not invoke tone rewrite");
     });
     const host = deliveryHost(rewriteToneText, providerText);
+    host.config = structuredClone(config);
+    host.config.bot.emojiSendSeparately = true;
     const delivery = { outbox: [] } satisfies ReplyDelivery;
 
     await runtimeSendAssistantReply.call(
@@ -313,8 +542,8 @@ describe("emoji durable delivery chain", () => {
     if (draft?.kind !== "onebot.reply") throw new Error("expected onebot reply draft");
     expect(draft.payload.payload).toMatchObject({
       text: "",
-      contentSegments: [{ type: "image", imageIndex: 0 }],
-      generatedImages: [{ filePath: imagePath }]
+      generatedImages: [{ filePath: imagePath }],
+      contentSegments: [{ type: "sticker", imageIndex: 0 }]
     });
   });
 
@@ -451,11 +680,7 @@ describe("emoji durable delivery chain", () => {
     runtime.getProvider = () => provider;
     runtime.prepareIncomingMessage = async () => undefined;
     runtime.scheduleAttachmentCacheRefresh = () => undefined;
-    runtime.scheduleMemoryCompression = () => undefined;
-    runtime.enqueueConversationMemory = async () => undefined;
-    runtime.scheduleMemoryDrain = () => undefined;
     runtime.persistConversationRecords = () => undefined;
-    runtime.prepareGroupThreadContext = async () => undefined;
     runtime.renderPromptRequest = async (_id, variables) => ({
       messages: [
         { role: "system", content: "test system" },
@@ -484,10 +709,13 @@ describe("emoji durable delivery chain", () => {
       toolNames: ["codex"],
       contentSegments: [
         { type: "text", text: "我收到了" },
-        { type: "image", imageIndex: 0 },
+        { type: "sticker", imageIndex: 0 },
         { type: "text", text: "马上处理" }
       ],
-      generatedImages: [{ filePath: imagePath }]
+      generatedImages: [{
+        url: `/generated-images/workbench/koharu/emoji/${emojiFileName}`,
+        filePath: imagePath
+      }]
     });
     expect(deferred?.acknowledgement.dedupeKey).toBe("tool-ack:codex:emoji-deferred-call");
     expect(deferred?.deferred.toolCall.arguments).not.toHaveProperty("dispatch_message");
@@ -501,7 +729,7 @@ function emojiPlanFor(text: string) {
     listAvailable: () => ["开心", "哭"].map((key) => ({
       key,
       image: {
-        url: `/generated-images/agents/koharu/${emojiFileName}`,
+        url: `/generated-images/workbench/koharu/emoji/${emojiFileName}`,
         filePath: imagePath
       }
     }))

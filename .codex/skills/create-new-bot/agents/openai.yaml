@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create New Bot"
+  short_description: "按照当前运行规范创建、初始化并验收 Sunabot 新角色"
+  default_prompt: "Use $create-new-bot to create and verify a new Sunabot role from a role brief."

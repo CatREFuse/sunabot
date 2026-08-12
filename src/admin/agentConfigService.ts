@@ -1,5 +1,4 @@
 import type { AgentRegistry } from "../../services/agents/agentRegistry.js";
-import type { AgentRuntimeManager } from "../../services/agents/agentRuntimeManager.js";
 import type { AppConfig } from "../types.js";
 import type { ConfigService } from "./configService.js";
 import {
@@ -16,7 +15,13 @@ const GLOBAL_SECTIONS = new Set<ConfigSection>(["server", "providers", "broadcas
 export class AgentConfigService {
   constructor(
     private readonly registry: AgentRegistry,
-    private readonly runtimes: AgentRuntimeManager,
+    private readonly runtimes: {
+      require(agentId: string): {
+        prepareReload(config: AppConfig): Promise<unknown>;
+        commitReload(snapshot: unknown): void;
+        reload(config: AppConfig): Promise<unknown>;
+      };
+    },
     private readonly globalConfigService: Pick<ConfigService, "readEnvelope" | "patch" | "patchGroupReply">
   ) {}
 
@@ -36,6 +41,7 @@ export class AgentConfigService {
     const request = parsePatch(body);
     const current = await this.registry.config(agentId);
     assertRevision(current, request.revision);
+    assertImmutableAgentWorkspace(section, request.value, current);
     const value = validateConfigSectionValue(section, request.value, current);
     const candidate = preserveSharedAndIdentity(current, mergeConfigSection(current, section, value));
     await this.apply(agentId, current, candidate);
@@ -72,6 +78,14 @@ export class AgentConfigService {
       await runtime.reload(current);
       throw error;
     }
+  }
+}
+
+function assertImmutableAgentWorkspace(section: ConfigSection, value: unknown, current: AppConfig) {
+  if (section !== "persona" || !value || typeof value !== "object" || Array.isArray(value)) return;
+  const workspace = (value as Record<string, unknown>).agentWorkspace;
+  if (workspace !== current.persona.agentWorkspace) {
+    badRequest("CONFIG_INVALID", "Agent workspace 不可修改。", "persona.agentWorkspace");
   }
 }
 

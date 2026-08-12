@@ -10,15 +10,33 @@ import {
 } from "../../adapters/mcp/sandboxProjection.js";
 import {
   BubblewrapMcpStdioLauncher,
-  buildMcpBubblewrapInvocation
+  buildMcpBubblewrapInvocation,
+  resolveMcpBubblewrapExecutable
 } from "../../adapters/mcp/stdioSandboxLauncher.js";
 import { createMcpStdioLaunchProjection } from "../../adapters/mcp/stdioLaunchProjection.js";
 import { AgentExtensionService } from "../../services/extensions/public.js";
 import { makeStoredZip, skillMarkdown } from "./agent-extension-fixtures.js";
+import { testTempRoot } from "./test-temp-root.js";
 
 const temporaryPaths: string[] = [];
 let workspace = "";
-const testDataRoot = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/projections";
+const testDataRoot = testTempRoot("mcp-sandbox-projection");
+
+describe("MCP Bubblewrap executable", () => {
+  it("requires launcher injection for packaged runtimes and allows the source default", () => {
+    expect(resolveMcpBubblewrapExecutable({
+      SUNABOT_BWRAP_EXECUTABLE: "/opt/sunabot/current/runtime/bubblewrap/bwrap",
+      SUNABOT_PACKAGED_RELEASE: "1"
+    })).toBe("/opt/sunabot/current/runtime/bubblewrap/bwrap");
+    expect(resolveMcpBubblewrapExecutable({})).toBe("/usr/bin/bwrap");
+    expect(() => resolveMcpBubblewrapExecutable({ SUNABOT_PACKAGED_RELEASE: "1" }))
+      .toThrow("MCP_STDIO_ISOLATION_UNAVAILABLE");
+    expect(() => resolveMcpBubblewrapExecutable({
+      SUNABOT_BWRAP_EXECUTABLE: "../bwrap",
+      SUNABOT_PACKAGED_RELEASE: "1"
+    })).toThrow("MCP_STDIO_ISOLATION_UNAVAILABLE");
+  });
+});
 
 beforeEach(async () => {
   await makeTestTreeWritable(testDataRoot);
@@ -123,7 +141,10 @@ describe("MCP sandbox projection", () => {
     }).build({ agentId: "agent-a", server });
     temporaryPaths.push(projection.root);
     const copied = path.join(projection.skills, "test-skill/SKILL.md");
-    const source = path.join(workspace, "business/agents/agent-a/extensions/skills/test-skill/SKILL.md");
+    const source = path.join(
+      workspace,
+      "business/agents/agent-a/workbench/skills/test-skill/SKILL.md"
+    );
     expect(await fs.readFile(copied, "utf8")).toContain("name: test-skill");
     expect((await fs.stat(copied)).ino).not.toBe((await fs.stat(source)).ino);
     expect((await fs.stat(copied)).mode & 0o777).toBe(0o400);

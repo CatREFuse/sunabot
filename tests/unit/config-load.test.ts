@@ -57,14 +57,78 @@ describe("tool configuration", () => {
     expect(config.providers.items.every((provider) => provider.envFile === "workspace/secrets/runtime.env")).toBe(true);
     expect(config.bot.adminQq).toBe("");
     expect(config.bot.replyDebounceMs).toBe(5_000);
+    expect(config.bot.contextMessageLimit).toBe(32);
+    expect(config.bot.emojiSendSize).toBe(512);
+    expect(config.bot.emojiSendSeparately).toBe(false);
     expect(config.bot.tone).toEqual({
       enabled: false,
+      segmentedReply: false,
+      followMainModel: false,
       providerId: "",
       model: "gpt-5.4-mini",
       reasoningEffort: "low",
       temperature: 0.7,
       maxOutputTokens: 2400,
       maxRetries: 2
+    });
+    expect(config.bot.memory).toMatchObject({
+      dreamRecentWindowHours: 24,
+      dreamRecentMemoryLimit: 24,
+      dreamOlderMemoryLimit: 12
+    });
+  });
+
+  it("loads Dream sampling settings and safely defaults invalid legacy combinations", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      bot: {
+        memory: {
+          dreamRecentWindowHours: 36,
+          dreamRecentMemoryLimit: 8,
+          dreamOlderMemoryLimit: 10
+        }
+      }
+    }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: {
+        memory: {
+          dreamRecentWindowHours: 36,
+          dreamRecentMemoryLimit: 8,
+          dreamOlderMemoryLimit: 10
+        }
+      }
+    });
+
+    await fs.writeFile(configPath, JSON.stringify({
+      bot: {
+        memory: {
+          dreamRecentWindowHours: 900,
+          dreamRecentMemoryLimit: 30,
+          dreamOlderMemoryLimit: 30
+        }
+      }
+    }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: {
+        memory: {
+          dreamRecentWindowHours: 24,
+          dreamRecentMemoryLimit: 24,
+          dreamOlderMemoryLimit: 12
+        }
+      }
+    });
+  });
+
+  it("loads an allowed emoji sending size and defaults invalid legacy values", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      bot: { emojiSendSize: 128, emojiSendSeparately: true }
+    }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: { emojiSendSize: 128, emojiSendSeparately: true }
+    });
+
+    await fs.writeFile(configPath, JSON.stringify({ bot: { emojiSendSize: 96 } }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: { emojiSendSize: 512, emojiSendSeparately: false }
     });
   });
 
@@ -82,11 +146,27 @@ describe("tool configuration", () => {
     });
   });
 
+  it("defaults conversation context to 32 messages while preserving an explicit legacy value", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      bot: { contextMessageLimit: 48 }
+    }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: { contextMessageLimit: 48 }
+    });
+
+    await fs.writeFile(configPath, JSON.stringify({ bot: {} }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: { contextMessageLimit: 32 }
+    });
+  });
+
   it("loads independent tone settings and defaults a missing legacy section", async () => {
     await fs.writeFile(configPath, JSON.stringify({
       bot: {
         tone: {
           enabled: true,
+          segmentedReply: true,
+          followMainModel: true,
           providerId: "openai",
           model: "gpt-5.5",
           reasoningEffort: "high",
@@ -100,6 +180,8 @@ describe("tool configuration", () => {
       bot: {
         tone: {
           enabled: true,
+          segmentedReply: true,
+          followMainModel: true,
           providerId: "openai",
           model: "gpt-5.5",
           reasoningEffort: "high",
@@ -115,6 +197,8 @@ describe("tool configuration", () => {
       bot: {
         tone: {
           enabled: false,
+          segmentedReply: false,
+          followMainModel: false,
           providerId: "",
           model: "gpt-5.4-mini",
           reasoningEffort: "low",
@@ -197,10 +281,9 @@ describe("tool configuration", () => {
     expect(config.providers.items.map((provider) => provider.modelSource)).toEqual(["remote", "custom"]);
   });
 
-  it("defaults workspace Bash to disabled with a native strict administrator backend", () => {
+  it("defaults native Bash to disabled in strict mode", () => {
     expect(defaultConfig().bot.bash).toMatchObject({
       enabled: false,
-      adminPrivateBackend: "native",
       auditModel: "gpt-5.4-mini",
       strictMode: true
     });
@@ -208,12 +291,11 @@ describe("tool configuration", () => {
     expect(defaultConfig().bot.bash.enabled).toBe(false);
   });
 
-  it("loads the administrator private Bash backend from sparse legacy-compatible config", async () => {
+  it("loads sparse native Bash settings", async () => {
     await fs.writeFile(configPath, JSON.stringify({
       bot: {
         bash: {
           enabled: true,
-          adminPrivateBackend: "docker",
           auditModel: "gpt-5.5",
           strictMode: false
         }
@@ -224,7 +306,6 @@ describe("tool configuration", () => {
       bot: {
         bash: {
           enabled: true,
-          adminPrivateBackend: "docker",
           auditModel: "gpt-5.5",
           strictMode: false,
           allowGroup: false,
@@ -354,9 +435,37 @@ describe("tool configuration", () => {
     expect(config.bot.tools.overrides).toEqual({
       websearch: { enabled: false, description: "Search only when explicitly enabled." },
       codex: { description: "Delegate long work." },
-      workspace_bash: { description: "Run workspace commands." }
+      native_bash: { description: "Run workspace commands." }
     });
     expect(config.bot.tools.codex.enabled).toBe(false);
+  });
+
+  it("migrates the reply model and image reader from legacy Provider settings", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      providers: {
+        defaultProviderId: "text",
+        items: [{
+          ...defaultConfig().providers.items[0],
+          id: "text",
+          model: "reply-model",
+          visionProviderId: "vision",
+          visionModel: "vision-model"
+        }, {
+          ...defaultConfig().providers.items[1],
+          id: "vision",
+          model: "vision-fallback"
+        }]
+      }
+    }), "utf8");
+
+    const config = await loadConfig();
+
+    expect(config.bot.replyModel).toBe("reply-model");
+    expect(config.bot.imageReader).toMatchObject({
+      enabled: true,
+      providerId: "vision",
+      model: "vision-model"
+    });
   });
 
   it("migrates a direct key from the legacy Tavily env field", async () => {
@@ -407,7 +516,7 @@ describe("image quality configuration", () => {
 });
 
 describe("prompt template configuration", () => {
-  it("fills the default group thread model when loading a legacy orchestrator config", async () => {
+  it("fills the remaining orchestrator defaults when loading a partial config", async () => {
     await fs.writeFile(configPath, JSON.stringify({
       bot: {
         orchestrator: {
@@ -420,7 +529,7 @@ describe("prompt template configuration", () => {
     const config = await loadConfig();
 
     expect(config.bot.orchestrator.userGroupchatOrchestratorModel).toBe("gpt-5.6-luna");
-    expect(config.bot.orchestrator.groupThreadModel).toBe("gpt-5.4-mini");
+    expect(config.bot.orchestrator.promptFile).toBe("user_groupchat_orchestrator.json");
   });
 
   it("migrates the legacy default MD request names to final JSON templates", async () => {
@@ -439,9 +548,9 @@ describe("prompt template configuration", () => {
 
     const config = await loadConfig();
 
-    expect(config.bot.memory.workMemoryCompressInPrompt).toBe("work_memory_compress_in.json");
     expect(config.bot.memory.workMemoryCompressOutPrompt).toBe("work_memory_compress_out.json");
-    expect(config.bot.memory.userProfilePrompt).toBe("user_profile_prompt.json");
+    expect(config.bot.memory).not.toHaveProperty("workMemoryCompressInPrompt");
+    expect(config.bot.memory).not.toHaveProperty("userProfilePrompt");
     expect(config.bot.orchestrator.promptFile).toBe("user_groupchat_orchestrator.json");
   });
 });

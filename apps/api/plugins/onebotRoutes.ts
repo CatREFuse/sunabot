@@ -8,10 +8,11 @@ import {
 } from "../../../adapters/onebot/napcatLoginControl.js";
 import type { OneBotGateway } from "../../../adapters/onebot/onebotGateway.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
-import { getWorkspacePath } from "../../../src/config.js";
-import type { OneBotLoginCheck, OneBotQrLogin } from "../../../src/types.js";
+import { getWorkspacePath } from "../../../packages/platform/projectPaths.js";
+import type { OneBotLoginCheck, OneBotQrLogin } from "../../../packages/contracts/admin/public.js";
 import { AdminApiError, conflict, notFound } from "../../../src/admin/errors.js";
 import type { AgentRegistry } from "../../../services/agents/agentRegistry.js";
+import { AccountIdentityCoordinator } from "../../../services/agents/accountIdentityCoordinator.js";
 import type { AgentAccountRegistryRow } from "../../../adapters/sqlite/applicationDataStore.js";
 import { applicationDataStore } from "../../../adapters/sqlite/applicationDataStore.js";
 
@@ -21,6 +22,7 @@ export interface OneBotRouteOptions {
   napcatLoginControl?: NapcatLoginControlPort;
   napcatLoginControlFactory?: (accountId: string, webuiPort?: number) => NapcatLoginControlPort;
   agentRegistry?: AgentRegistry;
+  restartAccount?: (accountId: string) => Promise<void>;
 }
 
 export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBotGateway, options: OneBotRouteOptions = {}) {
@@ -36,6 +38,35 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
     }
     return control;
   };
+  const restartAccount = async (accountId: string) => {
+    if (!options.restartAccount) {
+      throw new AdminApiError(503, "ACCOUNT_RUNTIME_UNAVAILABLE", "QQ 登录恢复服务不可用。请执行 ./sunabot.sh restart。");
+    }
+    await options.restartAccount(accountId);
+  };
+  const recoverLogin = async (accountId: string, control: NapcatLoginControlPort) => {
+    await control.beginManualLogin();
+    if (onebotGateway.getStatus().accounts?.some((item) => item.accountId === accountId)) {
+      await onebotGateway.dispatchAction("bot_exit", {}, accountId, true).catch(() => undefined);
+    }
+    try {
+      await restartAccount(accountId);
+    } catch {
+      throw new AdminApiError(502, "QQ_LOGIN_RECOVERY_FAILED", "QQ 登录恢复失败，请稍后重试。");
+    }
+    control.startLoginCompletionWatch();
+  };
+  const identityCoordinator = options.agentRegistry
+    ? new AccountIdentityCoordinator({
+        registry: options.agentRegistry,
+        controlFor: accountControl,
+        gateway: {
+          isConnected: (accountId) => Boolean(onebotGateway.getStatus().accounts?.some((item) => item.accountId === accountId)),
+          exit: (accountId) => onebotGateway.dispatchAction("bot_exit", {}, accountId, true)
+        },
+        restartAccount
+      })
+    : undefined;
   app.addHook("onClose", async () => {
     for (const control of accountControls.values()) control.close();
   });
@@ -61,6 +92,10 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
   app.post("/api/onebot/qq-login", { schema: { response: { 200: openObject } } }, async () => {
     const current = await getQqLoginSnapshot(onebotGateway, napcatLoginControl, "primary");
     if (current.online) return current;
+    if (current.action === "recover_login") {
+      await recoverLogin("primary", napcatLoginControl);
+      return getQqLoginSnapshot(onebotGateway, napcatLoginControl, "primary");
+    }
     const refreshed = await napcatLoginControl.refreshQrCode();
     return getQqLoginSnapshot(onebotGateway, napcatLoginControl, "primary", refreshed);
   });
@@ -71,17 +106,8 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
 
   app.post("/api/onebot/qq-logout", { schema: { response: { 200: openObject } } }, async () => {
     const current = await getQqLoginSnapshot(onebotGateway, napcatLoginControl, "primary");
-    if (!current.online || !onebotGateway.getStatus().connected) {
-      conflict("QQ_ALREADY_OFFLINE", "QQ 当前未登录。");
-    }
-    await napcatLoginControl.beginManualLogin();
-    try {
-      await onebotGateway.dispatchAction("bot_exit", {}, "primary");
-    } catch (error) {
-      await napcatLoginControl.cancelManualLogin();
-      throw new AdminApiError(502, "QQ_LOGOUT_FAILED", error instanceof Error ? error.message : "QQ 退出失败。");
-    }
-    napcatLoginControl.startLoginCompletionWatch();
+    if (!current.online) conflict("QQ_ALREADY_OFFLINE", "QQ 当前未登录。");
+    await recoverLogin("primary", napcatLoginControl);
     return {
       ok: true,
       connected: false,
@@ -108,8 +134,8 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
     };
     const snapshot = async (account: AgentAccountRegistryRow, refreshed?: NapcatLoginSnapshot) => {
       const result = await getQqLoginSnapshot(onebotGateway, accountControl(account), account.id, refreshed);
-      if (result.data?.user_id && String(result.data.user_id) !== account.qqId) {
-        await registry.updateAccountIdentity(account.id, String(result.data.user_id));
+      if (result.action !== "recover_login" && result.data?.user_id && String(result.data.user_id) !== account.qqId) {
+        await identityCoordinator!.assign(account.id, String(result.data.user_id));
       }
       return result;
     };
@@ -123,6 +149,10 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
       const account = resolveAccount(request.params);
       const current = await snapshot(account);
       if (current.online) return current;
+      if (current.action === "recover_login") {
+        await recoverLogin(account.id, accountControl(account));
+        return snapshot(account);
+      }
       return snapshot(account, await accountControl(account).refreshQrCode());
     });
 
@@ -131,15 +161,8 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
       const control = accountControl(account);
       const current = await snapshot(account);
       if (!current.online) conflict("QQ_ALREADY_OFFLINE", "QQ 当前未登录。");
-      await control.beginManualLogin();
-      try {
-        await onebotGateway.dispatchAction("bot_exit", {}, account.id);
-      } catch (error) {
-        await control.cancelManualLogin();
-        throw new AdminApiError(502, "QQ_LOGOUT_FAILED", error instanceof Error ? error.message : "QQ 退出失败。");
-      }
+      await recoverLogin(account.id, control);
       await registry.clearAccountIdentity(account.id);
-      control.startLoginCompletionWatch();
       return {
         ok: true,
         connected: false,
@@ -211,7 +234,8 @@ async function getQqLoginSnapshot(
     getOneBotLoginCheck(onebotGateway, accountId),
     napcatSnapshot ? Promise.resolve(napcatSnapshot) : napcatLoginControl.status()
   ]);
-  const online = onebot.online || napcat.isLogin;
+  const recoverLogin = /\[KICKEDOFFLINE\]/i.test(napcat.loginError ?? "");
+  const online = !recoverLogin && (onebot.online || napcat.isLogin);
   const data = onebot.data?.user_id ? onebot.data : napcat.data;
   const webuiUrl = getLocalNapcatWebuiRoute(accountId);
   return {
@@ -219,9 +243,10 @@ async function getQqLoginSnapshot(
     online,
     data,
     available: Boolean(webuiUrl || napcat.imageDataUrl),
-    phase: loginPhase(online, onebot.connected, napcat),
-    loginError: napcat.loginError,
-    error: napcat.manualLogin ? undefined : napcat.error,
+    phase: recoverLogin ? "restarting" : loginPhase(online, onebot.connected, napcat),
+    ...(recoverLogin ? { action: "recover_login" } : {}),
+    loginError: recoverLogin ? undefined : napcat.loginError,
+    error: napcat.manualLogin || recoverLogin ? undefined : napcat.error,
     imageDataUrl: online ? undefined : napcat.imageDataUrl,
     imageUpdatedAt: online ? undefined : napcat.imageUpdatedAt,
     webuiUrl
@@ -262,11 +287,9 @@ function createNapcatLoginControl(accountId: string, webuiPort?: number) {
   const accountRoot = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, accountId);
   return new NapcatLoginControl({
     webuiConfigPath: path.join(accountRoot, "config-full", "webui.json"),
-    webuiBaseUrl: process.env.SUNABOT_RUNTIME_MODE === "docker"
-      ? `http://napcat-${accountId}:6099`
-      : typeof webuiPort === "number" && Number.isInteger(webuiPort) && webuiPort > 0
-        ? `http://127.0.0.1:${webuiPort}`
-        : undefined,
+    webuiBaseUrl: typeof webuiPort === "number" && Number.isInteger(webuiPort) && webuiPort > 0
+      ? `http://127.0.0.1:${webuiPort}`
+      : undefined,
     qrCodePath: path.join(accountRoot, "qrcode.png"),
     manualLoginMarkerPath: path.join(accountRoot, "manual-login-required"),
     runtimeEnvPath: path.join(accountRoot, "account.env")

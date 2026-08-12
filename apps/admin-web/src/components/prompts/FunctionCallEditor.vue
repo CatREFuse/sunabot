@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from "vue";
+import type { PromptVariableDefinition } from "../../types";
+import PromptTextField from "./PromptTextField.vue";
 
 interface FunctionTool {
   type: "function";
@@ -11,7 +13,12 @@ interface FunctionTool {
   };
 }
 
-const props = defineProps<{ tool: FunctionTool; index: number }>();
+const props = withDefaults(defineProps<{
+  tool: FunctionTool;
+  index: number;
+  variables?: readonly PromptVariableDefinition[];
+  semanticXml?: boolean;
+}>(), { variables: () => [], semanticXml: false });
 const emit = defineEmits<{ update: [tool: FunctionTool]; remove: [] }>();
 const parametersText = shallowRef(JSON.stringify(props.tool.function.parameters, null, 2));
 const parametersError = shallowRef("");
@@ -58,10 +65,18 @@ function updateParameters(value: string) {
         <span class="field-label">名称</span>
         <input class="control font-mono" :value="tool.function.name" type="text" @input="updateFunction('name', ($event.target as HTMLInputElement).value)">
       </label>
-      <label class="field function-editor__wide">
+      <div class="field function-editor__wide">
         <span class="field-label">提示词内说明</span>
-        <textarea class="control min-h-24 resize-y py-3" :value="tool.function.description" @input="updateFunction('description', ($event.target as HTMLTextAreaElement).value)"></textarea>
-      </label>
+        <PromptTextField
+          :model-value="tool.function.description"
+          :variables="variables"
+          :label="`${tool.function.name || 'Function'} 工具说明`"
+          min-height="96px"
+          :show-variables="false"
+          :semantic-xml="semanticXml"
+          @update:model-value="updateFunction('description', $event)"
+        />
+      </div>
       <label class="field function-editor__wide">
         <span class="field-label">参数 · JSON Schema</span>
         <textarea class="control min-h-56 resize-y py-3 font-mono text-xs leading-5" :value="parametersText" spellcheck="false" @input="updateParameters(($event.target as HTMLTextAreaElement).value)"></textarea>

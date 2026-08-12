@@ -9,7 +9,7 @@ import {
   isTrustedTokenlessHost,
   OneBotGateway
 } from "../../adapters/onebot/onebotGateway.js";
-import { assertOneBotAccessToken } from "../../apps/api/server.js";
+import { assertOneBotAccessToken } from "../../apps/api/onebotListener.js";
 import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
 
 const originalAccessToken = process.env.ONEBOT_ACCESS_TOKEN;
@@ -166,6 +166,8 @@ describe("OneBot security boundaries", () => {
     await expect(gateway.sendAction("get_login_info", {}, "account-b")).resolves.toMatchObject({
       data: { user_id: 22222 }
     });
+    expect(firstMessage).not.toHaveBeenCalled();
+    await expect(gateway.sendAction("get_login_info", {})).rejects.toThrow("OneBot is not connected");
     expect(firstMessage).not.toHaveBeenCalled();
 
     second.send(JSON.stringify({

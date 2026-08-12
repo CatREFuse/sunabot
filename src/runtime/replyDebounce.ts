@@ -14,10 +14,14 @@ import {
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
 import type { CommandInvocationV1 } from "../../packages/contracts/messaging/commands.js";
 import { readReplyGateSnapshot, type ReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
-import type { SessionHandleResult } from "../../services/sessions/sessionCoordinator.js";
-import type { SessionEventRecord } from "../../services/sessions/sessionStore.js";
+import type {
+  SessionCoordinator,
+  SessionHandleResult
+} from "../../services/sessions/sessionCoordinator.js";
+import type { SessionEventRecord, SessionStore } from "../../services/sessions/sessionStore.js";
 import {
   DEFAULT_REPLY_DEBOUNCE_MS,
+  type AppConfig,
   type ConversationRecord,
   type ParsedIncomingMessage
 } from "../types.js";
@@ -28,8 +32,6 @@ import {
   queueIncomingSnapshot,
   restoredConversationIncoming
 } from "./messagingAttachmentHelpers.js";
-
-import type { SunaRuntime } from "../runtime.js";
 
 export { DEFAULT_REPLY_DEBOUNCE_MS } from "../types.js";
 export const REPLY_DEBOUNCE_EVENT_KIND = "reply_debounce";
@@ -47,16 +49,64 @@ interface ScheduleReplyDebounceInput {
 interface TrackedReplyPreparation {
   key: string;
   sequence: number;
+  userId: number;
   promise: Promise<void>;
 }
 
 type DurableReplyPayload = RuntimeIncomingReplyEventPayload | RuntimeReplyDebounceEventPayload;
+type ReplyDebounceBumpResult =
+  | { status: "duplicate"; event: SessionEventRecord }
+  | { status: "updated"; event: SessionEventRecord; captureSequence: number }
+  | { status: "inactive" };
+
+interface RuntimeReplyDebounceHost {
+  readonly config: AppConfig;
+  readonly conversationRecords: Map<string, ConversationRecord>;
+  readonly incomingPreparations: Map<string, {
+    promise: Promise<void>;
+    incoming: ParsedIncomingMessage;
+  }>;
+  readonly sessionCoordinator: SessionCoordinator;
+  readonly sessionStore: SessionStore;
+  bumpReplyDebounce(
+    event: SessionEventRecord,
+    incoming: ParsedIncomingMessage
+  ): ReplyDebounceBumpResult;
+  incomingCaptureSequence(incoming: ParsedIncomingMessage): number;
+  groupReplyOptions(incoming: ParsedIncomingMessage): { replyToMessageId?: number };
+  isReplyTaskCurrent(
+    incoming: ParsedIncomingMessage,
+    gate: ReplyGateSnapshot,
+    signal?: AbortSignal
+  ): boolean;
+  markIncomingSeen(incoming: ParsedIncomingMessage): void;
+  patchIncomingMessage(
+    record: ConversationRecord,
+    incoming: ParsedIncomingMessage,
+    frozenMessageId?: string
+  ): void;
+  persistConversationRecordStrict(record: ConversationRecord): void;
+  prepareIncomingMessage(incoming: ParsedIncomingMessage, gateway: MessagingPort): Promise<void>;
+  recordIncomingMessage(
+    incoming: ParsedIncomingMessage,
+    options?: { expectedSequence?: number; persist?: boolean }
+  ): ConversationRecord;
+  recoverReplyDebounceMessages(payload: DurableReplyPayload): ConversationRecord;
+  requireActiveGateway(): MessagingPort;
+  scheduleAttachmentCacheRefresh(): void;
+  trackReplyDebouncePreparation(
+    incoming: ParsedIncomingMessage,
+    promise: Promise<void>,
+    sequence?: number,
+    key?: string
+  ): void;
+}
 
 export class RuntimeReplyDebounce {
   private readonly preparationPromises = new Map<string, Set<TrackedReplyPreparation>>();
 
   constructor(
-    private readonly host: SunaRuntime,
+    private readonly host: RuntimeReplyDebounceHost,
     private readonly delayOverrideMs?: number
   ) {}
 
@@ -119,7 +169,6 @@ export class RuntimeReplyDebounce {
       })
       .finally(() => this.host.scheduleAttachmentCacheRefresh());
     this.host.trackReplyDebouncePreparation(incoming, preparation, bumped.captureSequence);
-    this.host.scheduleMemoryCompression(record);
     this.host.sessionCoordinator.resume(incoming.accountId ?? "primary");
     return true;
   }
@@ -129,7 +178,7 @@ export class RuntimeReplyDebounce {
     const preparationKey = input.preparationKey?.trim() || undefined;
     const triggerKey = preparationKey ?? persistentIncomingKey(input.incoming);
     const replyQuote = captureReplyQuote(this.host, input.incoming);
-    const delayMs = this.delayMs();
+    const delayMs = input.route === "ambient" ? 0 : this.delayMs();
     if (delayMs === 0) {
       return this.host.sessionCoordinator.enqueueEvent({
         sessionId: conversationId,
@@ -228,6 +277,7 @@ export class RuntimeReplyDebounce {
     const tracked = {
       key,
       sequence,
+      userId: incoming.userId,
       promise
     };
     promises.add(tracked);
@@ -245,6 +295,9 @@ export class RuntimeReplyDebounce {
     if (!preparations?.size) return;
     await Promise.allSettled([...preparations]
       .filter((preparation) => preparation.sequence <= contextThroughSequence)
+      .filter((preparation) => (
+        incoming.scope === "private" || preparation.userId === incoming.userId
+      ))
       .map((preparation) => preparation.promise));
   }
 
@@ -369,9 +422,6 @@ export class RuntimeReplyDebounce {
   prepareMessages(payload: DurableReplyPayload, gateway: MessagingPort) {
     const conversationId = conversationRecordId(payload.incoming);
     const record = this.host.conversationRecords.get(conversationId) ?? this.recoverMessages(payload);
-    const activePayloads = this.delayMs() === 0
-      ? []
-      : this.activeConversationPayloads(conversationId);
     const recoveryThroughSequence = "contextThroughSequence" in payload
       ? payload.contextThroughSequence
       : undefined;
@@ -379,7 +429,8 @@ export class RuntimeReplyDebounce {
       const sequence = message.sequence;
       if (message.role !== "user" || !Number.isSafeInteger(sequence)
         || Number(sequence) < payload.captureSequence
-        || Number(sequence) > (recoveryThroughSequence ?? record.messageCount)) return [];
+        || Number(sequence) > (recoveryThroughSequence ?? record.messageCount)
+        || (payload.incoming.scope !== "private" && message.userId !== payload.incoming.userId)) return [];
       const incoming = restoredConversationIncoming(record, message);
       return incoming ? [{
         snapshot: { incoming, captureSequence: Number(sequence) },
@@ -388,11 +439,10 @@ export class RuntimeReplyDebounce {
     });
     const seenSequences = new Set<number>();
     const snapshots = [
-      ...[...activePayloads, payload]
-      .flatMap((value) => replySnapshots(value).map((snapshot, index) => ({
+      ...replySnapshots(payload).map((snapshot, index) => ({
         snapshot,
-        preparationKey: index === 0 ? value.preparationKey : undefined
-      }))),
+        preparationKey: index === 0 ? payload.preparationKey : undefined
+      })),
       ...recoveredSnapshots
     ]
       .sort((left, right) => left.snapshot.captureSequence - right.snapshot.captureSequence)
@@ -446,7 +496,7 @@ export class RuntimeReplyDebounce {
     this.validateEventSession(event, incoming);
     // The durable debounce event is committed before the conversation snapshot.
     // Rebuild the first trigger before gate checks so a crash in that gap remains recoverable.
-    const record = this.recoverMessages(payload);
+    this.recoverMessages(payload);
     const gate = readReplyGateSnapshot(payload.replyGate, incoming.scope, payload.conversationId);
     if (!gate || !this.host.isReplyTaskCurrent(incoming, gate, signal)) {
       this.clearPreparation(payload);
@@ -455,7 +505,7 @@ export class RuntimeReplyDebounce {
 
     this.prepareMessages(payload, this.host.requireActiveGateway());
 
-    const contextThroughSequence = Math.max(payload.captureSequence, record.messageCount);
+    const contextThroughSequence = replySnapshots(payload).at(-1)!.captureSequence;
     const preparationKey = payload.preparationKey?.trim() || undefined;
     const replyKey = preparationKey ?? persistentIncomingKey(incoming);
     return {
@@ -503,7 +553,7 @@ export class RuntimeReplyDebounce {
 }
 
 function captureReplyQuote(
-  runtime: SunaRuntime,
+  runtime: RuntimeReplyDebounceHost,
   incoming: ParsedIncomingMessage
 ): ReplyQuoteSnapshotV1 {
   const replyToMessageId = runtime.groupReplyOptions(incoming).replyToMessageId;

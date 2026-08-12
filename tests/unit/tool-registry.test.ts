@@ -4,6 +4,7 @@ import { RegistryProviderToolExecutor } from "../../adapters/model/provider/tool
 import { createTurnToolState } from "../../adapters/model/provider/turnToolState.js";
 import type { ProviderCompleteOptions } from "../../adapters/model/openaiProvider.js";
 import type { OpenAIToolDefinition } from "../../services/agent/promptSystem.js";
+import { defaultFinalPromptTemplate } from "../../services/agent/promptDefaults.js";
 import { sendFileTool } from "../../services/tools/sendConversationAssetTool.js";
 import { AGENT_TOOL_NAMES } from "../../src/types.js";
 import {
@@ -20,12 +21,15 @@ describe("ToolRegistry", () => {
       bash: {
         enabled: true,
         workspacePath: "/fixture/agent-workspace",
-        backend: "docker",
-        accessMode: "admin",
+        backend: "native",
+        accessMode: "isolated",
         strictMode: true,
+        isAdmin: false,
+        userRequest: "生成并发送报告",
         isCurrent: () => true,
         audit: vi.fn(),
         approvalContext: {
+          backend: "native",
           agentId: "plana",
           accountId: "primary",
           transport: "onebot",
@@ -36,18 +40,56 @@ describe("ToolRegistry", () => {
     });
     const names = definitions.map((definition) => String(definition.name));
 
-    expect(metadata.some((tool) => tool.name === "workspace_bash")).toBe(true);
+    expect(metadata.some((tool) => tool.name === "native_bash")).toBe(true);
+    expect(metadata.some((tool) => tool.name === "docker_bash")).toBe(false);
     expect(metadata.some((tool) => tool.name === "bash.run")).toBe(false);
-    expect(metadata.map((tool) => tool.name)).toEqual(AGENT_TOOL_NAMES);
+    expect(metadata.map((tool) => tool.name)).toEqual(
+      AGENT_TOOL_NAMES.filter((name) => name !== "add_workmemory" && name !== "add_user_profile")
+    );
+    expect(metadata.some((tool) => tool.name === "add_workmemory")).toBe(false);
+    expect(metadata.some((tool) => tool.name === "add_user_profile")).toBe(false);
     expect(metadata.some((tool) => tool.name === "system.time")).toBe(false);
     expect(metadata.some((tool) => tool.name === "onebot.send_message")).toBe(false);
     expect(metadata.some((tool) => tool.name === "provider.test")).toBe(false);
-    expect(names).toEqual(["workspace_bash"]);
-    expect(providerToolExecutionMode("workspace_bash")).toBe("inline");
+    expect(names).toEqual(["native_bash"]);
+    expect(providerToolExecutionMode("native_bash")).toBe("inline");
+    expect(providerToolExecutionMode("docker_bash" as never)).toBeUndefined();
   });
 
   it("does not expose disabled provider tools", () => {
     expect(resolveProviderToolDefinitions({})).toEqual([]);
+  });
+
+  it("always exposes add_workmemory in ordinary host-bound turns without a settings switch", () => {
+    const options = {
+      workingMemory: { execute: vi.fn() },
+      disabledTools: ["add_workmemory"] as const,
+      bot: {
+        tools: {
+          overrides: { add_workmemory: { enabled: false } }
+        }
+      }
+    } as unknown as ProviderCompleteOptions;
+    expect(resolveProviderToolDefinitions(options, []).map((tool) => tool.name))
+      .toEqual(["add_workmemory"]);
+    expect(isProviderToolAvailable("add_workmemory", options)).toBe(true);
+    expect(listToolMetadata(options).some((tool) => tool.name === "add_workmemory")).toBe(false);
+  });
+
+  it("always exposes add_user_profile in ordinary host-bound turns without a settings switch", () => {
+    const options = {
+      userProfile: { execute: vi.fn() },
+      disabledTools: ["add_user_profile"] as const,
+      bot: {
+        tools: {
+          overrides: { add_user_profile: { enabled: false } }
+        }
+      }
+    } as unknown as ProviderCompleteOptions;
+    expect(resolveProviderToolDefinitions(options, []).map((tool) => tool.name))
+      .toEqual(["add_user_profile"]);
+    expect(isProviderToolAvailable("add_user_profile", options)).toBe(true);
+    expect(listToolMetadata(options).some((tool) => tool.name === "add_user_profile")).toBe(false);
   });
 
   it("applies the conversation selection after the Agent master switch", async () => {
@@ -82,7 +124,7 @@ describe("ToolRegistry", () => {
   });
 
   it("keeps API-only Bash capability metadata separate from executable Provider options", () => {
-    const bash = listToolMetadata({ bashAvailable: true }).find((tool) => tool.name === "workspace_bash");
+    const bash = listToolMetadata({ bashAvailable: true }).find((tool) => tool.name === "native_bash");
 
     expect(bash).toMatchObject({ available: true });
     expect(resolveProviderToolDefinitions({ bashAvailable: true })).toEqual([]);
@@ -99,6 +141,14 @@ describe("ToolRegistry", () => {
         accessDescription: "Web Chat、群聊和普通用户私聊不可用。"
       });
     }
+  });
+
+  it("describes cron as available in every group chat", () => {
+    expect(listToolMetadata().find((tool) => tool.name === "cron")).toMatchObject({
+      unavailabilityKind: "session",
+      accessLabel: "全部群聊、管理员私聊与 Web Chat 可用",
+      accessDescription: "群聊成员均可使用；私聊与 Web Chat 仅管理员可用。"
+    });
   });
 
   it("keeps Skill capability separate from inventory and never exposes empty-enum Provider tools", () => {
@@ -261,7 +311,7 @@ describe("ToolRegistry", () => {
       .toMatchObject({ configuredEnabled: false, enabled: false, available: true, effectiveEnabled: false });
   });
 
-  it("rejects a send_file batch before any tool can produce a side effect", async () => {
+  it("allows send_file with another inline tool in the same batch", async () => {
     const sentFiles: unknown[] = [];
     const sentText: string[] = [];
     const options = {
@@ -277,29 +327,27 @@ describe("ToolRegistry", () => {
     const executor = new RegistryProviderToolExecutor();
     const definitions = executor.resolveDefinitions(options, [staleTool("send_file"), staleTool("assistant_text")]);
 
-    for (const mixedTool of ["system_config", "workspace_bash", "assistant_text", "codex"]) {
-      const outputs = await executor.execute([{
-        type: "function_call",
-        name: "send_file",
-        call_id: `call-send-file-mixed-${mixedTool}`,
-        arguments: JSON.stringify({ path: "exports/report.pdf", kind: "file", name: null })
-      }, {
-        type: "function_call",
-        name: mixedTool,
-        call_id: `call-${mixedTool}-mixed-with-file`,
-        arguments: JSON.stringify({ text: "不应执行", command: "printf blocked" })
-      }], options, definitions);
+    const outputs = await executor.execute([{
+      type: "function_call",
+      name: "send_file",
+      call_id: "call-send-file-mixed",
+      arguments: JSON.stringify({ path: "exports/report.pdf", kind: "file", name: null })
+    }, {
+      type: "function_call",
+      name: "assistant_text",
+      call_id: "call-assistant-text-mixed-with-file",
+      arguments: JSON.stringify({ text: "文件已加入发送队列。" })
+    }], options, definitions);
 
-      expect(outputs.map((output) => JSON.parse(String(output.output)))).toEqual([
-        { ok: false, error: "send_file must be called alone before any other tool." },
-        { ok: false, error: "send_file must be called alone before any other tool." }
-      ]);
-    }
-    expect(sentFiles).toEqual([]);
-    expect(sentText).toEqual([]);
+    expect(outputs.map((output) => JSON.parse(String(output.output)))).toEqual([
+      { ok: true },
+      { ok: true, delivered: true, textLength: 10 }
+    ]);
+    expect(sentFiles).toHaveLength(1);
+    expect(sentText).toEqual(["文件已加入发送队列。"]);
   });
 
-  it("injects no_reply into legacy reply prompts and accepts it only as a terminal solo call", () => {
+  it("injects no_reply into legacy reply prompts and accepts it as a terminal call", async () => {
     const used: string[] = [];
     const options = {
       allowNoReply: true,
@@ -333,11 +381,11 @@ describe("ToolRegistry", () => {
       effectiveEnabled: true,
       execution: "inline"
     });
-    expect(executor.noReplyTurn([call], options, definitions)).toEqual({ kind: "no_reply" });
+    await expect(executor.noReplyTurn([call], options, definitions)).resolves.toEqual({ kind: "no_reply" });
     expect(used).toEqual(["no_reply"]);
   });
 
-  it("rejects no_reply mixed with another tool without executing either call", async () => {
+  it("allows no_reply alongside another inline tool", async () => {
     const delivered: string[] = [];
     const used: string[] = [];
     const options = {
@@ -359,17 +407,17 @@ describe("ToolRegistry", () => {
       arguments: JSON.stringify({ text: "不应发送" })
     }];
 
-    expect(executor.noReplyTurn(calls, options, definitions)).toBeNull();
+    await expect(executor.noReplyTurn(calls, options, definitions)).resolves.toEqual({ kind: "no_reply" });
     const outputs = await executor.execute(calls, options, definitions);
     expect(outputs.map((output) => JSON.parse(String(output.output)))).toEqual([
-      { ok: false, error: "no_reply must be called alone before any other tool." },
-      { ok: false, error: "no_reply must be called alone before any other tool." }
+      { ok: true },
+      { ok: true, delivered: true, textLength: 4 }
     ]);
-    expect(delivered).toEqual([]);
-    expect(used).toEqual([]);
+    expect(delivered).toEqual(["不应发送"]);
+    expect(used).toEqual(["no_reply", "no_reply", "assistant_text"]);
   });
 
-  it("rejects no_reply after an ordinary tool was accepted in an earlier model round", async () => {
+  it("allows no_reply after an ordinary tool was accepted in an earlier model round", async () => {
     const executor = new RegistryProviderToolExecutor();
     const state = createTurnToolState();
     const options = {
@@ -394,21 +442,15 @@ describe("ToolRegistry", () => {
     };
 
     expect(JSON.parse(String(memoryOutput?.output))).toEqual({ ok: true });
-    expect(executor.noReplyTurn([noReplyCall], options, definitions, state)).toBeNull();
-    const [noReplyOutput] = await executor.execute([noReplyCall], options, definitions, state);
-    expect(JSON.parse(String(noReplyOutput?.output))).toEqual({
-      ok: false,
-      error: "no_reply must be called before assistant text or any other tool."
-    });
+    await expect(executor.noReplyTurn([noReplyCall], options, definitions, state))
+      .resolves.toEqual({ kind: "no_reply" });
   });
 
   it("injects system_config for an authorized legacy prompt and locks its canonical schema", () => {
     const options = {
       systemConfig: {
         execute: async () => ({ ok: true }),
-        mutationStaged: () => false,
-        rejectTurn: () => undefined,
-        turnRejected: () => false
+        mutationStaged: () => false
       }
     } satisfies ProviderCompleteOptions;
     const executor = new RegistryProviderToolExecutor();
@@ -426,7 +468,6 @@ describe("ToolRegistry", () => {
       "set_auto_reply",
       "set_orchestrator",
       "set_search",
-      "set_bash_admin_backend",
       "set_group_reply"
     ]);
     expect(staleParameters.required).toEqual(expect.arrayContaining([
@@ -464,20 +505,14 @@ describe("ToolRegistry", () => {
     });
   });
 
-  it("rejects a system_config call mixed with another tool without executing either", async () => {
+  it("allows a system_config call with another inline tool", async () => {
     const executed: unknown[] = [];
     const delivered: string[] = [];
-    let rejected = false;
-    const rejectTurn = vi.fn(() => {
-      rejected = true;
-    });
     const onToolCall = vi.fn();
     const options = {
       systemConfig: {
         execute: async (input: unknown) => { executed.push(input); return { ok: true }; },
-        mutationStaged: () => false,
-        rejectTurn,
-        turnRejected: () => rejected
+        mutationStaged: () => false
       },
       onAssistantText: (text: string) => { delivered.push(text); },
       onToolCall
@@ -489,7 +524,16 @@ describe("ToolRegistry", () => {
       type: "function_call",
       name: "system_config",
       call_id: "call-system-config-mixed",
-      arguments: JSON.stringify({})
+      arguments: JSON.stringify({
+        operation: "get_settings",
+        replyScope: null,
+        enabled: null,
+        orchestratorEnabled: null,
+        searchImplementation: null,
+        conversationId: null,
+        groupCursor: null,
+        groupLimit: null
+      })
     }, {
       type: "function_call",
       name: "assistant_text",
@@ -498,31 +542,22 @@ describe("ToolRegistry", () => {
     }], options, definitions, state);
 
     expect(outputs.map((output) => JSON.parse(String(output.output)))).toEqual([
-      { ok: false, error: "system_config must be called alone in a model tool-call batch." },
-      { ok: false, error: "system_config must be called alone in a model tool-call batch." }
+      { ok: true },
+      { ok: true, delivered: true, textLength: 4 }
     ]);
-    expect(executed).toEqual([]);
-    expect(delivered).toEqual([]);
-    expect(rejectTurn).toHaveBeenCalledOnce();
-    expect(onToolCall).not.toHaveBeenCalled();
-    expect(state.acceptedToolNames).toEqual([]);
+    expect(executed).toHaveLength(1);
+    expect(delivered).toEqual(["不应发送"]);
+    expect(onToolCall).toHaveBeenCalledTimes(2);
+    expect(state.acceptedToolNames).toEqual(expect.arrayContaining(["system_config", "assistant_text"]));
   });
 
-  it("rejects every later tool call after a system configuration mutation is staged", async () => {
+  it("allows later tool calls after a system configuration mutation is staged", async () => {
     const delivered: string[] = [];
-    let staged = true;
-    let rejected = false;
-    const rejectTurn = vi.fn(() => {
-      staged = false;
-      rejected = true;
-    });
     const onToolCall = vi.fn();
     const options = {
       systemConfig: {
         execute: async () => ({ ok: true }),
-        mutationStaged: () => staged,
-        rejectTurn,
-        turnRejected: () => rejected
+        mutationStaged: () => true
       },
       onAssistantText: (text: string) => { delivered.push(text); },
       onToolCall
@@ -538,16 +573,11 @@ describe("ToolRegistry", () => {
       arguments: JSON.stringify({ text: "不应发送" })
     }], options, definitions, state);
 
-    expect(JSON.parse(String(output?.output))).toEqual({
-      ok: false,
-      error: "A system_config change is already staged; send the final confirmation without calling another tool."
-    });
-    expect(delivered).toEqual([]);
-    expect(rejectTurn).toHaveBeenCalledOnce();
-    expect(staged).toBe(false);
-    expect(rejected).toBe(true);
-    expect(onToolCall).not.toHaveBeenCalled();
-    expect(state.acceptedToolNames).toEqual(["system_config"]);
+    expect(JSON.parse(String(output?.output)))
+      .toEqual({ ok: true, delivered: true, textLength: 4 });
+    expect(delivered).toEqual(["不应发送"]);
+    expect(onToolCall).toHaveBeenCalledWith("assistant_text");
+    expect(state.acceptedToolNames).toEqual(["system_config", "assistant_text"]);
   });
 
   it("forces dispatch_message into deferred definitions after prompt overrides", () => {
@@ -560,8 +590,102 @@ describe("ToolRegistry", () => {
       minLength: 1,
       maxLength: 200
     });
+    expect(parameters.properties.inputHandles).not.toHaveProperty("uniqueItems");
     expect(parameters.required).toContain("dispatch_message");
     expect(codex?.strict).toBe(true);
+  });
+
+  it("expands the same Codex tool for authorized Native administrator control", () => {
+    const executor = new RegistryProviderToolExecutor();
+    const options = {
+      asyncCodex: true,
+      codexControl: true
+    } as ProviderCompleteOptions;
+    const [codex] = executor.resolveDefinitions(options, [staleTool("codex")]);
+    const parameters = codex?.parameters as Record<string, any>;
+
+    expect(parameters.properties.action.enum).toEqual(["list_sessions", "start", "resume"]);
+    expect(parameters.properties.thread_id).toBeDefined();
+    expect(parameters.required).toContain("dispatch_message");
+    const [defaultControl] = executor.resolveDefinitions(
+      options,
+      defaultFinalPromptTemplate("conversation.private-reply")?.tools
+    );
+    expect(defaultControl?.description).toContain(
+      "Depending on the active schema"
+    );
+    expect(defaultControl?.description).toContain(
+      "Remote SSH control"
+    );
+
+    const turn = executor.deferredTurn([{
+      type: "function_call",
+      name: "codex",
+      call_id: "call-control",
+      arguments: JSON.stringify({
+        action: "list_sessions",
+        ssh_host: null,
+        task: null,
+        workspace_path: null,
+        thread_id: null,
+        query: null,
+        limit: 10,
+        dispatch_message: "正在读取 Codex 会话。"
+      })
+    }], options, [codex!]);
+
+    expect(turn?.toolCall.arguments).toMatchObject({
+      action: "list_sessions",
+      __sunabot_admin_authorized: true,
+      __sunabot_control_authorized: true
+    });
+    expect(turn?.toolCall.arguments).not.toHaveProperty("dispatch_message");
+  });
+
+  it("keeps media-bearing administrator turns on the Codex worker schema", () => {
+    const executor = new RegistryProviderToolExecutor();
+    const options = {
+      asyncCodex: true,
+      codexControl: true,
+      chatMedia: {
+        export: vi.fn(),
+        freezeCodexInputs: vi.fn()
+      }
+    } as ProviderCompleteOptions;
+    const codex = executor.resolveDefinitions(options, [staleTool("codex")])
+      .find((definition) => definition.name === "codex");
+    const parameters = codex?.parameters as Record<string, any>;
+
+    expect(parameters.properties.task).toMatchObject({ type: "string" });
+    expect(parameters.properties.kind.enum).toEqual(["local", "research", "analysis"]);
+    expect(parameters.properties.inputHandles).toBeDefined();
+    expect(parameters.properties.action).toBeUndefined();
+    expect(parameters.required).toEqual(expect.arrayContaining([
+      "task",
+      "kind",
+      "inputHandles",
+      "dispatch_message"
+    ]));
+
+    const turn = executor.deferredTurn([{
+      type: "function_call",
+      name: "codex",
+      call_id: "call-worker-with-media",
+      arguments: JSON.stringify({
+        task: "读取当前附件并生成结果文件。",
+        kind: "local",
+        inputHandles: ["message:885282522:file:0"],
+        dispatch_message: "正在处理附件。"
+      })
+    }], options, [codex!]);
+
+    expect(turn?.toolCall.arguments).toMatchObject({
+      task: "读取当前附件并生成结果文件。",
+      kind: "local",
+      inputHandles: ["message:885282522:file:0"],
+      __sunabot_admin_authorized: true
+    });
+    expect(turn?.toolCall.arguments).not.toHaveProperty("__sunabot_control_authorized");
   });
 
   it("treats image tools as deferred only in asynchronous image turns", () => {
@@ -601,6 +725,13 @@ describe("ToolRegistry", () => {
       type: ["array", "null"],
       maxItems: 4
     });
+    expect(parameters.properties.referenceImagePaths).toMatchObject({
+      type: ["array", "null"],
+      maxItems: 4
+    });
+    expect(parameters.properties.referenceImagePaths.description).toContain(
+      "prefix knowledge/ exactly once"
+    );
     expect(parameters.properties.referenceImageSource.enum).toEqual([
       "none",
       "current",
@@ -610,6 +741,7 @@ describe("ToolRegistry", () => {
     ]);
     expect(parameters.required).toEqual(expect.arrayContaining([
       "referenceMediaHandles",
+      "referenceImagePaths",
       "referenceImageSource",
       "dispatch_message"
     ]));
@@ -627,6 +759,10 @@ describe("ToolRegistry", () => {
     const parameters = definition?.parameters as Record<string, any>;
 
     expect(definition?.description).toContain("historical media handles");
+    expect(definition?.description).toContain(
+      "The generated image is saved and sent by the system after this tool completes"
+    );
+    expect(definition?.description).toContain("do not call send_file");
     expect(parameters.properties.referenceMediaHandles).toMatchObject({
       type: ["array", "null"],
       maxItems: 1
@@ -635,6 +771,13 @@ describe("ToolRegistry", () => {
       type: ["array", "null"],
       maxItems: 1
     });
+    expect(parameters.properties.referenceImagePaths).toMatchObject({
+      type: ["array", "null"],
+      maxItems: 1
+    });
+    expect(parameters.properties.referenceImagePaths.description).toContain(
+      "prefix knowledge/ exactly once"
+    );
     expect(parameters.properties.referenceImageSource.enum).toEqual([
       "none",
       "current",
@@ -644,6 +787,7 @@ describe("ToolRegistry", () => {
     ]);
     expect(parameters.required).toEqual(expect.arrayContaining([
       "referenceMediaHandles",
+      "referenceImagePaths",
       "referenceImageSource",
       "dispatch_message"
     ]));
@@ -667,6 +811,7 @@ describe("ToolRegistry", () => {
       resolution: "1K",
       quality: "high",
       referenceImageUrls: null,
+      referenceImagePaths: null,
       referenceMediaHandles: null,
       referenceImageSource: "none",
       dispatch_message: "图片生成完成后发送"
@@ -680,7 +825,7 @@ describe("ToolRegistry", () => {
       });
       expect(valid.statusCode).toBe(200);
 
-      for (const field of ["referenceImageUrls", "referenceMediaHandles"] as const) {
+      for (const field of ["referenceImageUrls", "referenceImagePaths", "referenceMediaHandles"] as const) {
         const invalid = await app.inject({
           method: "POST",
           url: "/validate-selfie",
@@ -946,6 +1091,48 @@ describe("ToolRegistry", () => {
       error: "Tool codex is not enabled for this prompt."
     });
     expect(used).toEqual([]);
+  });
+
+  it("quarantines one invalid dynamic tool without removing valid tools", () => {
+    const invalidName = `mcp_${"a".repeat(48)}`;
+    const validName = `mcp_${"b".repeat(48)}`;
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const executor = new RegistryProviderToolExecutor();
+    const definitions = executor.resolveDefinitions({
+      mcp: {
+        definitions: () => [
+          {
+            type: "function",
+            name: invalidName,
+            description: "Invalid external tool",
+            parameters: {
+              type: "object",
+              properties: {},
+              oneOf: [{ required: [] }]
+            }
+          },
+          {
+            type: "function",
+            name: validName,
+            description: "Valid external tool",
+            parameters: {
+              type: "object",
+              properties: {},
+              additionalProperties: true
+            }
+          }
+        ],
+        describe: () => ({ serverId: "fixture", transport: "streamable_http" }),
+        call: vi.fn()
+      }
+    }, []);
+
+    expect(definitions.map((definition) => definition.name)).toEqual([validName]);
+    expect(errorLog).toHaveBeenCalledWith(
+      "[provider] invalid tool definition quarantined",
+      expect.objectContaining({ tool: invalidName })
+    );
+    errorLog.mockRestore();
   });
 });
 

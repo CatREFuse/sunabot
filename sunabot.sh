@@ -5,6 +5,8 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 VERSION=$(tr -d '[:space:]' < "$ROOT/.node-version")
 LOCK="$ROOT/package-lock.json"
 INSTALL_MARKER="$ROOT/node_modules/.package-lock.json"
+RELEASE_MANIFEST="$ROOT/release-manifest.json"
+BUNDLED_NODE="$ROOT/runtime/node/bin/node"
 
 usage() {
   cat <<'EOF'
@@ -18,12 +20,13 @@ usage() {
   status      读取运行状态
   doctor      读取环境与运行诊断
   logs        跟随当前运行日志
-  bootstrap   安装锁定的运行依赖
+  bootstrap   校验发行包运行依赖；源码目录中安装开发依赖
   rollback-first-run  回滚未完成的首次运行
+  soul        导出、检查或导入 Agent 灵魂文件
+  upgrade-0.3.0  合并 0.2.0 的旧 Workbench 资源
   help        显示帮助
 
 选项：
-  --core=auto|native|docker
   --dev
 EOF
 }
@@ -34,10 +37,22 @@ case "$COMMAND" in
     usage
     exit 0
     ;;
-  --core|--core=*|--dev)
+  --dev)
     COMMAND=up
     ;;
 esac
+
+ensure_macos_homebrew_path() {
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  for directory in /opt/homebrew/bin /usr/local/bin; do
+    [ -d "$directory" ] || continue
+    case ":$PATH:" in
+      *":$directory:"*) ;;
+      *) PATH="${PATH:+$PATH:}$directory" ;;
+    esac
+  done
+  export PATH
+}
 
 allows_install() {
   [ "$COMMAND" = "up" ] || [ "$COMMAND" = "start" ] || [ "$COMMAND" = "restart" ] || [ "$COMMAND" = "bootstrap" ]
@@ -52,7 +67,56 @@ needs_install() {
   [ ! -f "$INSTALL_MARKER" ] || [ "$LOCK" -nt "$INSTALL_MARKER" ]
 }
 
+if [ -f "$RELEASE_MANIFEST" ]; then
+  if [ -z "${SUNABOT_WORKSPACE:-}" ]; then
+    INSTALL_ROOT=$(dirname -- "$(dirname -- "$ROOT")")
+    SUNABOT_WORKSPACE="$INSTALL_ROOT/workspace"
+    export SUNABOT_WORKSPACE
+  fi
+  if [ ! -x "$BUNDLED_NODE" ]; then
+    echo "RELEASE_RUNTIME_MISSING: 发行包缺少内置 Node 运行时。" >&2
+    exit 1
+  fi
+  if [ ! -f "$INSTALL_MARKER" ]; then
+    echo "RELEASE_DEPENDENCIES_MISSING: 发行包缺少内置生产依赖。" >&2
+    exit 1
+  fi
+  CURRENT=$($BUNDLED_NODE -p 'process.versions.node')
+  if [ "$CURRENT" != "$VERSION" ]; then
+    echo "RELEASE_RUNTIME_VERSION_MISMATCH: 需要 Node ${VERSION}，包内为 ${CURRENT}。" >&2
+    exit 1
+  fi
+  PATH="$ROOT/runtime/node/bin:${PATH:-/usr/bin:/bin}"
+  export PATH
+  "$BUNDLED_NODE" --input-type=module -e '
+    import fs from "node:fs/promises";
+    import path from "node:path";
+    import { pathToFileURL } from "node:url";
+    const root = process.argv[1];
+    const manifest = JSON.parse(await fs.readFile(path.join(root, "release-manifest.json"), "utf8"));
+    const integrity = await import(pathToFileURL(path.join(root, "tooling/runtime/release-integrity.mjs")));
+    await integrity.validateReleaseManifest({ root, manifest });
+  ' "$ROOT"
+  if [ "$COMMAND" = "soul" ]; then
+    shift
+    exec "$BUNDLED_NODE" "$ROOT/tooling/agents/soul-cli.mjs" "$@"
+  fi
+  if [ "$COMMAND" = "upgrade-0.3.0" ]; then
+    shift
+    exec "$BUNDLED_NODE" "$ROOT/tooling/migrations/upgrade-0.2.0-to-0.3.0.mjs" "$@"
+  fi
+  exec "$BUNDLED_NODE" "$ROOT/tooling/runtime/launcher.mjs" "$@"
+fi
+
+if ! command -v fnm >/dev/null 2>&1 && ! command -v node >/dev/null 2>&1; then
+  ensure_macos_homebrew_path
+fi
+
 if command -v fnm >/dev/null 2>&1 && fnm exec --using="$VERSION" node -e "" >/dev/null 2>&1; then
+  if [ "$COMMAND" = "upgrade-0.3.0" ]; then
+    shift
+    exec fnm exec --using="$VERSION" node "$ROOT/tooling/migrations/upgrade-0.2.0-to-0.3.0.mjs" "$@"
+  fi
   if needs_install; then
     if allows_install; then
       echo "正在安装运行依赖..."
@@ -61,9 +125,10 @@ if command -v fnm >/dev/null 2>&1 && fnm exec --using="$VERSION" node -e "" >/de
       missing_dependencies
     fi
   fi
-  if [ "$COMMAND" = "bootstrap" ]; then
-    echo "运行依赖已准备。"
-    exit 0
+  ensure_macos_homebrew_path
+  if [ "$COMMAND" = "soul" ]; then
+    shift
+    exec fnm exec --using="$VERSION" node "$ROOT/tooling/agents/soul-cli.mjs" "$@"
   fi
   exec fnm exec --using="$VERSION" node "$ROOT/tooling/runtime/launcher.mjs" "$@"
 fi
@@ -79,6 +144,11 @@ if [ "$CURRENT" != "$VERSION" ]; then
   exit 1
 fi
 
+if [ "$COMMAND" = "upgrade-0.3.0" ]; then
+  shift
+  exec node "$ROOT/tooling/migrations/upgrade-0.2.0-to-0.3.0.mjs" "$@"
+fi
+
 if needs_install; then
   if allows_install; then
     echo "正在安装运行依赖..."
@@ -88,9 +158,9 @@ if needs_install; then
   fi
 fi
 
-if [ "$COMMAND" = "bootstrap" ]; then
-  echo "运行依赖已准备。"
-  exit 0
+ensure_macos_homebrew_path
+if [ "$COMMAND" = "soul" ]; then
+  shift
+  exec node "$ROOT/tooling/agents/soul-cli.mjs" "$@"
 fi
-
 exec node "$ROOT/tooling/runtime/launcher.mjs" "$@"

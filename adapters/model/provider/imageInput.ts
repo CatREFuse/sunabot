@@ -1,18 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
-import sharp from "sharp";
-import type { ChatMessage } from "../../../src/types.js";
-import { getWorkspacePath } from "../../../src/config.js";
-import { appendRequestLog } from "../../../src/requestLog.js";
+import type { ChatMessage } from "../../../packages/contracts/model/modelGateway.js";
+import { getWorkspacePath } from "../../../packages/platform/projectPaths.js";
+import { appendRequestLog } from "../../observability/requestLog.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
 import { MAX_ATTACHMENT_VISUAL_PAGES } from "../../../services/media/attachments/context.js";
 import { normalizeAttachmentImage } from "../../../services/media/attachments/image.js";
+import {
+  IMAGE_GENERATION_REFERENCE_MAX_BYTES,
+  normalizeImageGenerationReference
+} from "../../../services/media/imageGenerationReference.js";
 import { errorMessage, uniqueStrings } from "./valueUtils.js";
 
 const MAX_INPUT_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_FETCH_BYTES = 64 * 1024 * 1024;
 
-export async function buildImageGenerationContent(prompt: string, referenceImageUrls: string[]) {
+export interface ImageGenerationContentOptions {
+  generatedImageRoot?: string;
+  signal?: AbortSignal;
+}
+
+export async function buildImageGenerationContent(
+  prompt: string,
+  referenceImageUrls: string[],
+  options: ImageGenerationContentOptions = {}
+) {
   const content: Array<Record<string, unknown>> = [
     {
       type: "input_text",
@@ -21,9 +33,13 @@ export async function buildImageGenerationContent(prompt: string, referenceImage
   ];
 
   for (const imageUrl of uniqueStrings(referenceImageUrls).slice(0, 4)) {
+    options.signal?.throwIfAborted();
     const resolvedImageUrl = await resolveInputImageUrl(imageUrl, {
       source: "image_generation.reference",
-      logFailures: true
+      logFailures: true,
+      generatedImageRoot: options.generatedImageRoot,
+      purpose: "image_generation_reference",
+      signal: options.signal
     });
     if (!resolvedImageUrl) continue;
     content.push({
@@ -37,6 +53,11 @@ export async function buildImageGenerationContent(prompt: string, referenceImage
 
 export function countInputImages(content: Array<Record<string, unknown>>) {
   return content.filter((item) => item.type === "input_image").length;
+}
+
+export function parseDataImage(value: string) {
+  const match = value.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is);
+  return match ? { mediaType: match[1]!, data: match[2]! } : undefined;
 }
 
 export interface ResponsesInputMessageOptions {
@@ -104,14 +125,22 @@ export async function resolveLocalInputImage(filePath: string) {
   return resolveBoundedLocalInputImage(filePath, cacheRoot);
 }
 
-async function resolveGeneratedInputImage(imageUrl: string, generatedImageRoot?: string) {
+async function resolveGeneratedInputImage(
+  imageUrl: string,
+  generatedImageRoot?: string,
+  purpose: ResolveInputImagePurpose = "model_vision"
+) {
   const relativePath = generatedImageRelativePath(imageUrl);
   if (!relativePath) return null;
   const root = generatedImageRoot ?? getWorkspacePath(WORKSPACE_LAYOUT.mediaImages);
-  return resolveBoundedLocalInputImage(path.resolve(root, relativePath), root);
+  return resolveBoundedLocalInputImage(path.resolve(root, relativePath), root, purpose);
 }
 
-async function resolveBoundedLocalInputImage(filePath: string, rootPath: string) {
+async function resolveBoundedLocalInputImage(
+  filePath: string,
+  rootPath: string,
+  purpose: ResolveInputImagePurpose = "model_vision"
+) {
   try {
     const resolvedRoot = path.resolve(rootPath);
     const resolvedFile = path.resolve(filePath);
@@ -125,9 +154,12 @@ async function resolveBoundedLocalInputImage(filePath: string, rootPath: string)
     if (!isPathInside(realRoot, realFile)) return null;
     const relativePath = path.relative(resolvedRoot, resolvedFile);
     if (realFile !== path.resolve(realRoot, relativePath)) return null;
-    const normalized = await normalizeAttachmentImage(realFile, {
-      maxBytes: MAX_INPUT_IMAGE_BYTES
-    });
+    if (purpose === "image_generation_reference" && sourceStats.size > MAX_IMAGE_FETCH_BYTES) return null;
+    const normalized = purpose === "image_generation_reference"
+      ? await normalizeImageGenerationReference(realFile)
+      : await normalizeAttachmentImage(realFile, {
+        maxBytes: MAX_INPUT_IMAGE_BYTES
+      });
     return `data:${normalized.contentType};base64,${normalized.bytes.toString("base64")}`;
   } catch {
     return null;
@@ -147,12 +179,31 @@ export interface ResolveInputImageOptions {
   source?: string;
   logFailures?: boolean;
   generatedImageRoot?: string;
+  purpose?: ResolveInputImagePurpose;
+  signal?: AbortSignal;
 }
 
+export type ResolveInputImagePurpose = "model_vision" | "image_generation_reference";
+
 export async function resolveInputImageUrl(imageUrl: string, options: ResolveInputImageOptions = {}) {
-  if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(imageUrl)) return imageUrl;
+  const dataImage = parseDataImage(imageUrl);
+  if (dataImage) {
+    if (options.purpose !== "image_generation_reference") return imageUrl;
+    try {
+      const bytes = Buffer.from(dataImage.data, "base64");
+      if (bytes.byteLength > MAX_IMAGE_FETCH_BYTES) return null;
+      const normalized = await normalizeImageGenerationReference(bytes);
+      return `data:${normalized.contentType};base64,${normalized.bytes.toString("base64")}`;
+    } catch {
+      return null;
+    }
+  }
   if (imageUrl.startsWith("/generated-images/")) {
-    const resolved = await resolveGeneratedInputImage(imageUrl, options.generatedImageRoot);
+    const resolved = await resolveGeneratedInputImage(
+      imageUrl,
+      options.generatedImageRoot,
+      options.purpose
+    );
     if (!resolved) await logInputImageResolveFailure(imageUrl, "generated_image_unavailable", options);
     return resolved;
   }
@@ -162,8 +213,9 @@ export async function resolveInputImageUrl(imageUrl: string, options: ResolveInp
   }
 
   try {
+    const timeout = AbortSignal.timeout(15_000);
     const response = await fetch(imageUrl, {
-      signal: AbortSignal.timeout(15_000)
+      signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout
     });
     if (!response.ok) {
       await logInputImageResolveFailure(imageUrl, "http_status", options, {
@@ -198,29 +250,40 @@ export async function resolveInputImageUrl(imageUrl: string, options: ResolveInp
       return null;
     }
 
-    if (bytes.length > MAX_INPUT_IMAGE_BYTES) {
-      const compressed = await compressInputImage(bytes, contentType, MAX_INPUT_IMAGE_BYTES);
-      if (!compressed) {
-        await logInputImageResolveFailure(imageUrl, "compression_failed", options, {
-          byteLength: bytes.length,
-          maxBytes: MAX_INPUT_IMAGE_BYTES
+    let normalized;
+    const maxBytes = options.purpose === "image_generation_reference"
+      ? IMAGE_GENERATION_REFERENCE_MAX_BYTES
+      : MAX_INPUT_IMAGE_BYTES;
+    try {
+      normalized = options.purpose === "image_generation_reference"
+        ? await normalizeImageGenerationReference(bytes)
+        : await normalizeAttachmentImage(bytes, {
+          maxBytes
         });
-        return null;
-      }
-      await logInputImageResolveSuccess(imageUrl, options, {
-        compressed: true,
-        originalContentType: contentType,
-        contentType: compressed.contentType,
-        originalBytes: bytes.length,
-        byteLength: compressed.bytes.length,
-        maxBytes: MAX_INPUT_IMAGE_BYTES,
-        ...compressed.details
+    } catch (error) {
+      await logInputImageResolveFailure(imageUrl, "normalization_failed", options, {
+        byteLength: bytes.length,
+        maxBytes,
+        error: errorMessage(error)
       });
-      return `data:${compressed.contentType};base64,${compressed.bytes.toString("base64")}`;
+      return null;
     }
 
-    return `data:${contentType};base64,${bytes.toString("base64")}`;
+    await logInputImageResolveSuccess(imageUrl, options, {
+      normalized: true,
+      originalContentType: contentType,
+      contentType: normalized.contentType,
+      originalBytes: bytes.length,
+      byteLength: normalized.bytes.length,
+      maxBytes,
+      width: normalized.width,
+      height: normalized.height,
+      resized: normalized.resized,
+      pipeline: options.purpose ?? "model_vision"
+    });
+    return `data:${normalized.contentType};base64,${normalized.bytes.toString("base64")}`;
   } catch (error) {
+    if (options.signal?.aborted) throw options.signal.reason ?? error;
     await logInputImageResolveFailure(imageUrl, "fetch_error", options, {
       error: errorMessage(error)
     });
@@ -249,6 +312,15 @@ function generatedImageRelativePath(imageUrl: string) {
   ) {
     return path.join("agents", segments[1]!, segments[2]!);
   }
+  if (
+    segments.length === 4 &&
+    segments[0] === "conversation-assets" &&
+    segments[1] === "agents" &&
+    isSafeAgentId(segments[2] ?? "") &&
+    isSafeConversationImageFileName(segments[3] ?? "")
+  ) {
+    return path.join("conversation-assets", "agents", segments[2]!, segments[3]!);
+  }
   return undefined;
 }
 
@@ -263,57 +335,11 @@ function isSafeGeneratedImageFileName(value: string) {
     !value.includes("\\");
 }
 
-interface CompressedInputImage {
-  bytes: Buffer;
-  contentType: string;
-  details: Record<string, unknown>;
-}
-
-async function compressInputImage(bytes: Buffer, contentType: string, maxBytes: number): Promise<CompressedInputImage | null> {
-  const metadata = await sharp(bytes, { animated: false }).metadata();
-  const sourceWidth = metadata.width ?? 0;
-  const sourceHeight = metadata.height ?? 0;
-  const scaleSteps = [1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.42, 0.35, 0.3, 0.25];
-  const qualitySteps = [88, 80, 72, 64, 56, 48, 40, 34, 28];
-  let best: CompressedInputImage | null = null;
-
-  for (const scale of scaleSteps) {
-    const targetWidth = sourceWidth ? Math.max(1, Math.round(sourceWidth * scale)) : undefined;
-    const targetHeight = sourceHeight ? Math.max(1, Math.round(sourceHeight * scale)) : undefined;
-    for (const quality of qualitySteps) {
-      const pipeline = sharp(bytes, { animated: false })
-        .rotate()
-        .flatten({ background: "#ffffff" });
-      if (targetWidth && targetHeight && scale < 1) {
-        pipeline.resize({
-          width: targetWidth,
-          height: targetHeight,
-          fit: "inside",
-          withoutEnlargement: true
-        });
-      }
-      const output = await pipeline
-        .jpeg({ quality, mozjpeg: true })
-        .toBuffer();
-      const candidate: CompressedInputImage = {
-        bytes: output,
-        contentType: "image/jpeg",
-        details: {
-          sourceContentType: contentType,
-          sourceWidth: sourceWidth || undefined,
-          sourceHeight: sourceHeight || undefined,
-          scale,
-          quality,
-          width: targetWidth,
-          height: targetHeight
-        }
-      };
-      if (!best || output.length < best.bytes.length) best = candidate;
-      if (output.length <= maxBytes) return candidate;
-    }
-  }
-
-  return best && best.bytes.length <= maxBytes ? best : null;
+function isSafeConversationImageFileName(value: string) {
+  return /^[a-f0-9]{64}\.(?:png|jpe?g|gif|webp|avif|tiff?|bmp|heic|heif|flif|jxl|jxr|psd|ico|cr2|dng|arw|ktx2?)$/i.test(value) &&
+    path.basename(value) === value &&
+    !value.includes("/") &&
+    !value.includes("\\");
 }
 
 async function logInputImageResolveFailure(

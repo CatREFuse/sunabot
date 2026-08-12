@@ -6,11 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applicationDatabasePath,
   applicationDataStore,
-  closeApplicationDataStores
+  closeApplicationDataStores,
+  generatedImageHistoryRecords
 } from "../../adapters/sqlite/applicationDataStore.js";
-import { MemorySchedulerStore } from "../../services/memory/memoryScheduler.js";
 import { runWithAgentRuntimeContext } from "../../packages/platform/runtimeAgentContext.js";
-import { appendRequestLogStrict } from "../../src/requestLog.js";
+import { appendRequestLogStrict } from "../../adapters/observability/requestLog.js";
 import {
   saveConversationRecordStrict,
   saveConversationRecordsStrict
@@ -55,7 +55,6 @@ describe("application SQLite data store", () => {
   it("throws real SQLite failures from strict settle persistence", async () => {
     const config = createAdminTestConfig(root);
     const store = applicationDataStore(config);
-    const scheduler = new MemorySchedulerStore(config);
     store.close();
 
     expect(() => saveConversationRecordsStrict([
@@ -69,21 +68,6 @@ describe("application SQLite data store", () => {
       category: "test",
       action: "closed"
     }, "outbox:closed:request-log"))).rejects.toThrow();
-    await expect(scheduler.enqueue({
-      id: "private:1",
-      scope: "private",
-      title: "private:1",
-      userId: 1
-    }, [{
-      id: "message-1",
-      sequence: 1,
-      role: "assistant",
-      text: "hello",
-      at: "2026-07-10T01:00:00.000Z",
-      userId: 1,
-      imageCount: 0,
-      quoteCount: 0
-    }])).rejects.toThrow();
   });
 
   it("strictly upserts one conversation without replacing siblings", () => {
@@ -96,11 +80,18 @@ describe("application SQLite data store", () => {
 
     saveConversationRecordStrict({
       ...conversation("private:1", "2026-07-10T03:00:00.000Z"),
-      lastText: "strict update"
+      lastText: "strict update",
+      orchestratorResponseTimeOverrideEnabled: true,
+      orchestratorResponseTimeMs: 15_000
     }, config);
 
     expect(store.readConversations()).toEqual([
-      expect.objectContaining({ id: "private:1", lastText: "strict update" }),
+      expect.objectContaining({
+        id: "private:1",
+        lastText: "strict update",
+        orchestratorResponseTimeOverrideEnabled: true,
+        orchestratorResponseTimeMs: 15_000
+      }),
       expect.objectContaining({ id: "private:2", lastText: "" })
     ]);
   });
@@ -129,9 +120,6 @@ describe("application SQLite data store", () => {
     ]);
     store.appendRequestLog(log("log-1", "2026-07-10T01:00:00.000Z", "alpha"));
     store.appendRequestLog(log("log-2", "2026-07-10T02:00:00.000Z", "beta"));
-    store.replaceMemoryScheduler({
-      "private:1": { updatedAt: "2026-07-10T02:00:00.000Z", pendingMessages: [] }
-    });
     store.replaceImageHistory([{
       id: "image-1",
       url: "/generated-images/image-1.png",
@@ -143,14 +131,38 @@ describe("application SQLite data store", () => {
     expect(store.readRequestLogs({ query: "BETA", limit: 10 })).toEqual([
       expect.objectContaining({ id: "log-2", metadata: { marker: "beta" } })
     ]);
-    expect(store.readMemoryScheduler()).toHaveProperty("private:1");
     expect(store.readImageHistory()).toEqual([expect.objectContaining({ id: "image-1" })]);
+    store.appendImageHistory({
+      id: "image-2",
+      url: "/generated-images/image-2.png",
+      prompt: "追加记录",
+      createdAt: "2026-07-10T03:00:00.000Z"
+    });
+    expect(store.readImageHistory()).toEqual([
+      expect.objectContaining({ id: "image-2", prompt: "追加记录" }),
+      expect.objectContaining({ id: "image-1" })
+    ]);
     expect(store.counts()).toMatchObject({
       conversations: 2,
       requestLogs: 2,
-      memorySchedulerConversations: 1,
-      imageHistory: 1
+      imageHistory: 2
     });
+  });
+
+  it("indexes only regular generated PNG files with stable agent URLs", async () => {
+    const imageDir = path.join(root, "images");
+    await fs.mkdir(imageDir);
+    await fs.writeFile(path.join(imageDir, "2026-07-24T10-29-13-152Z-example.png"), "image");
+    await fs.writeFile(path.join(imageDir, "emoji-deadbeef.png"), "emoji");
+    await fs.writeFile(path.join(imageDir, "ignored.jpg"), "image");
+
+    expect(generatedImageHistoryRecords(imageDir, "arona")).toEqual([
+      expect.objectContaining({
+        id: "2026-07-24T10-29-13-152Z-example.png",
+        url: "/generated-images/agents/arona/2026-07-24T10-29-13-152Z-example.png",
+        createdAt: "2026-07-24T10:29:13.152Z"
+      })
+    ]);
   });
 
   it("rejects the retired external main database override", () => {

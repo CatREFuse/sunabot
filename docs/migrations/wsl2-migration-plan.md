@@ -1,39 +1,39 @@
 # sunabot WSL2 部署与迁移
 
-日期：2026-07-14
+日期：2026-08-12（v0.3.0）
 
-目标：在 Windows WSL2 中通过统一 launcher 运行一个 Sunabot Core 和多个按 QQ 账号隔离的 NapCat Docker 容器，完整保留全 Agent 业务数据、队列、凭据和 QQ 登录态。
+目标：在 Windows WSL2 中使用自包含 Linux 发行包运行一个 Sunabot Native Core，并为每个 QQ 账号运行一个独立 NapCat Docker 容器；完整保留 Agent 业务数据、队列、凭据和 QQ 登录态。
 
 ## 1. 支持范围
 
-推荐 Ubuntu 24.04 WSL2。仓库与 workspace 放在 WSL ext4 文件系统，例如 `/srv/sunabot` 和 `/srv/sunabot-workspace`，不放在 `/mnt/c`。Windows Native 不在当前支持范围。
+推荐 Ubuntu 24.04 WSL2。安装目录和 workspace 放在 WSL ext4 文件系统，例如默认的 `$HOME/.local/share/sunabot` 或 `/srv/sunabot`，不要放在 `/mnt/c`。Windows Native 不在当前支持范围。
 
-| Windows 主机 | Docker 方案 |
+| 主机 | Docker 方案 |
 | --- | --- |
-| Windows 11 | Docker Desktop WSL2 后端，为目标发行版开启 WSL Integration |
+| Windows 11 | Docker Desktop WSL2 后端，并为目标发行版开启 WSL Integration |
 | Windows Server 2022/2025 | 在 Ubuntu WSL2 内安装 Docker Engine 与 Compose 插件 |
 
-Docker Desktop 的 Windows 支持范围以[Docker 官方文档](https://docs.docker.com/desktop/setup/install/windows-install/)为准；Windows Server 的 WSL 安装以[Microsoft 官方文档](https://learn.microsoft.com/en-us/windows/wsl/install-on-server)为准。
+Docker Desktop 的 Windows 支持范围以 [Docker 官方文档](https://docs.docker.com/desktop/setup/install/windows-install/) 为准；Windows Server 的 WSL 安装以 [Microsoft 官方文档](https://learn.microsoft.com/en-us/windows/wsl/install-on-server) 为准。
 
-`deploy/runtime-contract.json` 当前只开放 `linux/amd64`。ARM Windows 主机或 ARM WSL 环境不能跳过架构门禁。
+发行平台为 `linux/amd64` 与 `linux/arm64`。安装脚本按 WSL 内核报告的架构选择归档，不允许跨架构模拟绕过门禁。
 
-## 2. 运行形态
+## 2. v0.3.0 运行形态
 
-NapCat 始终运行在 Docker 中。WSL2 中的 Core 有两种模式：
-
-```bash
-# 默认：Docker Core + 每账号一个 NapCat Docker
-./sunabot.sh up
-
-# 可选：WSL Native Core + 每账号一个 NapCat Docker
-SUNABOT_CORE_MODE=native ./sunabot.sh up
+```text
+WSL2
+├── Sunabot Native Core
+│   ├── Native Bash / MCP / Skill / Codex
+│   └── Lightpanda Native renderer（Bubblewrap）
+└── NapCat Docker × 已启用 QQ 账号
 ```
 
-Docker Core 通过 Compose 私有网络接收 OneBot；Native Core 由 launcher 选择容器可达的 WSL 网关。两种模式共用 OneBot token、Agent 注册表、SQLite schema、workspace 和 `base64://` 媒体契约。
+Core 固定 Native。NapCat 是唯一 Docker 例外；Bash、MCP、Skill、Codex 和 WebFetch 不创建容器。每个 QQ 账号对应一个 NapCat 容器、`workspace/runtime/napcat/accounts/<accountId>/` 目录和独立 WebUI 端口。
 
-每个已启用 QQ 账号都对应一个独立 NapCat 容器、`runtime/napcat/accounts/<accountId>/` 目录和 WebUI 端口。首个账号默认使用 `6099`，后续账号使用注册表分配的端口。
+Native Core 监听宿主回环管理端口 `8787`，OneBot listener 使用专用 `8788`。WSL 内安装的 Docker Engine 会在当前发行版网络命名空间创建 bridge gateway，Launcher 只绑定该本机 gateway；Docker Desktop 在独立 `docker-desktop` 发行版维护 bridge gateway，Launcher 只绑定 `127.0.0.1`，NapCat 通过 `host.docker.internal` 和 WSL localhost forwarding 连接。两种路径都必须通过 NapCat 容器内 `/healthz` 探针并携带 access token，不能回退到 `0.0.0.0`、WSL `eth0` 或局域网地址。跨组件图片使用 `base64://`，不共享绝对文件路径。
 
-## 3. WSL2 环境准备
+Docker Desktop 官方将 `host.docker.internal` 定义为容器访问宿主服务的地址；WSL 官方文档确认 Linux 服务默认转发到 Windows `localhost`。相关边界见 [Docker Desktop networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/#connect-a-container-to-a-service-on-the-host) 与 [WSL networking](https://learn.microsoft.com/en-us/windows/wsl/networking#accessing-linux-networking-apps-from-windows-localhost)。
+
+## 3. 环境准备
 
 管理员 PowerShell：
 
@@ -43,255 +43,137 @@ wsl.exe --update
 wsl.exe -l -v
 ```
 
-Ubuntu WSL2 的基础依赖：
+Ubuntu WSL2：
 
 ```bash
 sudo apt update
-sudo apt install -y ca-certificates curl git build-essential python3 tar gnupg
-```
-
-安装仓库 `.node-version` 指定的 Node.js `24.18.0`。Windows 11 使用 [Docker Desktop WSL2 后端](https://docs.docker.com/desktop/features/wsl/)；Windows Server 按 [Docker Engine Ubuntu 安装文档](https://docs.docker.com/engine/install/ubuntu/)安装 Engine、Buildx 与 Compose 插件。
-
-```bash
-node --version
+sudo apt install -y ca-certificates curl tar
 docker version
 docker compose version
-docker run --rm hello-world
 ```
 
-Docker Core 的 Codex CLI `0.139.0` 和 bubblewrap 由 Core 镜像提供并在构建或启动时检查；Office 正文解析随 Node 生产依赖交付。如使用 WSL Native Core，宿主环境还要准备：
+Docker Engine、Compose 插件和当前 WSL 用户的 Docker 访问权限必须在安装前就绪。不要用 root 运行安装、launcher 或迁移；安装用户必须拥有安装目录和 workspace。
 
-```bash
-sudo apt install -y bubblewrap fonts-noto-cjk
-npm install -g @openai/codex@0.139.0
-bwrap --version
-codex --version
-npm run office:read -- --help
-```
+Docker Desktop 用户需要为目标发行版启用 WSL Integration。WSL 内置 Docker Engine 用户不得同时启用 Docker Desktop integration；`docker context show`、`docker info` 与实际 daemon 必须指向同一实现。Launcher 根据运行网络 gateway 是否属于当前 WSL 网络命名空间选择安全监听方式，不依赖 daemon 名称或可伪造环境变量。
 
-Native Core 的 `workspace_bash` 在 bubblewrap 缺失或 namespace probe 失败时会安全拒绝，不能改成普通 Bash 降级运行。Codex CLI 版本不匹配时 Core 不应启动。
+发行归档已经内置 Node `24.18.0`、生产 `node_modules`、Codex CLI `0.139.0`、Lightpanda `0.3.3`、对应源码与许可，以及锁定的 Bubblewrap。WSL 不需要另行安装 Node、npm、Codex、Lightpanda 或 Bubblewrap。
 
 ## 4. 新实例安装
 
-由将持有仓库和 workspace 的非 root 用户执行：
-
 ```bash
-sudo mkdir -p /srv/sunabot
-sudo chown "$USER:$USER" /srv/sunabot
-git clone https://github.com/CatREFuse/sunabot.git /srv/sunabot
-cd /srv/sunabot
-npm ci
-npm run runtime:contract
-./sunabot.sh up
-./sunabot.sh doctor
-./sunabot.sh status
+curl -fsSL https://github.com/CatREFuse/sunabot/releases/latest/download/install.sh | bash
+bash "$HOME/.local/share/sunabot/current/sunabot.sh" up
 ```
 
-首次交互式启动会要求设置管理员凭据。无 TTY 环境要在启动前执行：
+安装程序执行以下有界步骤：
 
-```bash
-npm run workspace:init
-ADMIN_PASSWORD_FILE=/run/secrets/sunabot-admin-password
-test -f "$ADMIN_PASSWORD_FILE"
-test "$(stat -c '%a' "$ADMIN_PASSWORD_FILE")" = "600"
-npm run admin:set-password -- admin < "$ADMIN_PASSWORD_FILE"
-./sunabot.sh up
-./sunabot.sh doctor
-./sunabot.sh status
+1. 识别 `linux/amd64` 或 `linux/arm64`，下载对应 release 归档及 SHA-256。
+2. 校验归档摘要、release manifest、内置 Node、Bubblewrap 和 Lightpanda。
+3. 检查本机是否已有 component lock 指定的 NapCat image digest；缺失时只在安装阶段从上游准备该锁定镜像。
+4. 在版本目录运行离线 `bootstrap`，然后原子切换 `current` 链接。
+
+NapCat/QQ 不随 Sunabot release 重新分发。NapCat 的公开再分发授权尚未确认；安装程序使用上游镜像引用和固定摘要准备本机运行资产。
+
+首次交互式 `up` 进入 CLI Landing，要求设置管理员名称、至少 12 字符的密码和密码确认；输入不回显。凭据派生结果写入共享 workspace 的 `secrets/admin-credentials.json`。缺少凭据时从无 TTY 的会话启动会明确失败，不接受明文密码命令行参数。
+
+Landing 完成后，打开：
+
+```text
+管理台:       http://127.0.0.1:8787
+首个 NapCat: http://127.0.0.1:6099/webui
 ```
 
-密码文件由受控 secret manager 或部署流程创建，只允许部署用户读取，命令成功后按凭据管理策略销毁临时副本；空 stdin 会被拒绝。
+NapCat WebUI 只作诊断入口。QQ 扫码、Agent 归属和账号操作使用 Sunabot 管理台。
 
-管理台固定为 `http://127.0.0.1:8787`。在 Agent 管理页为 Plana 的 primary 账号完成扫码，再配置 Provider 并进行真实模型请求检查。NapCat 原生 WebUI 只作故障诊断入口。
+## 5. 离线启动合同
 
-## 5. 迁移现有实例
+安装完成后的以下命令不得访问软件仓库、npm registry、浏览器下载站或容器 registry：
 
-### 5.1 判定迁移路径
+```bash
+bash "$HOME/.local/share/sunabot/current/sunabot.sh" up
+bash "$HOME/.local/share/sunabot/current/sunabot.sh" start
+bash "$HOME/.local/share/sunabot/current/sunabot.sh" restart
+```
 
-- 发现旧 `sunabot-qq-runtime` 容器或 `qq-runtime` Compose service：必须完整执行 [旧单容器切换备忘录](./one-container-to-split-runtime.md)。
-- 现有 workspace 仍为单 Agent 结构：在首次 `./sunabot.sh up` 前执行 [单 Agent 到多 Agent 迁移备忘录](./single-agent-to-multi-agent.md)。
-- 现有实例已经是当前多 Agent 结构且 `business/migrations/multi-agent-v1.json` 校验有效：使用下面的全 Agent 离线转移流程。
+Launcher 对 NapCat 固定使用 `--pull never`。本机缺少锁定摘要镜像时返回 `NAPCAT_IMAGE_MISSING`，不能在启动流程补拉。`bootstrap` 在发行版中只校验和准备归档内资产，不执行依赖下载。
 
-旧实例不得先启动新 Core 再判断是否需要迁移。launcher 会在 workspace 初始化与 Agent 注册写入前校验 `business/migrations/multi-agent-v1.json`；主库出现后核对全部 Agent 的规范 workspace、manifest 与必需双库、全部 QQ 的注册关系和运行目录、Plana/primary 基线，完成标记还绑定迁移目标 workspace 与端口。缺少标记或任何完整状态不一致时直接停止。操作者仍要保留 dry-run、迁移前恢复点、迁移报告、完成标记和迁移后恢复点作为切换证据。
+Linux/WSL 的 Native Bash、MCP 与 Skill Script 必须通过随包 Bubblewrap 的 capability probe。Lightpanda renderer 也在独立 Bubblewrap 边界内运行；缺失文件、namespace probe 失败、摘要或版本不匹配时对应能力明确不可用，不降级到普通宿主进程。
 
-### 5.2 源机停服与全 Agent 恢复点
+## 6. 迁移现有实例
 
-在源机仓库根执行：
+### 6.1 确定升级路径
+
+- 发现旧 `sunabot-qq-runtime` 容器或 `qq-runtime` service：执行 [旧单容器切换备忘录](./one-container-to-split-runtime.md)。
+- 仍是单 Agent workspace：执行 [单 Agent 到多 Agent](./single-agent-to-multi-agent.md)。
+- 版本早于 0.2.0：按 [老版本逐级升级](./upgrade-old-versions-to-current.md) 执行到 0.2.0。
+- 0.2.0 workspace：执行 [0.2.0 到 0.3.0](./upgrade-0.2.0-to-0.3.0.md)，把双 Workbench 合并为 canonical `workbench/`。
+
+新 launcher 不会把缺少迁移标记的旧 workspace 当成 fresh install。marker、双库、Agent/QQ 注册、路径或恢复点状态不一致时在业务写入前停止。
+
+### 6.2 源实例停服与恢复点
+
+由 workspace 所有者在源实例执行：
 
 ```bash
 export SUNABOT_WORKSPACE=/absolute/path/to/workspace
-cd /srv/sunabot
 ./sunabot.sh down
 ./sunabot.sh status
-
-WORKSPACE_ID="$(node --input-type=module -e 'import {workspaceIdentity} from "./tooling/runtime/launcher-core.mjs"; console.log(workspaceIdentity(process.env.SUNABOT_WORKSPACE))')"
-test -z "$(docker ps -q --filter "label=io.sunabot.workspace-id=$WORKSPACE_ID")"
-
-npm run backup:create -- \
-  --workspace "$SUNABOT_WORKSPACE" \
-  --quiesced
+npm run backup:create -- --workspace "$SUNABOT_WORKSPACE" --quiesced
 ```
 
-容器检查必须覆盖当前 workspace 标签下的全部活动容器，包含 running、paused 与 restarting；Docker 状态无法读取时停止迁移，不能创建“已停服”的恢复点证据。
+确认 Native Core、account runtime daemon、当前 workspace 标签下全部 NapCat 容器和端口都已停止。Docker 状态不可读时停止迁移。备份 manifest 必须覆盖 Plana 和全部启用/停用 Agent 的业务库与 queue；注册缺库、单边数据库、孤儿库、符号链接或路径越界都属于阻断。
 
-从 JSON 输出记录 `backupDirectory`，再复验：
+将完整 workspace 归档到访问受限的传输目录，同时记录源版本、revision 和归档 SHA-256。归档包含业务数据、凭据和 QQ 登录态，传输与保存权限必须等同于生产 secret；`node_modules`、`dist`、缓存、日志、PID 和临时文件不需要转移。
+
+源实例在目标验收结束前保持停止，源机与目标机不能同时登录同一 QQ 或写入同一 workspace。
+
+### 6.3 目标 WSL 恢复与升级
+
+1. 使用 v0.3.0 安装程序准备自包含发行版和锁定 NapCat 镜像，不执行 `up`。
+2. 将归档恢复到 WSL ext4 中由运行用户独占的 workspace，复验传输摘要和文件权限。
+3. 复验源恢复点；按版本路径执行 dry-run、停服 apply 和迁移后验证。
+4. 0.2→0.3 Workbench 迁移发现普通文件内容冲突、资源入口冲突或 SQLite 状态冲突时，资源和数据库保持零修改；解决冲突后重新 plan。
+5. 成功迁移必须保留恢复点、报告和旧 `docker-workbench/` 归档。重复运行只验证既有结果，不再次覆盖目标。
+6. 执行 `sunabot.sh up`、`status` 与 `doctor`，再完成真实账号验收。
+
+目标代码版本、迁移报告或 manifest 与源记录不一致，恢复点复验失败，或者目标 workspace 出现未知文件时不能启动。
+
+## 7. 账号与日常运行
 
 ```bash
-export SQLITE_BACKUP=/absolute/path/from/backupDirectory
-npm run backup:verify -- --backup "$SQLITE_BACKUP"
+SUNABOT="$HOME/.local/share/sunabot/current/sunabot.sh"
+bash "$SUNABOT" up
+bash "$SUNABOT" status
+bash "$SUNABOT" doctor
 ```
 
-manifest v2 必须包含 Plana 与注册表中全部启用或停用 Agent 的业务库和队列库。注册缺库、单边数据库、未注册孤儿库或路径问题会让创建失败；不能删除问题数据目录继续迁移。
+Launcher 从 `agent_accounts` 读取已启用账号并逐个启动 NapCat。一个账号等待扫码不会共享其他账号的登录态。管理台新增、启停或移除账号后，宿主 account runtime daemon 只调和目标账号，不重启 Core 或其他 NapCat。
 
-### 5.3 完整 workspace 归档
+Windows 与 WSL localhost 转发异常时修复 WSL/Docker 集成。管理 listener、OneBot、NapCat WebUI 和 Lightpanda renderer 都不能为绕过转发问题改成公网监听。
 
-在 Core 和全部 NapCat 保持停止时归档：
-
-```bash
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-TRANSFER_ROOT="$HOME/sunabot-wsl2-transfer-$STAMP"
-install -d -m 700 "$TRANSFER_ROOT"
-
-if [[ -d .git ]]; then
-  test -z "$(git status --porcelain --untracked-files=no)"
-  SOURCE_COMMIT="$(git rev-parse HEAD)"
-else
-  test -f release-manifest.json
-  SOURCE_COMMIT="$(node -p 'require("./release-manifest.json").sourceCommit')"
-fi
-SOURCE_VERSION="$(node -p 'require("./package.json").version')"
-[[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-printf 'SOURCE_COMMIT=%s\nSOURCE_VERSION=%s\n' \
-  "$SOURCE_COMMIT" "$SOURCE_VERSION" > "$TRANSFER_ROOT/source-code.env"
-chmod 600 "$TRANSFER_ROOT/source-code.env"
-
-RAW_ARCHIVE="$TRANSFER_ROOT/.workspace-critical.tar"
-ENCRYPTED_ARCHIVE="$TRANSFER_ROOT/workspace-critical.tar.gpg"
-trap 'rm -f "$RAW_ARCHIVE"' EXIT
-
-tar -cpf "$RAW_ARCHIVE" \
-  -C "$SUNABOT_WORKSPACE" \
-  business runtime/napcat secrets backups/sqlite-recovery
-
-gpg --symmetric --cipher-algo AES256 \
-  --output "$ENCRYPTED_ARCHIVE" \
-  "$RAW_ARCHIVE"
-rm -f "$RAW_ARCHIVE"
-trap - EXIT
-
-(
-  cd "$TRANSFER_ROOT"
-  sha256sum workspace-critical.tar.gpg source-code.env > transfer.sha256
-  sha256sum -c transfer.sha256
-)
-```
-
-归档包含 API 凭据、管理凭据、QQ 登录态和业务数据。只传输 `workspace-critical.tar.gpg`、`source-code.env` 与 `transfer.sha256`；GPG 口令通过独立受控通道交付，不能写入仓库、命令参数、传输目录或任务日志。目标机复验密文和 revision 元数据后才允许解密。`workspace/cache/`、`workspace/runtime/logs/`、PID、临时文件、`node_modules/` 和 `dist/` 可重建，不需要转移。
-
-源机保持停机，不要在源机和目标机同时登录任一 QQ，也不要让两台机器写入同一个同步目录。
-
-### 5.4 目标机恢复
-
-```bash
-TRANSFER_SOURCE=/secure/path/to/transferred-directory
-(cd "$TRANSFER_SOURCE" && sha256sum -c transfer.sha256)
-
-cd /srv/sunabot
-SOURCE_COMMIT="$(sed -n 's/^SOURCE_COMMIT=//p' "$TRANSFER_SOURCE/source-code.env")"
-SOURCE_VERSION="$(sed -n 's/^SOURCE_VERSION=//p' "$TRANSFER_SOURCE/source-code.env")"
-[[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-if [[ -d .git ]]; then
-  test -z "$(git status --porcelain --untracked-files=no)"
-  TARGET_COMMIT="$(git rev-parse HEAD)"
-else
-  test -f release-manifest.json
-  TARGET_COMMIT="$(node -p 'require("./release-manifest.json").sourceCommit')"
-fi
-TARGET_VERSION="$(node -p 'require("./package.json").version')"
-test "$TARGET_COMMIT" = "$SOURCE_COMMIT"
-test "$TARGET_VERSION" = "$SOURCE_VERSION"
-
-sudo mkdir -p /srv/sunabot-workspace
-sudo chown "$USER:$USER" /srv/sunabot-workspace
-chmod 700 /srv/sunabot-workspace
-
-RESTORE_ARCHIVE="/srv/.sunabot-workspace-restore-$$.tar"
-umask 077
-trap 'rm -f "$RESTORE_ARCHIVE"' EXIT
-gpg --output "$RESTORE_ARCHIVE" \
-  --decrypt "$TRANSFER_SOURCE/workspace-critical.tar.gpg"
-tar -xpf "$RESTORE_ARCHIVE" \
-  -C /srv/sunabot-workspace
-rm -f "$RESTORE_ARCHIVE"
-trap - EXIT
-
-export SUNABOT_WORKSPACE=/srv/sunabot-workspace
-chmod 700 "$SUNABOT_WORKSPACE/secrets"
-chmod 600 "$SUNABOT_WORKSPACE/secrets/runtime.env"
-```
-
-在启动前复验转移过来的恢复点，并从 manifest 逐项核对 Agent 范围：
-
-```bash
-npm run backup:verify -- --backup "$SQLITE_BACKUP"
-npm run runtime:contract
-./sunabot.sh doctor
-```
-
-这里的 `SQLITE_BACKUP` 必须改为目标机上的实际路径。恢复点复验失败、Agent 范围不一致、密文与元数据 SHA-256 不匹配，或目标代码 commit/version 与源机记录不一致时不能启动。解密产生的临时明文归档必须在解包后删除；异常退出由 `trap` 清理。
-
-## 6. 启动、登录与账号扩展
-
-```bash
-cd /srv/sunabot
-export SUNABOT_WORKSPACE=/srv/sunabot-workspace
-./sunabot.sh up
-./sunabot.sh status
-./sunabot.sh doctor
-```
-
-启动器从 `agent_accounts` 读取已启用账号，逐个启动 NapCat 容器。一个账号等待扫码不代表其他账号的登录态可以共用。
-
-管理台的 Agent 页会按账号显示登录状态。需要原生 WebUI 诊断时，按 `./sunabot.sh status` 输出访问：
-
-```text
-http://127.0.0.1:<webuiPort>/webui
-```
-
-在管理台新增 QQ 账号后，当前要执行一次：
-
-```bash
-./sunabot.sh restart
-```
-
-重启后 launcher 会为新账号建立独立容器和端口映射，随后才能扫码。
-
-Windows 与 WSL localhost 转发异常时，修复 WSL 或 Docker 集成。管理 listener 不能为了绕过转发问题改成 `0.0.0.0`。OneBot `8788` 也不能直接发布到 Windows、局域网或公网。
-
-## 7. 验收
+## 8. 验收
 
 | 检查 | 验收结果 |
 | --- | --- |
-| 运行所有权 | 同一 workspace 只有一个 Core，无旧 `qq-runtime` 并行容器，`doctor` 无所有权冲突 |
-| Node 与 Docker | Node `v24.18.0`，Docker Engine 与 Compose 可用，镜像架构为 `linux/amd64` |
-| Agent 双库 | Plana 与其他 Agent 的业务库、queue 都在 manifest v2 中，`integrity_check=ok`，队列不变量一致 |
-| 管理台 | `127.0.0.1:8787` 可登录，Agent 切换、设置、对话、记忆和图片按 Agent 隔离 |
-| NapCat 账号 | 每个已启用 QQ 都有独立容器、目录、WebUI 端口和登录态 |
-| OneBot | 专用 `8788`、token 校验、`account_id` 路由、两个 QQ 同时在线和定向 action 通过 |
-| 媒体 | 图片使用 `base64://`，消息与数据库中没有跨组件绝对路径 |
-| 文件 | QQ 文件可读，NapCat 容器路径不会被 Core 直接打开 |
-| 工具 | Provider、websearch、图像、自拍、Codex 和 `workspace_bash` 符合当前 Core 模式的能力门控 |
-| 重启 | `./sunabot.sh restart` 后所有 Agent SQLite、outbox、QQ 登录态和 OneBot 连接恢复 |
-| 冷启动 | Windows 重启并启动 WSL/Docker 后，执行同一 `./sunabot.sh up` 恢复服务 |
+| 安装 | amd64/arm64 选择正确，归档和 manifest 摘要通过，版本目录原子切换 |
+| 运行所有权 | 同一 workspace 只有一个 Native Core；业务容器只有每账号 NapCat |
+| 离线启动 | 断开外网或监控网络后 `up|restart` 无依赖下载、镜像拉取或构建 |
+| Landing | fresh workspace 设置管理员名称与密码，中断可继续或显式回滚 |
+| Agent 双库 | 全部业务库与 queue 在 manifest 中，`integrity_check=ok`，队列不变量一致 |
+| 单一 Workbench | Native Bash、Codex、媒体、自拍、表情、知识与 Skill 只访问 canonical `workbench/` |
+| Native 工具 | Bash/MCP/Skill/Lightpanda 的 Bubblewrap probe 通过，失败不降级 |
+| WebFetch | 静态与 Lightpanda 动态页面均成功，健康结果为 `engine=lightpanda`，无 Chromium 依赖 |
+| NapCat | 每个启用 QQ 有独立容器、目录、WebUI 端口和登录态 |
+| OneBot | 专用 8788、token、`account_id` 路由和双 QQ 定向 action 通过 |
+| 媒体与文件 | 图片使用 `base64://`，消息与数据库无跨组件绝对路径 |
+| 灵魂文件 | WebUI 与 CLI 导出、预览、冲突导入和再次导出往返通过 |
+| 重启恢复 | Native Core、outbox、全部 QQ 登录态和 OneBot 连接恢复 |
+| 冷启动 | Windows 重启并启动 WSL/Docker 后，同一 `up` 恢复服务 |
 
-`status` 和 `doctor` 的通过只是基础运行证据。切换验收还要实测每个账号的私聊、群聊、引用回复、图片、文件、定向外发和冷启动。
+当前开放验收固定为 Linux Native Core + 多 NapCat Docker 与 WSL2 Native Core + 多 NapCat Docker。单元测试、端口监听、容器 healthy 或受控 E2E 不能替代双环境、双 QQ 的真实私聊、群聊、引用、图片、文件、定向外发和冷启动证据。
 
-## 8. 回滚
+## 9. 回滚
 
-1. 目标机验收完成前，源机保持停机且不删除原 workspace、代码 revision 或容器。
-2. 目标失败时执行 `./sunabot.sh down`，确认 Core、全部 NapCat 和端口已停止。
-3. 保留目标失败现场，用转移归档恢复 workspace，并在空的隔离目录执行 `backup:restore` 演练和复验。
-4. 目标 workspace 回到与代码 revision 匹配的结构后，重新执行 `runtime:contract`、`doctor` 和完整验收。
-5. 如果决定切回源机，目标机继续保持停止，只在源机恢复代码、workspace 和原启动方式。
+目标验收完成前保留源代码、原 workspace、离线归档、SQLite 恢复点和旧 Workbench 归档。目标失败时停止 Native Core 与全部 NapCat，保存失败现场，并按对应版本迁移文档恢复数据库和资源。恢复后再次核对 revision、manifest、文件摘要、SQLite 完整性和注册表，再选择目标或源实例重新上线。
 
-任何时刻都不能让源机与目标机同时连接同一 QQ 或写入同一份业务数据。
+任一时刻只能有一台机器连接同一 QQ 并写入对应业务数据。

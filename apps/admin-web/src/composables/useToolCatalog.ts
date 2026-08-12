@@ -76,6 +76,7 @@ function normalizeTool(value: unknown): SunaTool | null {
     accessLabel: stringValue(value.accessLabel),
     accessDescription: stringValue(value.accessDescription),
     ...(executionBackend(value.executionBackend) ? { executionBackend: executionBackend(value.executionBackend) } : {}),
+    ...(bashEnvironments(value.bashEnvironments) ? { bashEnvironments: bashEnvironments(value.bashEnvironments) } : {}),
     runtimeReasonCode: stringValue(value.runtimeReasonCode),
     defaultDescription,
     promptDescription: stringValue(value.promptDescription),
@@ -95,8 +96,24 @@ function executionMode(value: unknown): ToolExecutionMode | undefined {
   return value === "inline" || value === "deferred" ? value : undefined;
 }
 
-function executionBackend(value: unknown): "native" | "docker" | undefined {
-  return value === "native" || value === "docker" ? value : undefined;
+function executionBackend(value: unknown): "native" | undefined {
+  return value === "native" ? value : undefined;
+}
+
+function bashEnvironments(value: unknown): SunaTool["bashEnvironments"] | undefined {
+  if (!isRecord(value)) return undefined;
+  const nativeAvailable = isRecord(value.native) ? booleanValue(value.native.available) : undefined;
+  if (nativeAvailable === undefined) return undefined;
+  return {
+    ...(nativeAvailable === undefined ? {} : {
+      native: {
+        available: nativeAvailable,
+        ...(stringValue((value.native as Record<string, unknown>).reasonCode)
+          ? { reasonCode: stringValue((value.native as Record<string, unknown>).reasonCode) }
+          : {})
+      }
+    })
+  };
 }
 
 function unavailabilityKind(value: unknown): "runtime" | "session" | undefined {

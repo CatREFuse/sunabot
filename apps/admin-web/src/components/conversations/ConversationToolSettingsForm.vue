@@ -45,7 +45,7 @@ function availability(tool: SunaTool) {
         class="grid min-w-0 gap-3 py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
       >
         <div class="flex min-w-0 items-start gap-3">
-          <i class="bx w-8 shrink-0 text-2xl leading-8 text-[rgb(var(--color-interactive))]" :class="toolIcon(tool.name)" aria-hidden="true"></i>
+          <i class="bx w-8 shrink-0 text-2xl leading-8 text-mute" :class="toolIcon(tool.name)" aria-hidden="true"></i>
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
               <strong class="text-sm font-medium text-display">{{ tool.title }}</strong>

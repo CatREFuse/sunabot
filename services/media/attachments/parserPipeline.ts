@@ -32,7 +32,8 @@ import {
 import {
   applyDetectionWarnings,
   attachmentDetectionHint,
-  failAttachment
+  failAttachment,
+  parsedAttachmentState
 } from "./attachmentServiceSupport.js";
 
 const MAX_WORKER_RESULT_FILE_BYTES = 1024 * 1024;
@@ -88,46 +89,57 @@ export class ParserPipeline {
   async parseCached(
     attachment: ParsedAttachment,
     filePath: string,
-    query: string
+    query: string,
+    signal?: AbortSignal
   ): Promise<ParsedAttachment> {
-    const detected = await detectAttachmentType(filePath, {
-      fileName: attachment.name,
-      maxBytes: FILE_SIZE_LIMIT_BYTES
-    });
-    attachment.mimeType = detected.mimeType;
-    attachment.format = detected.format;
-    if (detected.kind === "unsupported") {
-      return this.finishParse(failAttachment(
-        attachment,
-        "unsupported",
-        "unsupported_file_type",
-        "暂时无法读取这种文件格式。"
-      ));
-    }
-
-    const artifactsDir = path.join(this.cacheRoot, attachment.cacheKey!, "artifacts");
-    await mkdir(artifactsDir, { recursive: true, mode: 0o700 });
     try {
+      signal?.throwIfAborted();
+      const detected = await detectAttachmentType(filePath, {
+        fileName: attachment.name,
+        maxBytes: FILE_SIZE_LIMIT_BYTES
+      });
+      signal?.throwIfAborted();
+      attachment.mimeType = detected.mimeType;
+      attachment.format = detected.format;
+      if (detected.kind === "unsupported") {
+        return this.finishParse(parsedAttachmentState(failAttachment(
+          attachment,
+          "unsupported",
+          "unsupported_file_type",
+          "暂时无法读取这种文件格式。"
+        ), "unsupported"), signal);
+      }
+
+      const artifactsDir = path.join(this.cacheRoot, attachment.cacheKey!, "artifacts");
+      signal?.throwIfAborted();
+      await mkdir(artifactsDir, { recursive: true, mode: 0o700 });
+      signal?.throwIfAborted();
       let parsed: ParsedAttachment;
       if (detected.kind === "text") {
-        parsed = await this.parseText(attachment, filePath, artifactsDir, detected);
+        parsed = await this.parseText(attachment, filePath, artifactsDir, detected, signal);
       } else if (detected.kind === "pdf") {
-        parsed = await this.parsePdf(attachment, filePath, artifactsDir, query);
+        parsed = await this.parsePdf(attachment, filePath, artifactsDir, query, signal);
       } else if (detected.kind === "image") {
-        parsed = await this.parseImage(attachment, filePath, artifactsDir);
+        parsed = await this.parseImage(attachment, filePath, artifactsDir, signal);
       } else {
-        parsed = await this.parseOffice(attachment, filePath, artifactsDir, detected, query);
+        parsed = await this.parseOffice(attachment, filePath, artifactsDir, detected, query, signal);
       }
-      return this.finishParse(applyDetectionWarnings(parsed, detected));
+      signal?.throwIfAborted();
+      const warned = applyDetectionWarnings(parsed, detected);
+      return this.finishParse(parsedAttachmentState(
+        warned,
+        warned.status === "partial" ? "partial" : "ready"
+      ), signal);
     } catch (error) {
-      return this.finishParse(failAttachment(
+      if (signal?.aborted) throw signal.reason ?? error;
+      return this.finishParse(parsedAttachmentState(failAttachment(
         attachment,
         "failed",
         "parse_failed",
         error instanceof Error && /password|encrypted/i.test(error.message)
           ? "文件无法解析，可能已加密或损坏。"
           : "文件无法解析，可能已损坏。"
-      ));
+      ), "parse_failed"), signal);
     }
   }
 
@@ -176,6 +188,17 @@ export class ParserPipeline {
       return {
         ...attachment,
         status: manifest.status,
+        acquisition: {
+          status: "acquired",
+          blob: {
+            schemaVersion: 1,
+            cacheKey: manifest.cacheKey,
+            sha256: manifest.sha256,
+            sizeBytes: Number(manifest.sizeBytes),
+            ...(manifest.mimeType ? { detectedMimeType: manifest.mimeType } : {})
+          }
+        },
+        parseStatus: manifest.status === "ready" ? "ready" : "partial",
         mimeType: manifest.mimeType,
         format: manifest.format,
         sizeBytes: manifest.sizeBytes,
@@ -200,13 +223,16 @@ export class ParserPipeline {
     attachment: ParsedAttachment,
     filePath: string,
     artifactsDir: string,
-    detected: DetectedAttachmentType
+    detected: DetectedAttachmentType,
+    signal?: AbortSignal
   ) {
+    signal?.throwIfAborted();
     const chunksPath = path.join(artifactsDir, "chunks.sqlite");
     const result = await extractTextFile(filePath, {
       encodingDetection: detected.textEncoding,
       outputPath: chunksPath
     });
+    signal?.throwIfAborted();
     return {
       ...attachment,
       status: result.truncated ? "partial" : "ready",
@@ -221,15 +247,19 @@ export class ParserPipeline {
     attachment: ParsedAttachment,
     filePath: string,
     artifactsDir: string,
-    _query: string
+    _query: string,
+    signal?: AbortSignal
   ) {
     const chunksPath = path.join(artifactsDir, "chunks.sqlite");
     const extraction = await this.runHeavy<IndexedDocumentResult>(
       artifactsDir,
-      { kind: "pdf_extract", inputPath: filePath, outputPath: chunksPath }
+      { kind: "pdf_extract", inputPath: filePath, outputPath: chunksPath },
+      signal
     );
+    signal?.throwIfAborted();
     const visualSourcePath = path.join(artifactsDir, "visual-source.pdf");
     await linkOrCopy(filePath, visualSourcePath);
+    signal?.throwIfAborted();
     return {
       ...attachment,
       status: extraction.truncated || extraction.textCharacterCount === 0 ? "partial" : "ready",
@@ -245,12 +275,16 @@ export class ParserPipeline {
   private async parseImage(
     attachment: ParsedAttachment,
     filePath: string,
-    artifactsDir: string
+    artifactsDir: string,
+    signal?: AbortSignal
   ) {
+    signal?.throwIfAborted();
     const normalized = await normalizeAttachmentImage(filePath);
+    signal?.throwIfAborted();
     const extension = normalized.format === "png" ? "png" : "jpg";
     const visualPath = path.join(artifactsDir, `image.${extension}`);
     await writeFileAtomically(visualPath, normalized.bytes);
+    signal?.throwIfAborted();
     return {
       ...attachment,
       status: "ready",
@@ -264,7 +298,8 @@ export class ParserPipeline {
     filePath: string,
     artifactsDir: string,
     detected: DetectedAttachmentType,
-    _query: string
+    _query: string,
+    signal?: AbortSignal
   ) {
     if (isLegacyOfficeFormat(detected.format)) {
       return failAttachment(
@@ -275,11 +310,14 @@ export class ParserPipeline {
       );
     }
     const parseSource = await typedSourcePath(filePath, artifactsDir, detected.format ?? "bin");
+    signal?.throwIfAborted();
     const chunksPath = path.join(artifactsDir, "chunks.sqlite");
     const extraction = await this.runHeavy<IndexedDocumentResult>(
       artifactsDir,
-      { kind: "office_extract", inputPath: parseSource, outputPath: chunksPath }
+      { kind: "office_extract", inputPath: parseSource, outputPath: chunksPath },
+      signal
     );
+    signal?.throwIfAborted();
     const result: ParsedAttachment = {
       ...attachment,
       status: extraction.truncated || extraction.indexedCharacterCount === 0 ? "partial" : "ready",
@@ -384,10 +422,14 @@ export class ParserPipeline {
     };
   }
 
-  private async finishParse(attachment: ParsedAttachment) {
+  private async finishParse(attachment: ParsedAttachment, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     if (attachment.cacheKey) {
       const artifactsDir = path.join(this.cacheRoot, attachment.cacheKey, "artifacts");
-      await this.writeParsedManifest(attachment).catch(() => undefined);
+      await this.writeParsedManifest(attachment, signal).catch((error) => {
+        if (signal?.aborted) throw signal.reason ?? error;
+      });
+      signal?.throwIfAborted();
       await this.cache.updateParseState(attachment.cacheKey, {
         parseStatus: attachment.status === "ready"
           ? "ready"
@@ -396,11 +438,13 @@ export class ParserPipeline {
             : "failed",
         artifactsSizeBytes: await directorySize(artifactsDir)
       });
+      signal?.throwIfAborted();
     }
     return attachment;
   }
 
-  private async writeParsedManifest(attachment: ParsedAttachment) {
+  private async writeParsedManifest(attachment: ParsedAttachment, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     if (!attachment.cacheKey || !attachment.sha256) return;
     const manifest: ParsedArtifactManifest = {
       version: 1,
@@ -431,9 +475,15 @@ export class ParserPipeline {
       "manifest.json"
     );
     await writeFileAtomically(manifestPath, Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`));
+    signal?.throwIfAborted();
   }
 
-  private async runHeavy<T>(workDir: string, payload: Record<string, unknown>): Promise<T> {
+  private async runHeavy<T>(
+    workDir: string,
+    payload: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<T> {
+    signal?.throwIfAborted();
     const response = await this.worker.run<T>({
       taskId: randomUUID(),
       workDir,
@@ -443,7 +493,8 @@ export class ParserPipeline {
         exportName: "default",
         payload
       }
-    });
+    }, signal);
+    signal?.throwIfAborted();
     return readWorkerResult<T>(response);
   }
 

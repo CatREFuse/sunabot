@@ -33,7 +33,7 @@ vi.mock("../../src/config.js", async () => {
 });
 
 import { ConfigService, configFieldStates } from "../../src/admin/configService.js";
-import { MODEL_CATALOG } from "../../src/admin/models.js";
+import { MODEL_CATALOG } from "../../packages/contracts/admin/models.js";
 import { AdminMutationMutex } from "../../src/admin/mutation.js";
 
 let rootDir = "";
@@ -76,10 +76,15 @@ describe("ConfigService section semantics", () => {
       value: {
         adminQq: envelope.config.bot.adminQq,
         adminName: envelope.config.bot.adminName,
+        replyModel: envelope.config.bot.replyModel,
+        replyReasoningEffort: envelope.config.bot.replyReasoningEffort,
+        imageReader: envelope.config.bot.imageReader,
         replyDebounceMs: 7_500,
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: envelope.config.bot.quoteGroupReplyExcludedUserIds,
+        emojiSendSize: envelope.config.bot.emojiSendSize,
+        emojiSendSeparately: envelope.config.bot.emojiSendSeparately,
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     });
@@ -98,10 +103,15 @@ describe("ConfigService section semantics", () => {
       value: {
         adminQq: envelope.config.bot.adminQq,
         adminName: envelope.config.bot.adminName,
+        replyModel: envelope.config.bot.replyModel,
+        replyReasoningEffort: envelope.config.bot.replyReasoningEffort,
+        imageReader: envelope.config.bot.imageReader,
         replyDebounceMs,
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: envelope.config.bot.quoteGroupReplyExcludedUserIds,
+        emojiSendSize: envelope.config.bot.emojiSendSize,
+        emojiSendSeparately: envelope.config.bot.emojiSendSeparately,
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     })).rejects.toMatchObject({
@@ -119,6 +129,8 @@ describe("ConfigService section semantics", () => {
       revision: envelope.revision,
       value: {
         enabled: true,
+        segmentedReply: true,
+        followMainModel: false,
         providerId,
         model: "gpt-5.5",
         reasoningEffort: "high",
@@ -130,6 +142,8 @@ describe("ConfigService section semantics", () => {
 
     expect(result.config.bot.tone).toEqual({
       enabled: true,
+      segmentedReply: true,
+      followMainModel: false,
       providerId,
       model: "gpt-5.5",
       reasoningEffort: "high",
@@ -142,6 +156,7 @@ describe("ConfigService section semantics", () => {
   });
 
   it.each([
+    ["segmentedReply", "yes", "tone.segmentedReply"],
     ["providerId", "missing-provider", "tone.providerId"],
     ["temperature", 2.1, "tone.temperature"],
     ["maxOutputTokens", 0, "tone.maxOutputTokens"],
@@ -195,42 +210,40 @@ describe("ConfigService section semantics", () => {
     });
   });
 
-  it("persists an independent group thread model while the orchestrator is disabled", async () => {
+  it("persists Dream sampling settings as hot Agent memory configuration", async () => {
     const subject = service();
     const envelope = await subject.readEnvelope();
-
-    const result = await subject.patch("orchestrator", {
+    const result = await subject.patch("memory", {
       revision: envelope.revision,
       value: {
-        ...envelope.config.bot.orchestrator,
-        enabled: false,
-        groupThreadModel: "  custom-low-cost-model  "
+        ...envelope.config.bot.memory,
+        dreamRecentWindowHours: 36,
+        dreamRecentMemoryLimit: 8,
+        dreamOlderMemoryLimit: 10
       }
     });
 
-    expect(result.config.bot.orchestrator).toMatchObject({
-      enabled: false,
-      userGroupchatOrchestratorModel: "gpt-5.4-mini",
-      groupThreadModel: "custom-low-cost-model"
+    expect(result.config.bot.memory).toMatchObject({
+      dreamRecentWindowHours: 36,
+      dreamRecentMemoryLimit: 8,
+      dreamOlderMemoryLimit: 10
     });
     expect(result.applyMode).toBe("hot");
+    expect(result.fieldStates["bot.memory.dreamRecentWindowHours"]?.applyMode).toBe("hot");
   });
 
-  it("rejects an empty group thread model", async () => {
+  it.each([
+    [{ dreamRecentWindowHours: 0 }, "memory.dreamRecentWindowHours"],
+    [{ dreamRecentMemoryLimit: 37, dreamOlderMemoryLimit: 12 }, "memory.dreamRecentMemoryLimit"],
+    [{ dreamRecentMemoryLimit: 0, dreamOlderMemoryLimit: 0 }, "memory.dreamRecentMemoryLimit"]
+  ] as const)("rejects invalid Dream sampling settings %#", async (patch, field) => {
     const subject = service();
     const envelope = await subject.readEnvelope();
 
-    await expect(subject.patch("orchestrator", {
+    await expect(subject.patch("memory", {
       revision: envelope.revision,
-      value: {
-        ...envelope.config.bot.orchestrator,
-        groupThreadModel: "   "
-      }
-    })).rejects.toMatchObject({
-      statusCode: 400,
-      code: "CONFIG_INVALID",
-      field: "orchestrator.groupThreadModel"
-    });
+      value: { ...envelope.config.bot.memory, ...patch }
+    })).rejects.toMatchObject({ statusCode: 400, code: "CONFIG_INVALID", field });
   });
 
   it("accepts every catalog model for Codex", async () => {
@@ -451,10 +464,15 @@ describe("ConfigService section semantics", () => {
       value: {
         adminQq: envelope.config.bot.adminQq,
         adminName: envelope.config.bot.adminName,
+        replyModel: envelope.config.bot.replyModel,
+        replyReasoningEffort: envelope.config.bot.replyReasoningEffort,
+        imageReader: envelope.config.bot.imageReader,
         replyDebounceMs: envelope.config.bot.replyDebounceMs,
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: !envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: ["20001", "20001", "20002"],
+        emojiSendSize: envelope.config.bot.emojiSendSize,
+        emojiSendSeparately: envelope.config.bot.emojiSendSeparately,
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     });
@@ -472,10 +490,15 @@ describe("ConfigService section semantics", () => {
       value: {
         adminQq: envelope.config.bot.adminQq,
         adminName: envelope.config.bot.adminName,
+        replyModel: envelope.config.bot.replyModel,
+        replyReasoningEffort: envelope.config.bot.replyReasoningEffort,
+        imageReader: envelope.config.bot.imageReader,
         replyDebounceMs: envelope.config.bot.replyDebounceMs,
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: ["20001", "another-bot"],
+        emojiSendSize: envelope.config.bot.emojiSendSize,
+        emojiSendSeparately: envelope.config.bot.emojiSendSeparately,
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     })).rejects.toMatchObject({

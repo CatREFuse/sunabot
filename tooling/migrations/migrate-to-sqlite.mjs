@@ -36,7 +36,6 @@ const legacy = {
   longTerm: path.join(agentWorkspace, "LONG_TERM_MEMORY.jsonl"),
   userProfile: path.join(agentWorkspace, "USER_PROFILE.jsonl"),
   transactionJournal: path.join(agentWorkspace, "MEMORY_TXN_JOURNAL.jsonl"),
-  memoryScheduler: path.join(agentWorkspace, "MEMORY_SCHEDULER.json"),
   imageHistory: path.join(legacyData, "image-history.json")
 };
 
@@ -245,12 +244,6 @@ async function legacyRecords(name, filePath) {
     const records = Array.isArray(parsed) ? parsed : parsed.conversations;
     if (!Array.isArray(records)) throw new Error(`Invalid conversation store: ${filePath}`);
     return records;
-  }
-  if (name === "memoryScheduler") {
-    if (parsed.version !== 1 || !parsed.conversations || typeof parsed.conversations !== "object") {
-      throw new Error(`Invalid memory scheduler store: ${filePath}`);
-    }
-    return Object.entries(parsed.conversations).map(([id, value]) => ({ id, value }));
   }
   if (!Array.isArray(parsed)) throw new Error(`Invalid JSON array store: ${filePath}`);
   return parsed;

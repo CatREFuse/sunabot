@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { AppConfig } from "../../src/types.js";
+import type { AppConfig } from "../contracts/admin/public.js";
 
 const storage = new AsyncLocalStorage<Pick<AppConfig, "persona">>();
 

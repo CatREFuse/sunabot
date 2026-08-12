@@ -5,15 +5,16 @@ import {
   WORKSPACE_BASH_VIRTUAL_ROOT,
   WorkspaceBashIsolationError,
   buildBubblewrapInvocation,
-  buildDockerInvocation,
-  ensureWorkspaceBashIsolation
+  buildHostNativeInvocation,
+  ensureWorkspaceBashIsolation,
+  resolveWorkspaceBashSandboxExecutable
 } from "../../services/tools/bashSandbox.js";
-import {
-  WORKSPACE_BASH_ADMIN_EXECUTABLE,
-  WORKSPACE_BASH_RESTRICTED_EXECUTABLES
-} from "../../services/tools/bashPolicy.js";
 
 const workbench = "/srv/sunabot/workspace/business/agents/plana/workbench";
+const readOnlyMounts = {
+  skills: "/srv/sunabot/workspace/business/agents/plana/workbench/skills",
+  mcp: "/srv/sunabot/workspace/business/agents/plana/extensions/mcp"
+};
 const environment = {
   PATH: "/usr/local/bin:/usr/bin:/bin",
   HOME: WORKSPACE_BASH_VIRTUAL_ROOT,
@@ -28,6 +29,22 @@ const environment = {
 };
 
 describe("workspace Bash isolation", () => {
+  it("uses only an absolute launcher-injected Bubblewrap path in packaged runtimes", () => {
+    expect(resolveWorkspaceBashSandboxExecutable({
+      SUNABOT_BWRAP_EXECUTABLE: "/opt/sunabot/current/runtime/bubblewrap/bwrap",
+      SUNABOT_PACKAGED_RELEASE: "1"
+    })).toBe("/opt/sunabot/current/runtime/bubblewrap/bwrap");
+    expect(resolveWorkspaceBashSandboxExecutable({})).toBe("/usr/bin/bwrap");
+    expect(() => resolveWorkspaceBashSandboxExecutable({ SUNABOT_PACKAGED_RELEASE: "1" }))
+      .toThrow(WorkspaceBashIsolationError);
+    for (const value of ["relative/bwrap", "/opt/../usr/bin/bwrap", "/opt/bwrap\nforged"]) {
+      expect(() => resolveWorkspaceBashSandboxExecutable({
+        SUNABOT_BWRAP_EXECUTABLE: value,
+        SUNABOT_PACKAGED_RELEASE: "1"
+      })).toThrow(WorkspaceBashIsolationError);
+    }
+  });
+
   it.each([
     ["path", "printf x > /tmp/outside"],
     ["symlink", "ln -s /tmp escape && printf x > escape/outside"],
@@ -86,6 +103,21 @@ describe("workspace Bash isolation", () => {
     expect(hasSequence(invocation.args, ["--ro-bind", "/var/log/app.log", "/var/log/app.log"])).toBe(true);
   });
 
+  it("binds Native Bash Skill and MCP configuration read-only", () => {
+    const invocation = buildBubblewrapInvocation(
+      { kind: "shell", command: "ls /skills /mcp" },
+      workbench,
+      environment,
+      "/fixture/bwrap",
+      [],
+      "/fixture/prlimit",
+      readOnlyMounts
+    );
+
+    expect(hasSequence(invocation.args, ["--ro-bind", readOnlyMounts.skills, "/skills"])).toBe(true);
+    expect(hasSequence(invocation.args, ["--ro-bind", readOnlyMounts.mcp, "/mcp"])).toBe(true);
+  });
+
   it.each(["write", "delete"] as const)("rejects a forged outside %s bind", (access) => {
     expect(() => buildBubblewrapInvocation(
       { kind: "shell", command: "printf x" },
@@ -114,114 +146,48 @@ describe("workspace Bash isolation", () => {
     )).toThrow(WorkspaceBashIsolationError);
   });
 
-  it("mounts only workbench into a named short-lived Docker container", () => {
-    const containerName = `sunabot-bash-${"a".repeat(32)}`;
-    const invocation = buildDockerInvocation(
-      { kind: "shell", command: "echo ok" },
-      "/host/agent/workbench",
-      "/fixture/docker",
-      "sunabot-bash:test",
-      containerName
-    );
-
-    expect(invocation.file).toBe("/fixture/docker");
-    expect(invocation.args).toEqual(expect.arrayContaining([
-      "run", "--rm", "--pull", "never", "--name", containerName, "--read-only", "--cap-drop", "ALL",
-      "--network", "none",
-      "--security-opt", "no-new-privileges:true",
-      "--ulimit", "fsize=268435456:268435456",
-      "--mount", "type=bind,src=/host/agent/workbench,dst=/workbench,rw",
-      "--workdir", "/workbench", "--entrypoint", "/usr/bin/env", "sunabot-bash:test"
-    ]));
-    expect(invocation.args.slice(invocation.args.indexOf("sunabot-bash:test"))).toEqual([
-      "sunabot-bash:test", "-i",
-      "HOME=/workbench", "PWD=/workbench", "PATH=/usr/local/bin:/usr/bin:/bin",
-      "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "TMPDIR=/tmp", "TMP=/tmp", "TEMP=/tmp",
-      "SHELL=/bin/bash", "USER=sunabot",
-      "/bin/bash", "--noprofile", "--norc", "-lc", "echo ok"
-    ]);
-    for (const variable of [
-      "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "FTP_PROXY", "NO_PROXY",
-      "http_proxy", "https_proxy", "all_proxy", "ftp_proxy", "no_proxy"
-    ]) {
-      expect(hasSequence(invocation.args, ["--env", `${variable}=`])).toBe(true);
-    }
-    expect(invocation.cleanup).toMatchObject({ file: "/fixture/docker", args: ["rm", "-f", containerName] });
-    expect(invocation.cleanup?.env).toBe(invocation.env);
-    expect(invocation.args.join(" ")).not.toContain("docker.sock");
-  });
-
-  it("runs restricted Docker argv directly with an unpredictable container name", () => {
-    const invocation = buildDockerInvocation(
-      { kind: "argv", executable: "/usr/bin/ls", args: ["-la"] },
-      "/host/agent/workbench",
-      "/fixture/docker",
-      "sunabot-bash:test"
-    );
-
-    const name = invocation.args[invocation.args.indexOf("--name") + 1];
-    expect(name).toMatch(/^sunabot-bash-[a-f0-9]{32}$/);
-    expect(hasSequence(invocation.args, ["--network", "none"])).toBe(true);
-    expect(hasSequence(invocation.args, ["--entrypoint", "/usr/bin/env"])).toBe(true);
-    expect(invocation.args.slice(-2)).toEqual(["/usr/bin/ls", "-la"]);
-    expect(invocation.args.indexOf("-i")).toBeLessThan(invocation.args.indexOf("/usr/bin/ls"));
-  });
-
-  it("rejects macOS Native Bash without probing or falling back to host Bash", async () => {
+  it("uses an audited macOS host Bash for the Native backend", async () => {
+    const access = vi.fn(async () => undefined);
     const probe = vi.fn(async () => undefined);
 
     await expect(ensureWorkspaceBashIsolation("native", workbench, environment, {
       platform: "darwin",
+      effectiveUid: 501,
+      access,
       probe
-    })).rejects.toMatchObject({
-      name: "WorkspaceBashIsolationError",
-      code: WORKSPACE_BASH_ISOLATION_ERROR
-    });
-    expect(probe).not.toHaveBeenCalled();
+    })).resolves.toEqual({ kind: "host", executable: "/bin/bash" });
+    expect(access).toHaveBeenCalledWith("/bin/bash", expect.any(Number));
+    expect(probe).toHaveBeenCalledWith("/bin/bash", ["--noprofile", "--norc", "-lc", ":"]);
   });
 
-  it("allows macOS restricted Bash only through the Docker image probe", async () => {
-    const probe = vi.fn(async () => undefined);
-
-    await expect(ensureWorkspaceBashIsolation("docker", workbench, environment, {
-      platform: "darwin",
-      runtimeMode: "native",
-      effectiveUid: 1_000,
-      dockerExecutable: "/fixture/docker",
-      dockerImage: "sunabot-bash:test",
-      access: async () => undefined,
-      probe
-    })).resolves.toMatchObject({
-      kind: "docker",
-      executable: "/fixture/docker",
-      image: "sunabot-bash:test"
+  it("builds Native host execution with a sanitized environment and real shared paths", () => {
+    expect(buildHostNativeInvocation(
+      { kind: "shell", command: "pwd && ls \"$SUNABOT_SKILLS\" \"$SUNABOT_MCP_CONFIG\"" },
+      workbench,
+      environment,
+      "/bin/bash",
+      [],
+      readOnlyMounts
+    )).toMatchObject({
+      file: "/bin/bash",
+      args: ["--noprofile", "--norc", "-lc", "pwd && ls \"$SUNABOT_SKILLS\" \"$SUNABOT_MCP_CONFIG\""],
+      env: {
+        PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        HOME: workbench,
+        PWD: workbench,
+        SUNABOT_SKILLS: readOnlyMounts.skills,
+        SUNABOT_MCP_CONFIG: readOnlyMounts.mcp
+      }
     });
-    expect(probe).toHaveBeenCalledOnce();
-    expect(probe.mock.calls[0]?.[0]).toBe("/fixture/docker");
-    const probeArgs = probe.mock.calls[0]?.[1] ?? [];
-    expect(probeArgs).toEqual(expect.arrayContaining([
-      "run", "--rm", "--pull", "never", "--network", "none",
-      "--entrypoint", "/usr/bin/env", "sunabot-bash:test", "-i",
-      "PATH=/usr/local/bin:/usr/bin:/bin", "/bin/bash", "--noprofile", "--norc", "-ec"
-    ]));
-    const probeScript = probeArgs.at(-1) ?? "";
-    for (const executable of [
-      "/usr/bin/env",
-      "/usr/bin/test",
-      WORKSPACE_BASH_ADMIN_EXECUTABLE,
-      ...WORKSPACE_BASH_RESTRICTED_EXECUTABLES
-    ]) {
-      expect(probeScript).toContain(executable);
-    }
-    expect(probe.mock.calls[0]?.[2]).toEqual({ env: expect.any(Object) });
   });
 
-  it("fails closed for a root Docker host runtime", async () => {
+  it("fails closed for a root macOS Native runtime", async () => {
     const probe = vi.fn(async () => undefined);
-    await expect(ensureWorkspaceBashIsolation("docker", workbench, environment, {
+
+    await expect(ensureWorkspaceBashIsolation("native", workbench, environment, {
       platform: "darwin",
-      runtimeMode: "native",
       effectiveUid: 0,
+      access: async () => undefined,
       probe
     })).rejects.toBeInstanceOf(WorkspaceBashIsolationError);
     expect(probe).not.toHaveBeenCalled();
@@ -294,14 +260,16 @@ describe("workspace Bash isolation", () => {
     })).resolves.toEqual({
       kind: "bubblewrap",
       executable: "/fixture/bwrap",
-      resourceLimiter: "/fixture/prlimit"
+      resourceLimiter: "/fixture/prlimit",
+      networkAccess: true
     });
     expect(probe).toHaveBeenCalledOnce();
     expect(probe.mock.calls[0]?.[0]).toBe("/fixture/prlimit");
     expect(probe.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([
       "--nproc=64:64", "--as=536870912:536870912", "/fixture/bwrap",
-      "--unshare-pid", "--unshare-net", "--unshare-cgroup"
+      "--unshare-pid", "--unshare-cgroup"
     ]));
+    expect(probe.mock.calls[0]?.[1]).not.toContain("--unshare-net");
   });
 
   it("fails closed when the resource or kernel isolation probe is rejected", async () => {
@@ -313,19 +281,6 @@ describe("workspace Bash isolation", () => {
     })).rejects.toBeInstanceOf(WorkspaceBashIsolationError);
   });
 
-  it("uses bubblewrap inside Docker Core without requiring a Docker socket", async () => {
-    const probe = vi.fn(async () => undefined);
-    await expect(ensureWorkspaceBashIsolation("docker", workbench, environment, {
-      platform: "linux",
-      runtimeMode: "docker",
-      effectiveUid: 1_000,
-      executable: "/fixture/bwrap",
-      resourceLimiter: "/fixture/prlimit",
-      access: async () => undefined,
-      probe
-    })).resolves.toMatchObject({ kind: "bubblewrap" });
-    expect(probe.mock.calls[0]?.[1].join(" ")).not.toContain("docker.sock");
-  });
 });
 
 function hasSequence(values: string[], sequence: string[]) {
