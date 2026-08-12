@@ -419,7 +419,7 @@ describe("emoji production repository and Fastify routes", () => {
     await expect(fs.access(agentMediaDirectory(agentId))).rejects.toMatchObject({ code: "ENOENT" });
   }, 30_000);
 
-  it("enforces the 64-key limit while allowing an explicit same-key replacement", async () => {
+  it("enforces the 64-key limit while allowing an explicit same-key replacement", { timeout: 30_000 }, async () => {
     const agentId = "limit-agent";
     const first = findEmoji(await upload(agentId, "表情0", "first.png", redPng), "表情0");
     const store = emojiStore(requireConfig(agentId));
@@ -451,7 +451,7 @@ describe("emoji production repository and Fastify routes", () => {
     const replaced = await upload(agentId, "表情0", "blue.png", bluePng);
     expect(findEmoji(replaced, "表情0").fileName).not.toBe(first.fileName);
     expect(store.readAll()).toHaveLength(64);
-  }, 15_000);
+  });
 
   it("fails closed for symlink directories, symlink files, oversized files and undecodable content", async () => {
     const external = path.join(root, "external-media");

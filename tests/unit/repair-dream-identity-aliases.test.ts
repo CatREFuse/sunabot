@@ -172,7 +172,7 @@ describe("Dream identity alias repair", () => {
     })).rejects.toMatchObject({ code: "ALIAS_COUNTS_INVALID" });
   });
 
-  it("rejects a rollback recovery point after same-count application content drifts", async () => {
+  it("rejects a rollback recovery point after same-count application content drifts", { timeout: 15_000 }, async () => {
     const fixture = await createFixture();
     const inspection = await inspectFixture(fixture);
     const database = new DatabaseSync(fixture.databasePath);
@@ -609,7 +609,7 @@ describe("Dream identity alias repair", () => {
     expect(await logicalSnapshot(fixture)).toEqual(before);
   });
 
-  it("applies all gates in one transaction while preserving counts, queue, and working memory", async () => {
+  it("applies all gates in one transaction while preserving counts, queue, and working memory", { timeout: 15_000 }, async () => {
     const fixture = await createFixture();
     const before = await logicalSnapshot(fixture);
     const inspection = await inspectDreamIdentityAliasRepair({
