@@ -218,6 +218,27 @@ describe("Native WebFetch Renderer security contract", () => {
     expect(command).toHaveBeenCalledTimes(3);
   });
 
+  it("pins packaged releases to the manifest-protected Lightpanda executable", async () => {
+    const root = await fixtureProject();
+    const override = path.join(path.dirname(root), "host-browser");
+    await fs.writeFile(override, "#!/bin/sh\necho 'host override'\n", { mode: 0o700 });
+    const command = vi.fn(async () => "Lightpanda 0.3.3");
+    const installation = await prepareNativeWebfetchRendererInstallation({
+      root,
+      workspace: path.join(root, "workspace"),
+      packaged: true,
+      environment: {
+        SUNABOT_WEBFETCH_NATIVE_CACHE: path.join(path.dirname(root), "renderer-cache"),
+        SUNABOT_WEBFETCH_LIGHTPANDA_EXECUTABLE: override
+      }
+    }, { command });
+
+    expect(await fs.readFile(installation.lightpandaExecutable, "utf8"))
+      .toContain("Lightpanda 0.3.3");
+    expect(await fs.readFile(installation.lightpandaExecutable, "utf8"))
+      .not.toContain("host override");
+  });
+
 });
 
 async function fixtureProject() {

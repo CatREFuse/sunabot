@@ -260,7 +260,10 @@ describe("Native Core runtime launcher", () => {
         PATH: "/usr/bin",
         SUNABOT_RUNTIME_ID: "spoofed-runtime",
         SUNABOT_WORKSPACE_ID: "spoofed-workspace",
-        SUNABOT_DOCKER_SOCKET: "/tmp/spoofed.sock"
+        SUNABOT_DOCKER_SOCKET: "/tmp/spoofed.sock",
+        SUNABOT_WEBFETCH_RENDERER_TOKEN: "a".repeat(43),
+        SUNABOT_WEBFETCH_RENDERER_TOKEN_FD: "9",
+        SUNABOT_WEBFETCH_RENDERER_URL: "http://127.0.0.1:9999"
       },
       runtimeEnvironment: {
         SUNABOT_RUNTIME_ID: "runtime-env-spoof",
@@ -274,7 +277,8 @@ describe("Native Core runtime launcher", () => {
         runtimeId: "sunabot-qq-runtime",
         adminHost: "127.0.0.1",
         adminPort: 8787,
-        onebotPort: 8788
+        onebotPort: 8788,
+        webfetchRendererPort: 8790
       }
     };
 
@@ -285,9 +289,19 @@ describe("Native Core runtime launcher", () => {
       SUNABOT_BWRAP_EXECUTABLE: "/opt/sunabot/current/runtime/bubblewrap/bwrap",
       SUNABOT_PACKAGED_RELEASE: "1"
     });
-    expect(nativeCoreEnvironment(context, "127.0.0.1", "darwin"))
-      .not.toHaveProperty("SUNABOT_DOCKER_SOCKET");
-    expect(nativeCoreEnvironment(context, "172.18.0.1", "linux")).not.toHaveProperty("SUNABOT_DOCKER_SOCKET");
+    const macosEnvironment = nativeCoreEnvironment(context, "127.0.0.1", "darwin");
+    expect(macosEnvironment).not.toHaveProperty("SUNABOT_DOCKER_SOCKET");
+    expect(macosEnvironment).not.toHaveProperty("SUNABOT_WEBFETCH_RENDERER_TOKEN");
+    expect(macosEnvironment).not.toHaveProperty("SUNABOT_WEBFETCH_RENDERER_TOKEN_FD");
+    expect(macosEnvironment).not.toHaveProperty("SUNABOT_WEBFETCH_RENDERER_URL");
+
+    const linuxEnvironment = nativeCoreEnvironment(context, "172.18.0.1", "linux", true);
+    expect(linuxEnvironment).not.toHaveProperty("SUNABOT_DOCKER_SOCKET");
+    expect(linuxEnvironment).not.toHaveProperty("SUNABOT_WEBFETCH_RENDERER_TOKEN");
+    expect(linuxEnvironment).toMatchObject({
+      SUNABOT_WEBFETCH_RENDERER_TOKEN_FD: "3",
+      SUNABOT_WEBFETCH_RENDERER_URL: "http://127.0.0.1:8790"
+    });
   });
 
   it("binds WSL Docker Desktop OneBot to loopback when the Docker VM bridge gateway is not local", () => {

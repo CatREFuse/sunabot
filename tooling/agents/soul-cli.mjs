@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline/promises";
+import { pathToFileURL } from "node:url";
 
 const FILE_EXTENSION = ".sunabot-soul.json";
 const MAX_FILE_BYTES = 3 * 1024 * 1024;
@@ -142,7 +143,17 @@ async function responseError(response) {
   } catch {
     return new Error(`管理 API 请求失败（${response.status}）。`);
   }
-  return new Error(typeof body.message === "string" ? body.message : `管理 API 请求失败（${response.status}）。`);
+  return new Error(apiErrorMessage(body, response.status));
+}
+
+export function apiErrorMessage(body, status) {
+  if (body && typeof body === "object") {
+    if (typeof body.message === "string") return body.message;
+    if (body.error && typeof body.error === "object" && typeof body.error.message === "string") {
+      return body.error.message;
+    }
+  }
+  return `管理 API 请求失败（${status}）。`;
 }
 
 function printPreview(preview) {
@@ -232,7 +243,9 @@ function localAdminUrl(input) {
   return url.origin;
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

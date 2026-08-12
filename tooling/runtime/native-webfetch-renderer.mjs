@@ -16,9 +16,11 @@ export async function prepareNativeWebfetchRendererInstallation(context, options
   await fs.mkdir(cacheRoot, { recursive: true, mode: 0o700 });
   await fs.chmod(cacheRoot, 0o700);
 
+  const bundledLightpanda = path.join(context.root, "runtime/lightpanda/lightpanda");
   const lightpandaSource = path.resolve(
-    context.environment.SUNABOT_WEBFETCH_LIGHTPANDA_EXECUTABLE?.trim()
-      || path.join(context.root, "runtime/lightpanda/lightpanda")
+    context.packaged
+      ? bundledLightpanda
+      : context.environment.SUNABOT_WEBFETCH_LIGHTPANDA_EXECUTABLE?.trim() || bundledLightpanda
   );
   if (!await regularExecutable(lightpandaSource)) {
     throw new Error("WEBFETCH_LIGHTPANDA_MISSING");

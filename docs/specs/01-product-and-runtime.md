@@ -65,7 +65,7 @@ Codex CLI `0.139.0` 是固定生产依赖。发行包从生产 `node_modules` �
 
 静态 WebFetch 在 Core 内使用 Node 抓取和 Defuddle 提取正文。正文不足时，Linux/WSL 调用由 launcher 监管的 Lightpanda 0.3.3 Renderer；该引擎不依赖 Chrome、Chromium、Blink、WebKit 或 Playwright。Renderer 只监听回环、使用每次启动生成的 bearer token、禁用遥测，并在独立临时 HOME/cache/run 中运行。
 
-Linux/WSL Renderer 由 Bubblewrap 遮蔽仓库、workspace、secrets、Provider、Codex、OneBot、NapCat 凭据和浏览器用户目录。安全代理对 HTTP(S)、重定向、CONNECT、请求数、并发、响应字节和总预算执行统一限制；下载、WebSocket、非 GET 与不受支持资源类型失败关闭。Renderer 不保存 Cookie 或原始 HTML。Linux/WSL 把动态 Renderer 作为发行必需能力，Lightpanda、Bubblewrap 包内运行库、鉴权、真实 namespace probe 或健康值无法验证时，bootstrap 与启动失败；macOS 当前不启动动态 Renderer，返回明确 unavailable，静态抓取继续可用。
+Linux/WSL Renderer 由 Bubblewrap 遮蔽仓库、workspace、secrets、Provider、Codex、OneBot、NapCat 凭据和浏览器用户目录。安全代理对 HTTP(S)、重定向、CONNECT、请求数、并发、响应字节和总预算执行统一限制；下载、WebSocket、非 GET 与不受支持资源类型失败关闭。Renderer 不保存 Cookie 或原始 HTML。发行形态忽略宿主 Lightpanda 覆盖，只使用 manifest 保护的包内可执行文件；renderer token 由 launcher 生成并通过文件描述符交给 Linux Core 与 Renderer。Linux/WSL 把动态 Renderer 作为发行必需能力，Lightpanda、Bubblewrap 包内运行库、鉴权、真实 namespace probe 或健康值无法验证时，bootstrap 与启动失败；macOS Core 不接收 renderer URL 或 token，动态能力返回明确 unavailable，静态抓取继续可用。
 
 ## 6. 代理与平台
 

@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { apiErrorMessage } from "../../tooling/agents/soul-cli.mjs";
 
 const run = promisify(execFile);
 const cli = path.resolve("tooling/agents/soul-cli.mjs");
@@ -27,5 +28,12 @@ describe("soul CLI", () => {
     await expect(run(process.execPath, [cli, "inspect", "--agent", "arona", "--input", "x.sunabot-soul.json"], {
       env: { ...process.env, SUNABOT_ADMIN_URL: "https://admin.example.com" }
     })).rejects.toMatchObject({ stderr: expect.stringContaining("必须是本机回环管理地址") });
+  });
+
+  it("shows structured management API errors for import conflicts", () => {
+    expect(apiErrorMessage({
+      error: { code: "AGENT_SOUL_TARGET_CHANGED", message: "目标人格文件已变化，请重新预览。" }
+    }, 409)).toBe("目标人格文件已变化，请重新预览。");
+    expect(apiErrorMessage({}, 422)).toBe("管理 API 请求失败（422）。");
   });
 });

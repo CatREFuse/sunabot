@@ -32,7 +32,7 @@
 | 缓存 | 最多 64 项、5 分钟进程内 LRU，不新增持久化格式 |
 | 外部内容 | 始终作为不可信证据，并附加宿主固定的 `webfetch_evidence_policy_v1` |
 
-选型依据：Lightpanda 是面向自动化的独立浏览器实现，提供可脚本化的动态页面加载能力，且无需分发 Chromium；`0.3.3` 以精确版本和摘要进入 component lock。Lightpanda 使用 AGPL，发行归档同时携带对应源码与许可。运行时设置 `LIGHTPANDA_DISABLE_TELEMETRY=true`，不允许动态下载、自动升级或遥测回传。
+选型依据：Lightpanda 是面向自动化的独立浏览器实现，提供可脚本化的动态页面加载能力，且无需分发 Chromium；`0.3.3` 以精确版本和摘要进入 component lock。发行形态只接受 manifest 保护的包内 Lightpanda，忽略宿主可执行文件覆盖；源码开发形态可显式指定本地 Lightpanda。Lightpanda 使用 AGPL，发行归档同时携带对应源码与许可。运行时设置 `LIGHTPANDA_DISABLE_TELEMETRY=true`，不允许动态下载、自动升级或遥测回传。
 
 正文抽取继续使用锁定版本的 [Defuddle](https://github.com/kepano/defuddle)，并固定 `useAsync: false`，避免抽取器调用第三方回退服务。相关性策略参考 [Crawl4AI](https://github.com/unclecode/crawl4ai) 的分块和 BM25 思路，但不引入 Python 运行时。
 

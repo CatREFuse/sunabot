@@ -1721,11 +1721,15 @@ export function nativeCoreEnvironment(
     SUNABOT_ONEBOT_HOST: onebotListenHost,
     SUNABOT_ONEBOT_PORT: String(context.contract.onebotPort),
     SUNABOT_BWRAP_EXECUTABLE: bubblewrapExecutable(context),
-    SUNABOT_PACKAGED_RELEASE: context.packaged ? "1" : "0",
-    SUNABOT_WEBFETCH_RENDERER_URL: `http://127.0.0.1:${context.contract.webfetchRendererPort}`
+    SUNABOT_PACKAGED_RELEASE: context.packaged ? "1" : "0"
   };
-  if (rendererTokenFd) environment.SUNABOT_WEBFETCH_RENDERER_TOKEN_FD = "3";
-  else delete environment.SUNABOT_WEBFETCH_RENDERER_TOKEN_FD;
+  delete environment.SUNABOT_WEBFETCH_RENDERER_TOKEN;
+  delete environment.SUNABOT_WEBFETCH_RENDERER_TOKEN_FD;
+  delete environment.SUNABOT_WEBFETCH_RENDERER_URL;
+  if (rendererTokenFd && platform === "linux") {
+    environment.SUNABOT_WEBFETCH_RENDERER_TOKEN_FD = "3";
+    environment.SUNABOT_WEBFETCH_RENDERER_URL = `http://127.0.0.1:${context.contract.webfetchRendererPort}`;
+  }
   delete environment.SUNABOT_DOCKER_SOCKET;
   return environment;
 }
