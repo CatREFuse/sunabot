@@ -61,7 +61,10 @@ const STARTUP_REQUIRED_CHECK_IDS = new Set([
   "core-process",
   "core-api",
   "onebot-listener",
-  "account-reconciler",
+  "account-reconciler"
+]);
+const LINUX_STARTUP_REQUIRED_CHECK_IDS = new Set([
+  ...STARTUP_REQUIRED_CHECK_IDS,
   "webfetch-dynamic-renderer"
 ]);
 const STARTUP_STABILITY_WINDOW_MS = 3_000;
@@ -510,7 +513,7 @@ function printRuntimeReport(context, report) {
   }
 }
 
-export function startupReportFailures(report) {
+export function startupReportFailures(report, platform = process.platform) {
   const checks = new Map((report?.checks ?? []).map((item) => [item.id, item]));
   const failures = [];
   const seen = new Set();
@@ -519,7 +522,10 @@ export function startupReportFailures(report) {
     seen.add(check.id);
     failures.push(check);
   };
-  for (const id of STARTUP_REQUIRED_CHECK_IDS) {
+  const requiredCheckIds = platform === "linux"
+    ? LINUX_STARTUP_REQUIRED_CHECK_IDS
+    : STARTUP_REQUIRED_CHECK_IDS;
+  for (const id of requiredCheckIds) {
     const check = checks.get(id);
     if (!check || check.status !== "pass") {
       add(check ?? {
@@ -536,8 +542,8 @@ export function startupReportFailures(report) {
   return failures;
 }
 
-export function assertStartupReportReady(report) {
-  const failures = startupReportFailures(report);
+export function assertStartupReportReady(report, platform = process.platform) {
+  const failures = startupReportFailures(report, platform);
   if (failures.length === 0) return;
   const detail = failures.map((item) => {
     const action = item.action ? `；修复：${item.action}` : "";

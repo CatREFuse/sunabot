@@ -454,7 +454,7 @@ describe("Native Core runtime launcher", () => {
     );
   });
 
-  it("fails startup when the required dynamic WebFetch sandbox is unavailable", () => {
+  it("requires dynamic WebFetch on Linux while accepting its declared macOS unavailability", () => {
     const report = runtimeReport([
       pass("workspace"),
       pass("core-process"),
@@ -469,14 +469,16 @@ describe("Native Core runtime launcher", () => {
       )
     ]);
 
-    expect(startupReportFailures(report)).toEqual([
+    expect(startupReportFailures(report, "linux")).toEqual([
       expect.objectContaining({
         id: "webfetch-dynamic-renderer",
         code: "WEBFETCH_RENDERER_UNAVAILABLE"
       })
     ]);
-    expect(() => assertStartupReportReady(report))
+    expect(() => assertStartupReportReady(report, "linux"))
       .toThrowError(/STARTUP_NOT_READY.*WEBFETCH_RENDERER_UNAVAILABLE/u);
+    expect(startupReportFailures(report, "darwin")).toEqual([]);
+    expect(() => assertStartupReportReady(report, "darwin")).not.toThrow();
   });
 
   it("fails closed when the runtime probe omits a required startup check", () => {
