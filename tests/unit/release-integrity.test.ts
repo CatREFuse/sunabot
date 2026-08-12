@@ -215,6 +215,11 @@ describe("Native release integrity", () => {
 
     expect(workflow).toContain("npm run verify");
     expect(workflow).toContain("npm run test:visual");
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toContain("tag_name:");
+    expect(workflow.match(/ref: refs\/tags\/\$\{\{ env\.RELEASE_TAG \}\}/g)).toHaveLength(2);
+    expect(workflow).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
+    expect(workflow).toContain("kernel.unprivileged_userns_clone=1");
     expect(workflow).toContain("runner: ubuntu-24.04");
     expect(workflow).toContain("runner: ubuntu-24.04-arm");
     expect(workflow).toContain("platform: linux-amd64");
@@ -222,6 +227,7 @@ describe("Native release integrity", () => {
     expect(workflow).toContain("npm run runtime:release -- --output=release");
     expect(workflow).toContain("Verify release artifact manifest");
     expect(workflow).toContain("softprops/action-gh-release@v2");
+    expect(workflow).toContain("tag_name: ${{ env.RELEASE_TAG }}");
     expect(workflow).toContain("files: release/*");
     expect(workflow).not.toContain("run: node tooling/runtime/build-release.mjs --output=release");
     expect(workflow).not.toContain("user-test-evidence-");

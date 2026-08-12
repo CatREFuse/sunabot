@@ -4,12 +4,21 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Existing release tag to build
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag_name || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -20,17 +29,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
           cache: npm
       - name: Verify release tag and source versions
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
         run: node -e 'const fs=require("node:fs"); const read=(file)=>JSON.parse(fs.readFileSync(file,"utf8")); const pkg=read("package.json"); const pkgLock=read("package-lock.json"); const contract=read("deploy/runtime-contract.json"); const components=read("components/component.lock.json"); const expected=`v${pkg.version}`; if(process.env.RELEASE_TAG!==expected) throw new Error(`release tag ${process.env.RELEASE_TAG} must equal ${expected}`); if(contract.releaseVersion!==pkg.version||pkgLock.version!==pkg.version||pkgLock.packages?.[""]?.version!==pkg.version) throw new Error("package and runtime contract release versions must match"); if(JSON.stringify(contract.supportedPlatforms)!==JSON.stringify(components.supportedPlatforms)) throw new Error("runtime and component release platforms must match");'
       - name: Verify release tag source commit
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$(git rev-parse "${RELEASE_TAG}^{commit}")"
@@ -67,16 +73,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
           cache: npm
       - name: Verify release tag source commit
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$(git rev-parse "${RELEASE_TAG}^{commit}")"
+      - name: Enable Bubblewrap user namespaces
+        run: |
+          set -euo pipefail
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          if sysctl -n kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
       - run: npm ci
       - name: Build and verify release artifact
         run: npm run runtime:release -- --output=release
@@ -104,6 +116,7 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           fail_on_unmatched_files: true
           generate_release_notes: true
           files: release/*
