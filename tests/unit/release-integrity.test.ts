@@ -207,20 +207,27 @@ describe("Native release integrity", () => {
     await expect(validate(fixture)).rejects.toThrow("发行清单与锁定组件版本不一致");
   });
 
-  it("requires the GitHub workflow to run full verification, visual checks and the formal release gate", async () => {
+  it("requires deterministic verification and both self-contained release architectures", async () => {
     const workflow = await fs.readFile(path.join(projectRoot, ".github/workflows/release.yml"), "utf8");
+    const pkg = JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8")) as {
+      scripts: Record<string, string>;
+    };
 
     expect(workflow).toContain("npm run verify");
     expect(workflow).toContain("npm run test:visual");
-    expect(workflow).toContain("user-test-evidence-${RELEASE_TAG}");
-    expect(workflow.match(/git fetch --no-tags origin/g)).toHaveLength(2);
-    expect(workflow.match(/await materializeReleaseEvidenceFromGit/g)).toHaveLength(2);
-    expect(workflow).toContain("git cat-file -t");
-    expect(workflow).toContain("needs.gate.outputs.evidence_commit");
-    expect(workflow).toContain("npm run user-test -- release-gate --manifest .user-test-runs/release-manifest.json");
+    expect(workflow).toContain("runner: ubuntu-24.04");
+    expect(workflow).toContain("runner: ubuntu-24.04-arm");
+    expect(workflow).toContain("platform: linux-amd64");
+    expect(workflow).toContain("platform: linux-arm64");
     expect(workflow).toContain("npm run runtime:release -- --output=release");
+    expect(workflow).toContain("Verify release artifact manifest");
+    expect(workflow).toContain("softprops/action-gh-release@v2");
+    expect(workflow).toContain("files: release/*");
     expect(workflow).not.toContain("run: node tooling/runtime/build-release.mjs --output=release");
-    expect(workflow).not.toMatch(/sourceRevision\s*=/u);
+    expect(workflow).not.toContain("user-test-evidence-");
+    expect(workflow).not.toContain("release-gate --manifest");
+    expect(workflow).not.toContain("materializeReleaseEvidenceFromGit");
+    expect(pkg.scripts["runtime:release"]).toBe("node tooling/runtime/build-release.mjs");
   });
 
   it("materializes an exact root-only evidence tree without rewriting its bytes", async () => {

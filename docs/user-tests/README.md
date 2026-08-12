@@ -12,7 +12,7 @@ For every feature:
 4. If every mechanical assertion and quality criterion passes, run the remaining integration, safety, migration, runtime, build, E2E, visual, and platform-specific checks.
 5. Any failure returns to the primary Agent for diagnosis and repair. The fixture Agent reports evidence only.
 
-`npm test` keeps the repository automation in the same broad order: unit tests, harness self-tests, then integration and independent safety/migration lanes. Feature-specific live user tests are explicit because they consume a Provider and require an Agent quality review. `runtime:release` additionally requires `.user-test-runs/release-manifest.json`; a release cannot be built from omitted, stale, failed, blocked, inconclusive, or unreviewed case evidence.
+`npm test` keeps the repository automation in the same broad order: unit tests, harness self-tests, then integration and independent safety/migration lanes. Feature-specific live user tests are explicit because they consume a Provider and require an Agent quality review, and they run only after that external Provider use is authorized. Formal releases use deterministic `verify`, light/dark visual acceptance, dual-architecture builds and release-manifest verification; `runtime:release` does not require external Provider evidence.
 
 ## Case document
 
@@ -215,9 +215,9 @@ npm run user-test -- append \
 
 Fixture Agents do not patch product code. The primary Agent compares reports, reproduces failures, finds causes, applies scoped repairs, and starts the required cases again.
 
-## Release manifest gate
+## Optional release manifest review
 
-Each release lists every required executable harness case and its sealed reports in `.user-test-runs/release-manifest.json`. Case paths resolve relative to the manifest and must identify the exact checked-in documents required by the current release coverage contract. The manifest cannot reduce that set, substitute another document with the same case ID, add an unrelated case in place of a required case, or lower its checked-in independent-run quorum.
+An authorized live Provider review can list the required executable harness cases and sealed reports in `.user-test-runs/release-manifest.json`. Case paths resolve relative to the manifest and must identify the exact checked-in documents required by the selected review contract. The manifest cannot reduce that set, substitute another document with the same case ID, add an unrelated case in place of a required case, or lower its checked-in independent-run quorum.
 
 ```json
 {
@@ -252,7 +252,7 @@ Each release lists every required executable harness case and its sealed reports
 }
 ```
 
-The v0.3.0 coverage contract is exact:
+The optional v0.3.0 live-review contract is exact:
 
 | Capability | Canonical case ID | Canonical case document | Minimum independent runs |
 | --- | --- | --- | ---: |
@@ -260,7 +260,7 @@ The v0.3.0 coverage contract is exact:
 | Native Bash | `bash-agent-loop.admin-private-native-download` | `docs/user-tests/cases/bash-agent-loop/admin-private-native-download.md` | 2 |
 | Lightpanda WebFetch | `webfetch.admin-private-lightpanda-dynamic` | `docs/user-tests/webfetch-lightpanda-dynamic.md` | 2 |
 
-The Lightpanda case remains mandatory release evidence and runs in its declared Linux environment. A macOS run cannot remove it from the manifest. `offline-release-first-run.md`, `soul-package-roundtrip.md`, `native-core-single-container-boundary.md`, migration documents, CLI narratives, and cross-platform acceptance plans are deterministic or field-acceptance specifications; they do not count as executable harness cases and cannot appear in place of the three required documents. CI continues to cover their installer, CLI, Soul, runtime-contract, integration, runtime-smoke, E2E, visual and platform assertions through the dedicated deterministic lanes.
+When this optional contract is used, the Lightpanda case runs in its declared Linux environment and a macOS run cannot remove it from the manifest. `offline-release-first-run.md`, `soul-package-roundtrip.md`, `native-core-single-container-boundary.md`, migration documents, CLI narratives, and cross-platform acceptance plans are deterministic or field-acceptance specifications; they do not count as executable harness cases. CI covers their installer, CLI, Soul, runtime-contract, integration, runtime-smoke, E2E, visual and platform assertions through dedicated deterministic lanes.
 
 Validate it explicitly:
 
@@ -269,15 +269,15 @@ npm run user-test -- release-gate \
   --manifest .user-test-runs/release-manifest.json
 ```
 
-The gate selects the coverage contract from the checked-in release version, requires the manifest case paths to match that complete canonical set, verifies each canonical document's expected case ID, and then revalidates every sealed review against the current case digest and Git revision. Duplicate run IDs or reviewers remain invalid, and every case must satisfy its declared quorum without dropping below the checked-in minimum. `npm run runtime:release` runs this gate before creating a release. The GitHub tag workflow may publish only after `verify` and the light/dark visual matrix pass, then invokes `runtime:release` for each target architecture; calling the artifact builder directly is not a release path, and missing current-revision evidence fails the workflow before an archive is uploaded.
+The optional gate selects the coverage contract from the checked-in release version, requires the manifest case paths to match that complete canonical set, verifies each canonical document's expected case ID, and revalidates every sealed review against the current case digest and Git revision. Duplicate run IDs or reviewers remain invalid, and every case must satisfy its declared quorum without dropping below the checked-in minimum. `npm run runtime:release` does not invoke this gate. The GitHub tag workflow publishes only after `verify` and the light/dark visual matrix pass, then invokes `runtime:release` for each target architecture and verifies each archive manifest.
 
-### Immutable evidence tag
+### Optional immutable evidence archive
 
-A source tag such as `v0.3.0` requires the annotated evidence tag `user-test-evidence-v0.3.0`. The evidence tag points to an independent root commit whose tree contains exactly one root `release-manifest.json` and the root `*.sealed.json` files referenced by that manifest. Directories, symbolic links, executable files, unreferenced reports, missing reports, and all other paths are rejected. Every file uses Git mode `100644`; report paths in the manifest are direct filenames, while case documents continue to use the required source-tree paths such as `../docs/user-tests/single-workbench-resource-addressing.md` after extraction to `.user-test-runs/`.
+An authorized review can archive its evidence under an annotated tag such as `user-test-evidence-v0.3.0`. The evidence tag points to an independent root commit whose tree contains exactly one root `release-manifest.json` and the root `*.sealed.json` files referenced by that manifest. Directories, symbolic links, executable files, unreferenced reports, missing reports, and all other paths are rejected. Every file uses Git mode `100644`; report paths in the manifest are direct filenames, while case documents continue to use source-tree paths such as `../docs/user-tests/single-workbench-resource-addressing.md` after extraction to `.user-test-runs/`.
 
-The manifest and every sealed report must already contain the source tag's 40-character commit in `sourceRevision`. CI never edits those files. The gate job fetches the annotated evidence tag explicitly, verifies its tree and revision binding, writes the original blob bytes with mode `0600` under `.user-test-runs/`, runs the existing release gate, and pins the evidence commit as a job output. Both architecture jobs fetch the same tag again, reject a changed commit, materialize the same bytes, and run `runtime:release`. Protect `user-test-evidence-v*` from update and deletion in the repository ruleset; creating the evidence tag does not trigger the `v*` release workflow.
+The manifest and every sealed report must already contain the source tag's 40-character commit in `sourceRevision`. The optional materializer verifies the evidence tree and revision binding, then writes the original blob bytes with mode `0600` under `.user-test-runs/` for a manual audit. The GitHub release workflow does not fetch or materialize this archive. Protect `user-test-evidence-v*` from update and deletion when the optional archive is used.
 
-Create the evidence commit without changing the source working tree or ordinary Git index. Run this only after the source commit is final, `v0.3.0` points to `HEAD`, the manifest lists direct sealed-report filenames, and the local release gate passes:
+Create an optional evidence commit without changing the source working tree or ordinary Git index. Run this only after the source commit is final, `v0.3.0` points to `HEAD`, the manifest lists direct sealed-report filenames, and the manual release gate passes:
 
 ```bash
 SOURCE_TAG=v0.3.0

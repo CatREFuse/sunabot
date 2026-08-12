@@ -164,7 +164,7 @@
 - Dream、记忆压缩等分支夹具直接调用对应业务管线并把输入与持久化定向到临时 workspace。工作记忆、长期记忆、用户画像、会话及 Dream 的人格、任务、Director 日程必须在 case 中显式声明；live branch case 必须声明逻辑 `now` 与 `timePolicy: "rebase_to_runtime"`，所有结构化事件时间按同一偏移平移，Director 日程按目标 Dream 日期保留本地时刻重映射，报告保留不含正文的 timeline 证据。不得隐式继承源账号记忆。可以从正在运行的测试账号只读取样，但必须使用只读 SQLite 生成不可逆脱敏、时间平移的 V2 快照，先由 fixture Agent 人工复核自由文本，再通过 `derive-branch-case` 注入预先写好的 case；禁止在真实测试账号 workspace 上构造 Runtime、执行 migration、初始化 recall tracking 或写回数据。
 - harness 报告必须同时包含机械断言和质量评审。工具是否调用、参数/结果、分支状态、持久化 diff、outbox 属于机械证据；准确性、完整性、可用性、语气、是否虚构属于质量证据。缺少独立质量评审的 run 保持 `inconclusive`，不能上线。
 - required tool 只有在对应 `tool.call` 结果成功时才算通过；失败、仅排队或只出现在 Provider tool catalog 中都不能计为成功。动态 MCP tool 也必须保留调用与结果证据。
-- `runtime:release` 前必须使用 `.user-test-runs/release-manifest.json` 通过 release gate；清单必须覆盖本次功能的全部 case，并绑定当前 Git revision、当前 case digest、独立 run 与 reviewer。复杂核心 case 在清单中提高 `minimumIndependentRuns`，不得复用同一 run 或 reviewer 冒充并行复测。
+- 真实 Provider user test 与 sealed manifest 是按需执行的人工质量流程，只在任务已授权外部模型验收时运行。正式 tag 发行不依赖外部 Provider evidence；GitHub workflow 必须完成 `verify`、light/dark visual acceptance，并分别构建与自检 amd64/arm64 归档。
 - 用法、case 模板、review/gate 命令与覆盖边界见 `docs/user-tests/README.md`。harness 不能替代协议拒绝、安全故障注入、迁移恢复、并发幂等、视觉、跨平台或真实 NapCat/QQ 验收。
 
 基础验证：

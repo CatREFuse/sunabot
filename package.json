@@ -67,7 +67,7 @@
     "upgrade:0.3.0": "node tooling/migrations/upgrade-0.2.0-to-0.3.0.mjs",
     "runtime:doctor": "./sunabot.sh doctor",
     "runtime:contract": "node tooling/runtime/validate-contract.mjs",
-    "runtime:release": "npm run user-test -- release-gate --manifest .user-test-runs/release-manifest.json && node tooling/runtime/build-release.mjs",
+    "runtime:release": "node tooling/runtime/build-release.mjs",
     "runtime:native": "./sunabot.sh up",
     "runtime:launcher": "node tooling/runtime/launcher.mjs",
     "runtime:up": "./sunabot.sh up",

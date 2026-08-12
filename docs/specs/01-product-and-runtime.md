@@ -81,7 +81,7 @@ Linux amd64/arm64 发行包内置 Node.js `24.18.0`、生产 `node_modules`、Co
 
 安装脚本下载发行归档与 SHA-256，每次从下载归档解压新的不可变版本目录，在读取组件锁和运行 bootstrap 前使用包内校验器验证完整 manifest。全部运行时 smoke、NapCat 镜像准备和离线 bootstrap 成功后才原子切换 `current` 软链接；同版本重装不执行或覆盖已有目录，当前目录损坏时由新目录完成原子修复，任一失败保留原 `current`。NapCat/QQ 的公开再分发授权尚未确认，不随 Sunabot 归档重分发。安装完成后的普通启动固定使用 `pull never`，不执行 npm、浏览器或系统包下载。
 
-GitHub `v<version>` tag 发布必须经过完整 `verify`、light/dark visual acceptance，并由 `npm run runtime:release` 再次执行绑定当前 revision 的 user-test release gate 后分别构建 amd64/arm64 归档；任何 deterministic gate、sealed case quorum、正式构建或归档 manifest 失败都禁止创建 GitHub Release。
+GitHub `v<version>` tag 发布必须经过完整 `verify` 与 light/dark visual acceptance，再由 `npm run runtime:release` 分别构建 amd64/arm64 归档并核对平台、版本、组件和 manifest。真实 Provider user test 与 sealed evidence 只在显式授权后作为人工质量流程运行，不阻塞正式发行；任何 deterministic gate、正式构建或归档 manifest 失败都禁止创建 GitHub Release。
 
 0.2.0 到 0.3.0 必须停服运行 `npm run upgrade:0.3.0 -- plan|apply|verify|rollback`。plan 在资源与 SQLite 零修改状态检查全部 Agent；apply 只合并目标缺失或字节相同的普通文件，创建全 Agent SQLite 与资源恢复点，再归档旧 `docker-workbench/`；冲突时拒绝覆盖。verify 检查单一 Workbench、固定入口、归档与摘要；rollback 只在迁移后资源无 drift 时恢复。更早版本按目标版本逐级执行对应迁移脚本。
 

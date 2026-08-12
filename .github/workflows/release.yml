@@ -16,8 +16,6 @@ jobs:
   gate:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    outputs:
-      evidence_commit: ${{ steps.release_evidence.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,24 +28,13 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: node -e 'const fs=require("node:fs"); const read=(file)=>JSON.parse(fs.readFileSync(file,"utf8")); const pkg=read("package.json"); const pkgLock=read("package-lock.json"); const contract=read("deploy/runtime-contract.json"); const components=read("components/component.lock.json"); const expected=`v${pkg.version}`; if(process.env.RELEASE_TAG!==expected) throw new Error(`release tag ${process.env.RELEASE_TAG} must equal ${expected}`); if(contract.releaseVersion!==pkg.version||pkgLock.version!==pkg.version||pkgLock.packages?.[""]?.version!==pkg.version) throw new Error("package and runtime contract release versions must match"); if(JSON.stringify(contract.supportedPlatforms)!==JSON.stringify(components.supportedPlatforms)) throw new Error("runtime and component release platforms must match");'
-      - name: Load immutable user-test evidence tag
-        id: release_evidence
+      - name: Verify release tag source commit
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          EVIDENCE_TAG="user-test-evidence-${RELEASE_TAG}"
-          git fetch --no-tags origin "refs/tags/${EVIDENCE_TAG}:refs/tags/${EVIDENCE_TAG}"
-          test "$(git cat-file -t "refs/tags/${EVIDENCE_TAG}")" = tag
-          test "$(git cat-file -p "refs/tags/${EVIDENCE_TAG}" | awk '$1 == "type" { print $2; exit }')" = commit
-          SOURCE_COMMIT=$(git rev-parse "${RELEASE_TAG}^{commit}")
-          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
-          EVIDENCE_COMMIT=$(git rev-parse "${EVIDENCE_TAG}^{commit}")
-          node --input-type=module -e 'import { materializeReleaseEvidenceFromGit } from "./tooling/runtime/release-integrity.mjs"; await materializeReleaseEvidenceFromGit({ root: process.cwd(), evidenceCommit: process.argv[1], sourceCommit: process.argv[2] });' "$EVIDENCE_COMMIT" "$SOURCE_COMMIT"
-          echo "commit=$EVIDENCE_COMMIT" >> "$GITHUB_OUTPUT"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "${RELEASE_TAG}^{commit}")"
       - run: npm ci
-      - name: Validate current-revision sealed user-test evidence
-        run: npm run user-test -- release-gate --manifest .user-test-runs/release-manifest.json
       - name: Install Chromium for UI acceptance only
         run: npx playwright install --with-deps chromium
       - name: Run runtime, unit, harness, integration, smoke, build and E2E gates
@@ -84,23 +71,14 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
-      - name: Load gate-pinned immutable user-test evidence tag
+      - name: Verify release tag source commit
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-          EXPECTED_EVIDENCE_COMMIT: ${{ needs.gate.outputs.evidence_commit }}
         run: |
           set -euo pipefail
-          EVIDENCE_TAG="user-test-evidence-${RELEASE_TAG}"
-          git fetch --no-tags origin "refs/tags/${EVIDENCE_TAG}:refs/tags/${EVIDENCE_TAG}"
-          test "$(git cat-file -t "refs/tags/${EVIDENCE_TAG}")" = tag
-          test "$(git cat-file -p "refs/tags/${EVIDENCE_TAG}" | awk '$1 == "type" { print $2; exit }')" = commit
-          SOURCE_COMMIT=$(git rev-parse "${RELEASE_TAG}^{commit}")
-          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
-          EVIDENCE_COMMIT=$(git rev-parse "${EVIDENCE_TAG}^{commit}")
-          test "$EVIDENCE_COMMIT" = "$EXPECTED_EVIDENCE_COMMIT"
-          node --input-type=module -e 'import { materializeReleaseEvidenceFromGit } from "./tooling/runtime/release-integrity.mjs"; await materializeReleaseEvidenceFromGit({ root: process.cwd(), evidenceCommit: process.argv[1], sourceCommit: process.argv[2] });' "$EVIDENCE_COMMIT" "$SOURCE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "${RELEASE_TAG}^{commit}")"
       - run: npm ci
-      - name: Run formal user-test release gate and build artifact
+      - name: Build and verify release artifact
         run: npm run runtime:release -- --output=release
       - name: Verify release artifact manifest
         env:
