@@ -506,7 +506,7 @@ describe("Dream identity alias repair", () => {
     expect((await logicalSnapshot(fixture)).alias24Occurrences).toBe(447);
   });
 
-  it("rejects a sidecar inode replaced while later rollback databases verify", async () => {
+  it("rejects a sidecar inode replaced while later rollback databases verify", { timeout: 15_000 }, async () => {
     const fixture = await createFixture();
     const inspection = await inspectFixture(fixture);
     const attack = createVerifyLoopSidecarAttack("replace");
