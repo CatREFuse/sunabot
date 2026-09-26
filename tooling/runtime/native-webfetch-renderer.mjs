@@ -107,7 +107,7 @@ export async function createNativeWebfetchRendererLaunch(context, installation) 
   };
   return {
     args: [
-      ...linuxRendererBubblewrapPrefix(bubblewrapOptions),
+      ...linuxRendererBubblewrapPrefix({ ...bubblewrapOptions, dieWithParent: false }),
       installation.nodeExecutable,
       installation.supervisorEntry
     ],
@@ -200,7 +200,7 @@ export function linuxRendererBubblewrapPrefix(options) {
     .sort((left, right) => left.length - right.length)
     .filter((value, index, values) => !values.slice(0, index).some((parent) => isWithin(value, parent)));
   return [
-    "--die-with-parent",
+    ...(options.dieWithParent === false ? [] : ["--die-with-parent"]),
     "--unshare-user",
     "--unshare-pid",
     "--unshare-uts",

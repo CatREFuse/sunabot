@@ -328,6 +328,19 @@ describe("Native Core runtime launcher", () => {
     })).toBe("172.31.0.1");
   });
 
+  it("binds an idle WSL Docker bridge gateway when it is locally bindable", () => {
+    expect(selectNativeOnebotListenHost({
+      configuredHost: "docker-network-gateway-or-loopback",
+      dockerGateway: "172.31.0.1",
+      wsl: true,
+      gatewayBindable: true,
+      networkInterfaces: {
+        lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+        eth0: [{ address: "172.28.96.42", family: "IPv4", internal: false }]
+      }
+    })).toBe("172.31.0.1");
+  });
+
   it("fails closed instead of binding a non-local Docker gateway on native Linux", () => {
     expect(() => selectNativeOnebotListenHost({
       configuredHost: "docker-network-gateway",

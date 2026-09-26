@@ -222,7 +222,7 @@ async function upNative(context, before, secrets) {
   if (!context.dev) await ensureNativeBuild(context);
   const renderer = await prepareNativeWebfetchRenderer(context);
   const onebotListenHost = await resolveNativeOnebotListenHost(context);
-  if (await tcpOpen(onebotListenHost, context.contract.onebotPort)) {
+  if (!await canBindPort(onebotListenHost, context.contract.onebotPort)) {
     throw new Error(`${onebotListenHost}:${context.contract.onebotPort} 已被非当前 launcher 管理的进程占用。`);
   }
   try {
@@ -1053,9 +1053,11 @@ async function resolveNativeOnebotListenHost(context) {
     "--format",
     "{{(index .IPAM.Config 0).Gateway}}"
   ], { capture: true })).trim();
+  const gatewayBindable = net.isIP(gateway) === 4 && await canBindPort(gateway, 0);
   return selectNativeOnebotListenHost({
     configuredHost: context.contract.onebotHost,
     dockerGateway: gateway,
+    gatewayBindable,
     wsl: context.wsl,
     networkInterfaces: os.networkInterfaces(),
     network
@@ -1065,6 +1067,7 @@ async function resolveNativeOnebotListenHost(context) {
 export function selectNativeOnebotListenHost({
   configuredHost,
   dockerGateway,
+  gatewayBindable = false,
   wsl,
   networkInterfaces,
   network = "NapCat runtime network"
@@ -1080,7 +1083,7 @@ export function selectNativeOnebotListenHost({
     .flatMap((entries) => entries ?? [])
     .filter((entry) => entry.family === "IPv4" || entry.family === 4)
     .map((entry) => entry.address);
-  if (localAddresses.includes(dockerGateway)) return dockerGateway;
+  if (localAddresses.includes(dockerGateway) || gatewayBindable) return dockerGateway;
   if (wsl && configuredHost === "docker-network-gateway-or-loopback") return "127.0.0.1";
   throw runtimeError(
     "ONEBOT_DOCKER_GATEWAY_NOT_LOCAL",
@@ -2012,6 +2015,14 @@ function tcpOpen(host, port) {
   });
 }
 
+function canBindPort(host, port, allowUnavailable = false) {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.once("error", (error) => resolve(allowUnavailable && error.code === "EADDRNOTAVAIL"));
+    probe.listen(port, host, () => probe.close(() => resolve(true)));
+  });
+}
+
 async function waitForRuntimePortsClosed(context, state) {
   const onebotHost = state?.onebotListenHost
     ?? defaultNativeOnebotHealthHost(context.contract.onebotHost);
@@ -2025,7 +2036,7 @@ async function waitForRuntimePortsClosed(context, state) {
   while (Date.now() < deadline) {
     occupied = [];
     for (const endpoint of endpoints) {
-      if (await tcpOpen(endpoint.host, endpoint.port)) occupied.push(endpoint);
+      if (!await canBindPort(endpoint.host, endpoint.port, true)) occupied.push(endpoint);
     }
     if (occupied.length === 0) return;
     await delay(100);

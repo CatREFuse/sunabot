@@ -41,7 +41,7 @@ workspace/business/agents/<agentId>/workbench/
 
 Core、Bash、MCP、Skill Script 与 WebFetch 只以 Native 形态运行。NapCat 是唯一 Docker 组件；每个账号使用独立容器，不能并入 Core 或与 Core 共享业务文件系统。根目录 `./sunabot.sh` 统一负责初始化、启动顺序、健康检查、停止、日志和灵魂文件 CLI。`SUNABOT_CORE_MODE` 与 `--core` 已退役，传入时明确拒绝。
 
-管理台只发布到宿主回环 `127.0.0.1:8787`。OneBot 使用专用 `8788` 端口并强制 access token：Linux 与 WSL 内置 Docker Engine 绑定当前运行网络在 Native 命名空间内的 bridge gateway；WSL Docker Desktop 的 bridge gateway 位于独立 `docker-desktop` 发行版时，Core 只绑定 `127.0.0.1`，NapCat 通过 Docker Desktop 的 `host.docker.internal` 主机转发连接。启动器必须从 NapCat 镜像执行 `/healthz` 探针并使用探针确认的地址写入配置；gateway 不属于本机且安全回环转发不可达时回滚启动，不能改绑 `0.0.0.0`、WSL `eth0` 或局域网地址。每个 NapCat WebUI 只发布到宿主回环，首个账号默认使用 `127.0.0.1:6099`。跨组件媒体使用 OneBot `base64://`，不传递宿主、Core 或 NapCat 的共享绝对路径。
+管理台只发布到宿主回环 `127.0.0.1:8787`。OneBot 使用专用 `8788` 端口并强制 access token：Linux 与 WSL 内置 Docker Engine 绑定当前运行网络在 Native 命名空间内的 bridge gateway；空闲网桥未出现在 Node 网络接口列表时，以该 gateway 的本机绑定探针确认归属。WSL Docker Desktop 的 bridge gateway 位于独立 `docker-desktop` 发行版时，Core 只绑定 `127.0.0.1`，NapCat 通过 Docker Desktop 的 `host.docker.internal` 主机转发连接。启动器必须从 NapCat 镜像执行 `/healthz` 探针并使用探针确认的地址写入配置；gateway 不属于本机且安全回环转发不可达时回滚启动，不能改绑 `0.0.0.0`、WSL `eth0` 或局域网地址。每个 NapCat WebUI 只发布到宿主回环，首个账号默认使用 `127.0.0.1:6099`。跨组件媒体使用 OneBot `base64://`，不传递宿主、Core 或 NapCat 的共享绝对路径。
 
 ## 3. 启动、状态与首次运行
 
@@ -65,7 +65,7 @@ Codex CLI `0.139.0` 是固定生产依赖。发行包从生产 `node_modules` �
 
 静态 WebFetch 在 Core 内使用 Node 抓取和 Defuddle 提取正文。正文不足时，Linux/WSL 调用由 launcher 监管的 Lightpanda 0.3.3 Renderer；该引擎不依赖 Chrome、Chromium、Blink、WebKit 或 Playwright。Renderer 只监听回环、使用每次启动生成的 bearer token、禁用遥测，并在独立临时 HOME/cache/run 中运行。
 
-Linux/WSL Renderer 由 Bubblewrap 遮蔽仓库、workspace、secrets、Provider、Codex、OneBot、NapCat 凭据和浏览器用户目录。安全代理对 HTTP(S)、重定向、CONNECT、请求数、并发、响应字节和总预算执行统一限制；下载、WebSocket、非 GET 与不受支持资源类型失败关闭。Renderer 不保存 Cookie 或原始 HTML。发行形态忽略宿主 Lightpanda 覆盖，只使用 manifest 保护的包内可执行文件；renderer token 由 launcher 生成并通过文件描述符交给 Linux Core 与 Renderer。Linux/WSL 把动态 Renderer 作为发行必需能力，Lightpanda、Bubblewrap 包内运行库、鉴权、真实 namespace probe 或健康值无法验证时，bootstrap 与启动失败；macOS Core 不接收 renderer URL 或 token，动态能力返回明确 unavailable，静态抓取继续可用。
+Linux/WSL Renderer 由 Bubblewrap 遮蔽仓库、workspace、secrets、Provider、Codex、OneBot、NapCat 凭据和浏览器用户目录。安全代理对 HTTP(S)、重定向、CONNECT、请求数、并发、响应字节和总预算执行统一限制；下载、WebSocket、非 GET 与不受支持资源类型失败关闭。Renderer 不保存 Cookie 或原始 HTML。发行形态忽略宿主 Lightpanda 覆盖，只使用 manifest 保护的包内可执行文件；renderer token 由 launcher 生成并通过文件描述符交给 Linux Core 与 Renderer。长期运行的 Renderer 在 launcher 退出后保持存活，停止流程通过已验证进程组回收；短时隔离探针仍随父进程退出。Linux/WSL 把动态 Renderer 作为发行必需能力，Lightpanda、Bubblewrap 包内运行库、鉴权、真实 namespace probe 或健康值无法验证时，bootstrap 与启动失败；macOS Core 不接收 renderer URL 或 token，动态能力返回明确 unavailable，静态抓取继续可用。
 
 ## 6. 代理与平台
 
