@@ -132,8 +132,8 @@
     "composeFile": "deploy/napcat/compose.yml",
     "service": "napcat",
     "network": { "name": "sunabot-napcat", "nameEnv": "SUNABOT_NAPCAT_NETWORK" },
-    "image": "docker.io/mlikiowa/napcat-docker:v4.15.0",
-    "digest": "sha256:cde89d766604e570517e9ce66304d4222210479d2209ec04e5d58890dea087f7",
+    "image": "docker.io/mlikiowa/napcat-docker:v4.18.28",
+    "digest": "sha256:2cc70b45244ae3fabc657ffc3aaa4de8fb893518171e519659ab83d80e6d36b5",
     "pullPolicy": "never",
     "labels": {
       "runtimeId": "io.sunabot.runtime-id",

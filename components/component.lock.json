@@ -46,17 +46,17 @@
       "smoke": ["lightpanda", "version"]
     },
     "napcat": {
-      "version": "4.15.0",
+      "version": "4.18.28",
       "source": "https://github.com/NapNeko/NapCat-Docker",
-      "image": "docker.io/mlikiowa/napcat-docker:v4.15.0",
-      "digest": "sha256:cde89d766604e570517e9ce66304d4222210479d2209ec04e5d58890dea087f7",
+      "image": "docker.io/mlikiowa/napcat-docker:v4.18.28",
+      "digest": "sha256:2cc70b45244ae3fabc657ffc3aaa4de8fb893518171e519659ab83d80e6d36b5",
       "license": "pending-review",
       "redistribution": "local-build-only-pending-review",
       "architectures": ["linux/amd64", "linux/arm64"],
       "smoke": ["test", "-f", "/app/napcat/napcat.mjs"]
     },
     "qq": {
-      "version": "3.2.21-42086",
+      "version": "3.2.30-50969",
       "source": "https://im.qq.com/linuxqq/index.shtml",
       "integrity": "provided-by-napcat-image-digest",
       "license": "proprietary",

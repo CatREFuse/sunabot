@@ -90,3 +90,7 @@ GitHub `v<version>` tag 发布必须经过完整 `verify` 与 light/dark visual 
 管理台与 `./sunabot.sh soul` 共用 `sunabot.soul` schema version 1。导出只包含当前 Agent Prompt Catalog 中全部 `scope=persona` 文件及来源 metadata；不包含 Agent manifest、管理员、Provider、密钥、QQ、NapCat、SQLite、记忆、头像或 Workbench。
 
 导入必须经过严格 schema、UTF-8、大小、文件映射和摘要校验。预览绑定上传包 SHA-256 与目标全部人格文件的聚合 revision；确认时任一摘要或 revision 变化返回冲突且零写入。有效导入在同一管理写事务中预校验、暂存、备份和替换全部人格文件，并只执行一次 runtime reload；提交或 reload 失败时全量恢复。来源 metadata 不修改目标 Agent ID、名称、manifest、账号或业务数据。
+
+### 本地 QQ 兼容更新（2026-10-01）
+
+NapCat 镜像锁定为 4.18.28，摘要为 `sha256:2cc70b45244ae3fabc657ffc3aaa4de8fb893518171e519659ab83d80e6d36b5`；amd64 镜像内 QQ 为 3.2.30-50969。旧 QQ 3.2.21-42086 在本机扫码时被服务器以错误码 45 拒绝。镜像清单包含 linux/amd64 和 linux/arm64，实际启动验证限于 WSL amd64；arm64 登录及真实群消息外发尚未验收。更新仍保留摘要锁定和启动零下载合同。
