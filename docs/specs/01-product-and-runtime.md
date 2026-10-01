@@ -93,4 +93,4 @@ GitHub `v<version>` tag 发布必须经过完整 `verify` 与 light/dark visual 
 
 ### 本地 QQ 兼容更新（2026-10-01）
 
-NapCat 镜像锁定为 4.18.28，摘要为 `sha256:2cc70b45244ae3fabc657ffc3aaa4de8fb893518171e519659ab83d80e6d36b5`；amd64 镜像内 QQ 为 3.2.30-50969。旧 QQ 3.2.21-42086 在本机扫码时被服务器以错误码 45 拒绝。镜像清单包含 linux/amd64 和 linux/arm64，实际启动验证限于 WSL amd64；arm64 登录及真实群消息外发尚未验收。更新仍保留摘要锁定和启动零下载合同。
+NapCat 镜像锁定为 4.18.28，摘要为 `sha256:2cc70b45244ae3fabc657ffc3aaa4de8fb893518171e519659ab83d80e6d36b5`；amd64 镜像内 QQ 为 3.2.30-50969。旧 QQ 3.2.21-42086 在本机扫码时被服务器以错误码 45 拒绝。镜像清单包含 linux/amd64 和 linux/arm64，实际启动验证限于 WSL amd64；2026-10-01 已完成阿罗娜扫码、OneBot 在线、目标群上线问候外发及真实入站 ping/Pong 回复验证。arm64 与双 QQ 同时在线尚未验收。更新仍保留摘要锁定和启动零下载合同。
