@@ -138,9 +138,9 @@ describe("tool call timeout", () => {
     expect(DIRECT_REPLY_TIMEOUT_MS).toBe(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS);
     expect(processState.calls[0]?.timeout).toBe(0);
     expect(processState.calls[0]?.killSignal).toBe("SIGKILL");
-    expect(processState.calls[0]?.file).toBe("/fixture/prlimit");
+    expect(processState.calls[0]?.file).toBe("/fixture/bwrap");
     expect(processState.calls[0]?.args).toEqual(expect.arrayContaining([
-      "--nproc=64:64", "/fixture/bwrap", "--die-with-parent", "--tmpfs", "/", "--cap-drop", "ALL"
+      "--nproc=64:64", "/fixture/prlimit", "--die-with-parent", "--tmpfs", "/", "--cap-drop", "ALL"
     ]));
     expect(processState.calls[0]?.args).not.toContain("--unshare-net");
     expect(processState.calls[0]?.args).toEqual(expect.arrayContaining([
@@ -854,7 +854,7 @@ describe("tool call timeout", () => {
     });
     expect(result.stderr).toContain("BASH_EXECUTION_TIMEOUT");
     expect(processState.calls).toHaveLength(1);
-    expect(processState.calls[0]?.file).toBe("/fixture/prlimit");
+    expect(processState.calls[0]?.file).toBe("/fixture/bwrap");
   });
 
 });

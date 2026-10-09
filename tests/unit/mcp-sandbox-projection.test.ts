@@ -190,7 +190,8 @@ describe("MCP sandbox projection", () => {
       stderr: "pipe",
       killScope: "process_group"
     }, projection, { launchProjection });
-    expect(invocation.file).toBe("/usr/bin/prlimit");
+    expect(invocation.file).toBe("/usr/bin/bwrap");
+    expect(invocation.args.indexOf("--nproc=64:64")).toBeGreaterThan(invocation.args.indexOf("--"));
     expect(invocation.args).toEqual(expect.arrayContaining([
       "--unshare-net",
       "--clearenv",

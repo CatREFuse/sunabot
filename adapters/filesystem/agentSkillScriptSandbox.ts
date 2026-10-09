@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { NATIVE_TOOL_CONFIG_DIRECTORIES, NATIVE_TOOL_RESOURCE_LIMITS, nativeNodeRuntimeMounts, nativeToolPath } from "../../packages/platform/nativeToolSandbox.mjs";
 import { safeRelativeResourcePath } from "../../packages/contracts/extensions/agentRuntimeExtensions.js";
 import {
   assertPinnedProjectedSkillScript,
@@ -20,7 +21,6 @@ export const SKILL_SCRIPT_MAX_OUTPUT_BYTES = 64 * 1024;
 
 const BWRAP = "/usr/bin/bwrap";
 const PRLIMIT = "/usr/bin/prlimit";
-const FIXED_PATH = "/usr/local/bin:/usr/bin:/bin";
 const SHA256 = /^[a-f0-9]{64}$/u;
 const SAFE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 
@@ -132,7 +132,7 @@ export class StrongIsolatedAgentSkillScriptSandbox implements AgentSkillScriptSa
       prlimitExecutable: this.options.prlimitExecutable
     });
     await Promise.all([
-      assertExecutable(invocation.file),
+      assertExecutable(this.options.prlimitExecutable ?? PRLIMIT),
       assertExecutable(bwrapExecutable),
       assertExecutable(input.interpreter)
     ]);
@@ -161,13 +161,6 @@ export function buildSkillScriptBubblewrapInvocation(
   const bwrap = validateAbsoluteExecutable(options.bwrapExecutable ?? BWRAP);
   const prlimit = validateAbsoluteExecutable(options.prlimitExecutable ?? PRLIMIT);
   const args = [
-    "--nproc=64:64",
-    "--as=536870912:536870912",
-    "--nofile=128:128",
-    "--fsize=268435456:268435456",
-    "--core=0:0",
-    "--",
-    bwrap,
     "--die-with-parent",
     "--new-session",
     "--unshare-user",
@@ -189,6 +182,11 @@ export function buildSkillScriptBubblewrapInvocation(
   for (const directory of ["/usr", "/bin", "/sbin", "/lib", "/lib64"]) {
     args.push("--dir", directory, "--ro-bind-try", directory, directory);
   }
+  args.push(...nativeNodeRuntimeMounts());
+  args.push("--dir", "/etc");
+  for (const directory of NATIVE_TOOL_CONFIG_DIRECTORIES) {
+    args.push("--ro-bind-try", directory, directory);
+  }
   for (const file of ["/etc/passwd", "/etc/group", "/etc/localtime"]) {
     addVirtualParents(args, file);
     args.push("--ro-bind-try", file, file);
@@ -200,16 +198,19 @@ export function buildSkillScriptBubblewrapInvocation(
     "--clearenv",
     "--setenv", "HOME", "/workbench",
     "--setenv", "PWD", "/workbench",
-    "--setenv", "PATH", FIXED_PATH,
+    "--setenv", "PATH", nativeToolPath(),
     "--setenv", "LANG", "C.UTF-8",
     "--setenv", "LC_ALL", "C.UTF-8",
     "--setenv", "TMPDIR", "/tmp",
+    "--",
+    prlimit,
+    ...NATIVE_TOOL_RESOURCE_LIMITS,
     "--",
     input.interpreter,
     input.projection.virtualScript,
     ...input.args
   );
-  return { kind: "bubblewrap", file: prlimit, args, env: {} };
+  return { kind: "bubblewrap", file: bwrap, args, env: {} };
 }
 
 async function executeInvocation(

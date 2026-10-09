@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { NATIVE_TOOL_CONFIG_DIRECTORIES, NATIVE_TOOL_RESOURCE_LIMITS, nativeNodeRuntimeMounts, nativeToolPath } from "../../packages/platform/nativeToolSandbox.mjs";
 import type {
   HardenedStdioLaunchHandlers,
   HardenedStdioLaunchSpec,
@@ -33,7 +34,6 @@ import {
 
 const BWRAP = "/usr/bin/bwrap";
 const PRLIMIT = "/usr/bin/prlimit";
-const FIXED_PATH = "/usr/local/bin:/usr/bin:/bin";
 
 export function resolveMcpBubblewrapExecutable(
   environment: Readonly<Record<string, string | undefined>> = process.env
@@ -148,13 +148,6 @@ export function buildMcpBubblewrapInvocation(
   const bwrap = executables.bwrap ?? BWRAP;
   const prlimit = executables.prlimit ?? PRLIMIT;
   const args = [
-    "--nproc=64:64",
-    "--as=536870912:536870912",
-    "--nofile=128:128",
-    "--fsize=268435456:268435456",
-    "--core=0:0",
-    "--",
-    bwrap,
     "--die-with-parent",
     "--new-session",
     "--unshare-user",
@@ -185,7 +178,8 @@ export function buildMcpBubblewrapInvocation(
   for (const directory of ["/usr", "/bin", "/sbin", "/lib", "/lib64"]) {
     args.push("--dir", directory, "--ro-bind-try", directory, directory);
   }
-  for (const directory of ["/etc/ssl", "/etc/ca-certificates"]) {
+  args.push(...nativeNodeRuntimeMounts());
+  for (const directory of ["/etc/ssl", "/etc/ca-certificates", ...NATIVE_TOOL_CONFIG_DIRECTORIES]) {
     addVirtualParents(args, directory);
     args.push("--ro-bind-try", directory, directory);
   }
@@ -204,13 +198,13 @@ export function buildMcpBubblewrapInvocation(
     "--clearenv",
     "--setenv", "HOME", "/workbench",
     "--setenv", "PWD", "/workbench",
-    "--setenv", "PATH", FIXED_PATH,
+    "--setenv", "PATH", nativeToolPath(),
     "--setenv", "LANG", "C.UTF-8",
     "--setenv", "LC_ALL", "C.UTF-8",
     "--setenv", "TMPDIR", "/tmp"
   );
-  args.push("--", MCP_STDIO_ENTRYPOINT_VIRTUAL_PATH);
-  return { file: prlimit, args };
+  args.push("--", prlimit, ...NATIVE_TOOL_RESOURCE_LIMITS, "--", MCP_STDIO_ENTRYPOINT_VIRTUAL_PATH);
+  return { file: bwrap, args };
 }
 
 async function assertExecutable(file: string) {

@@ -88,7 +88,7 @@ describe("admin API smoke", () => {
     const files = await app.inject({ method: "GET", url: scopedUrl("/api/agent-files"), headers });
     const systemFiles = await app.inject({ method: "GET", url: scopedUrl("/api/system-prompt-files"), headers });
     expect(models.statusCode).toBe(200);
-    expect(models.json().models).toHaveLength(7);
+    expect(models.json().models).toHaveLength(9);
     expect(envelope.statusCode).toBe(200);
     expect(envelope.json().revision).toMatch(/^[a-f0-9]{64}$/);
     expect(files.statusCode).toBe(200);

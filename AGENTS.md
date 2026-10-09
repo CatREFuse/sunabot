@@ -46,6 +46,7 @@
 | `docs/user-tests/soul-package-roundtrip.md` | 当前 Agent 人格提示词灵魂文件的导出、预览、冲突导入与往返 | 修改灵魂文件 schema、批量提示词事务、WebUI 或 CLI 入口时读取 |
 | `docs/user-tests/offline-release-first-run.md` | Linux/WSL 自包含发行版、安装完整性、零下载启动与首次 Landing | 修改发行资产、安装脚本、首次启动或管理员初始化时读取 |
 | `docs/user-tests/native-core-single-container-boundary.md` | Native Core 与每账号一个 NapCat 容器的唯一运行边界 | 修改 Core、NapCat、Bash、MCP、Skill 或 Renderer 运行形态时读取 |
+| `docs/user-tests/cases/bash-agent-loop/wsl-native-runtime-compatibility.md` | WSL 高线程负载下的 Bash、Node、Python 执行及诊断一致性 | 修改 Native 工具资源限制、Node 挂载或 Bash 探针时读取 |
 | `docs/user-tests/webfetch-lightpanda-dynamic.md` | Linux/WSL Lightpanda 动态抓取、macOS unavailable 与静态回退 | 修改 WebFetch 动态 Renderer、平台能力或发行依赖时读取 |
 | `docs/user-tests/bash-skill-repository-install.md` | 管理员通过 Native Bash 完成 Skill 安装、审查、启用与回读 | 修改 Bash Skill 仓库命令、安装流程或系统提示词时读取 |
 | `docs/user-tests/workbench-image-reference.md` | workbench 图片相对路径直接进入生图工具的用户用例 | 修改 workbench 图片参数或生图参考解析时读取 |

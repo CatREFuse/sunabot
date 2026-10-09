@@ -61,6 +61,12 @@ MCP 与 Skill Script 由 Native Core 管理。Linux/WSL 的 stdio 进程和脚�
 
 Codex CLI `0.139.0` 是固定生产依赖。发行包从生产 `node_modules` 提供 CLI；授权保存在当前 workspace 的 `secrets/codex/auth.json`。CLI 缺失或版本不匹配时 doctor 报告明确错误，授权缺失时 Core 保持可启动以完成设备登录，但 Codex 工具不可调用。
 
+Linux/WSL Native 工具的 `prlimit` 在 Bubblewrap 完成 user/PID namespace 后启动，64 线程配额作用于本次隔离用户环境，不能在创建隔离环境前使用宿主 UID 的线程总数阻断执行。虚拟地址空间上限为 4 GiB，以支持锁定 Node 24 的地址预留；文件描述符 128、单文件 256 MiB、core dump 禁用及原有命令期限继续保留。当前 Node 位于系统挂载之外时，只读挂载该 Node 发行目录，并将其 bin 目录加入隔离 PATH，不能挂载整个宿主 HOME。`doctor`、启动预检与 Bash 使用同一隔离调用构造器，诊断必须实际执行 Node 和基础命令，不能只以无资源限制的 namespace probe 宣称 Bash 可用。
+
+系统 alternatives、字体、LibreOffice 与 ImageMagick 配置目录按需只读投影，使已安装的媒体和文档命令能够解析系统依赖；不投影宿主用户配置。源码部署中的 zip、unzip、ripgrep、FFmpeg、ImageMagick、Pandoc、Poppler 和 LibreOffice 由宿主显式安装，普通启动不下载软件。
+
+启动器读取 `ps` 进程身份时只解析成功命令的 stdout，WSL 终端尺寸等 stderr 警告不能进入启动时间签名；捕获输出必须等待 stdio close，不能在 exit 时丢失尾部数据。命令失败时保留 stderr 诊断，命令行使用宽输出以避免身份参数被截断。
+
 ## 5. WebFetch
 
 静态 WebFetch 在 Core 内使用 Node 抓取和 Defuddle 提取正文。正文不足时，Linux/WSL 调用由 launcher 监管的 Lightpanda 0.3.3 Renderer；该引擎不依赖 Chrome、Chromium、Blink、WebKit 或 Playwright。Renderer 只监听回环、使用每次启动生成的 bearer token、禁用遥测，并在独立临时 HOME/cache/run 中运行。

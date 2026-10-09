@@ -11,6 +11,7 @@ import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import dotenv from "dotenv";
 import { installGlobalProxyDispatcher } from "../../packages/platform/proxy.mjs";
+import { buildNativeBashSandboxInvocation, nativeToolPath } from "../../packages/platform/nativeToolSandbox.mjs";
 import { validateMultiAgentWorkspacePath } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
 import {
@@ -1185,27 +1186,12 @@ async function componentHealthStatus(context, containerId) {
 }
 
 export function bubblewrapProbeArguments(workspace, networkAccess = false) {
-  const args = [
-    "--die-with-parent",
-    "--new-session",
-    "--unshare-user",
-    "--unshare-pid",
-    "--unshare-uts",
-    "--unshare-ipc",
-    "--unshare-cgroup-try",
-    "--uid", "0",
-    "--gid", "0",
-    "--cap-drop", "ALL",
-    "--ro-bind", "/", "/",
-    "--dev", "/dev",
-    "--bind", workspace, workspace,
-    "--proc", "/proc",
-    "--chdir", workspace,
-    "--clearenv",
-    "--", "/bin/bash", "--noprofile", "--norc", "-lc", ":"
-  ];
-  if (!networkAccess) args.splice(args.indexOf("--unshare-cgroup-try"), 0, "--unshare-net");
-  return args;
+  return buildNativeBashSandboxInvocation({
+    workbenchRoot: workspace,
+    environment: { PATH: nativeToolPath(), HOME: "/workbench", LANG: "C.UTF-8" },
+    networkAccess,
+    executionArguments: ["/bin/bash", "--noprofile", "--norc", "-c", "node -e 'process.exit(0)' && /usr/bin/true"]
+  }).args;
 }
 
 export function bubblewrapExecutable(context) {
@@ -1770,7 +1756,7 @@ async function inspectNativeCapabilities(context) {
   try {
     if (process.platform === "linux") {
       await command(bubblewrapExecutable(context), bubblewrapProbeArguments(context.workspace, true), { capture: true });
-      workspaceBash = { ok: true, detail: "bubblewrap namespace probe passed" };
+      workspaceBash = { ok: true, detail: "bubblewrap resource and Node execution probe passed" };
     } else if (process.platform === "darwin") {
       await fs.access("/bin/bash", fs.constants.X_OK);
       workspaceBash = { ok: true, detail: "approved administrator host Bash available" };
@@ -1909,8 +1895,8 @@ async function observeProcess(pid) {
   if (!Number.isInteger(Number(pid)) || !await processAlive(Number(pid))) return null;
   try {
     const [signature, commandLine] = await Promise.all([
-      command("ps", ["-p", String(pid), "-o", "lstart="], { capture: true }),
-      command("ps", ["-p", String(pid), "-o", "command="], { capture: true })
+      command("ps", ["-p", String(pid), "-o", "lstart="], { capture: "stdout" }),
+      command("ps", ["-ww", "-p", String(pid), "-o", "command="], { capture: "stdout" })
     ]);
     return { signature: signature.trim(), command: commandLine.trim() };
   } catch {
@@ -2075,6 +2061,7 @@ function dockerCommand(context, args, options = {}) {
 export function command(executable, args, options = {}) {
   return new Promise((resolve, reject) => {
     const output = [];
+    const stdout = [];
     let outputBytes = 0;
     let settled = false;
     let terminating = false;
@@ -2113,7 +2100,7 @@ export function command(executable, args, options = {}) {
       forceKill.unref?.();
     };
     if (options.capture) {
-      const collect = (chunk) => {
+      const collect = (chunk, fromStdout = false) => {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         outputBytes += buffer.byteLength;
         if (outputBytes > maxOutputBytes) {
@@ -2121,8 +2108,9 @@ export function command(executable, args, options = {}) {
           return;
         }
         output.push(buffer);
+        if (fromStdout && options.capture === "stdout") stdout.push(buffer);
       };
-      child.stdout.on("data", collect);
+      child.stdout.on("data", (chunk) => collect(chunk, true));
       child.stderr.on("data", collect);
     }
     if (timeoutMs > 0) {
@@ -2135,11 +2123,11 @@ export function command(executable, args, options = {}) {
       timeout.unref?.();
     }
     child.once("error", (error) => finish(() => reject(terminalError ?? error)));
-    child.once("exit", (code, signal) => {
+    child.once(options.capture ? "close" : "exit", (code, signal) => {
       const text = Buffer.concat(output).toString("utf8");
       finish(() => {
         if (terminalError) reject(terminalError);
-        else if (code === 0) resolve(text);
+        else if (code === 0) resolve(options.capture === "stdout" ? Buffer.concat(stdout).toString("utf8") : text);
         else reject(new Error(`${executable} ${args.slice(0, 4).join(" ")} 失败（${signal || code}）${text ? `：${text.trim()}` : ""}`));
       });
     });

@@ -46,7 +46,7 @@ describe("Native Core runtime launcher", () => {
     expect(nativeCapabilities).toContain(
       "command(bubblewrapExecutable(context), bubblewrapProbeArguments(context.workspace, true)"
     );
-    expect(nativeCapabilities).toContain("bubblewrap namespace probe passed");
+    expect(nativeCapabilities).toContain("bubblewrap resource and Node execution probe passed");
   });
 
   it("probes the isolated namespace used by Linux workspace Bash", () => {
@@ -58,10 +58,15 @@ describe("Native Core runtime launcher", () => {
       "--unshare-uts",
       "--unshare-ipc",
       "--unshare-net",
-      "--unshare-cgroup-try"
+      "--unshare-cgroup",
+      "/usr/bin/prlimit",
+      "--nproc=64:64"
     ]));
     expect(args.filter((argument) => argument === "--unshare-net")).toHaveLength(1);
     expect(args.indexOf("--unshare-net")).toBeLessThan(args.indexOf("--"));
+    expect(args.indexOf("--nproc=64:64")).toBeGreaterThan(args.indexOf("--"));
+    expect(args.join(" ")).toContain("node -e");
+    expect(args).not.toContain("--unshare-cgroup-try");
     expect(bubblewrapProbeArguments("/srv/sunabot/workspace", true)).not.toContain("--unshare-net");
   });
 
@@ -251,6 +256,26 @@ describe("Native Core runtime launcher", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each([0, 1])("keeps ps stderr out of successful process evidence and preserves failures (%s)", async (code) => {
+    class FakeChild extends EventEmitter {
+      stdout = new EventEmitter();
+      stderr = new EventEmitter();
+    }
+    const child = new FakeChild();
+    const pending = command("ps", ["-p", "123", "-o", "lstart="], {
+      capture: "stdout",
+      spawnProcess: () => child
+    });
+    const outcome = code === 0
+      ? expect(pending).resolves.toBe("Sat Oct 10 00:00:00 2026\n")
+      : expect(pending).rejects.toThrow("screen size is bogus");
+    child.emit("exit", code, null);
+    child.stderr.emit("data", Buffer.from("screen size is bogus\n"));
+    child.stdout.emit("data", Buffer.from("Sat Oct 10 00:00:00 2026\n"));
+    child.emit("close", code, null);
+    await outcome;
   });
 
   it("builds a launcher-owned Native Core identity without a Docker socket", () => {
