@@ -8,6 +8,8 @@ import {
 describe("model catalog", () => {
   it("exposes the required model IDs in product order", () => {
     expect(MODEL_CATALOG.map((model) => model.id)).toEqual([
+      "gpt-6.1-sol",
+      "gpt-6-luna",
       "gpt-5.5",
       "gpt-5.6-sol",
       "gpt-5.6-terra",

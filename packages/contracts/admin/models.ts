@@ -19,6 +19,8 @@ export const REASONING_EFFORTS: readonly ReasoningEffort[] = [
 ];
 
 export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
+  model("gpt-6.1-sol", "6.1 Sol", "medium", ["low", "medium", "high", "xhigh", "max"]),
+  model("gpt-6-luna", "6 Luna", "medium", ["none", "low", "medium", "high", "xhigh", "max"]),
   model("gpt-5.5", "5.5", "medium", ["low", "medium", "high", "xhigh"]),
   model("gpt-5.6-sol", "5.6 Sol", "low", ["low", "medium", "high", "xhigh", "max", "ultra"]),
   model("gpt-5.6-terra", "5.6 Terra", "medium", ["low", "medium", "high", "xhigh", "max", "ultra"]),

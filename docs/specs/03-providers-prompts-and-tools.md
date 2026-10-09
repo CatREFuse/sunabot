@@ -227,3 +227,7 @@ macOS 的 `native_bash` 向模型返回当前 Agent canonical Workbench 的真�
 Dream 的 Provider-facing `response_format` 固定为 `text`，JSON 由提示词和宿主解析器严格约束。普通文本、Markdown code fence、无效 JSON、字段顺序错误、缺失或额外字段、错误类型、超限工作记忆正文和空梦境正文均在 `markGenerated` 前以 `DREAM_OUTPUT_CONTRACT_INVALID` 失败；同一运行最多自动尝试三次。官方模板通过 `dream-minimal-contract-v9` 保留式迁移为当前唯一合同，清除旧 review、单项工作记忆、来源 ID、人格、场域知识、原因输出与遗忘说明，管理员其他正文、消息顺序、工具和响应配置保持不变。
 
 `dream.payload` 发送给模型前执行白名单投影与 256 KiB 总预算。当前工作记忆以完整 `workingMemory` 字符串进入压缩；既有长期记忆只作为新增去重参考，其投影不携带 `sourceWorkingMemoryIds`、`sourceLongTermMemoryIds` 或其他旧单项来源链。实际对话、任务、日程与人格只用于理解事实和生成梦境。凭据、秘密、邮箱、签名参数和宿主绝对路径继续脱敏；工作记忆、长期记忆、会话、任务与日程是软链接，提交时版本变化只跳过对应写入或按既有快照合同失败，不恢复旧数据，也不扩展 Dream 的写入范围。
+
+### Codex 模型目录与本地模型选择（2026-10-09）
+
+Codex 模型目录增加 `gpt-6.1-sol` 和 `gpt-6-luna`。GPT-6.1 Sol 支持 low、medium、high、xhigh、max；GPT-6 Luna 另支持 none。默认推理强度均为 medium。管理员为阿罗娜选择主回复 gpt-6.1-sol/medium、独立 Tone gpt-6-luna/low；已核对目录 API 与配置回读，两模型的真实 Codex 订阅测试均返回成功；38 项目录/配置测试、84 项 runtime smoke、运行合同、类型检查和构建通过。既有人格与其他模型路由保持原配置。
