@@ -2,6 +2,8 @@
 
 [返回当前系统规范索引](./index.md)
 
+会话图片恢复验收使用真实本地 HTTP 图片服务与生产默认 Undici 传输，覆盖 IPv4 与混合地址族固定 DNS；`AuthenticatedImage` 组件测试覆盖头像、远程图片和显式占位，`conversation-images.visual.spec.ts` 检查 light/dark 的移动端和桌面图片加载及无无效头像缩略请求。
+
 Native 工具资源回归覆盖 `tests/integration/native-tool-sandbox.test.ts`：Linux/WSL 同 UID 超过 64 个宿主线程时，生产隔离器仍能执行 Bash、Node 与 Python；降低隔离内线程上限后的有界 fork 必须失败，证明限制继续生效。启动诊断复用生产调用构造器，故意降低 Node 虚拟地址空间配额时必须失败。`docs/user-tests/cases/bash-agent-loop/wsl-native-runtime-compatibility.md` 验证原始 OneBot 入站、真实 Bash 审批、Node 计算、Python 校验与模拟附件回传；该真实 Provider 用例仍需单独授权和独立质量评审。
 
 ## 11. 验证标准

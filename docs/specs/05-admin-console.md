@@ -2,6 +2,8 @@
 
 [返回当前系统规范索引](./index.md)
 
+会话图片代理的固定 DNS 回调必须同时支持 Node 24 的单地址和 `all: true` 地址数组契约，自动地址族选择只能尝试本次已验证的地址。管理台默认缩略占位只适用于 HTTP(S) 图片和 `/generated-images/`；`/api/` 头像、data 和 blob 来源不生成嵌套缩略图请求，显式占位图继续按组件参数加载。回归用例见 `../user-tests/cases/admin-console/conversation-image-recovery.md`。
+
 ## 7. 管理台
 
 Agent 提示词与系统提示词正文统一使用 CodeMirror 6 单层 contenteditable Markdown 编辑器，默认显示行号，并提供当前行、选区、折叠、搜索、撤销重做、括号匹配、变量自动补全与 Markdown/内嵌 HTML 高亮；编辑区不得叠加透明输入层或文本镜像层。系统提示词的“记忆”分组包含 Dream 的“梦境整理”与 `memory_dream.json`，记忆处理设置页提供直达 `memory.dream` 编辑器的入口。

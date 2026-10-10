@@ -26,9 +26,9 @@ const emit = defineEmits<{ error: [] }>();
 const mainSource = computed(() => props.displaySrc
   ?? (props.thumbnail ? authenticatedThumbnailPath(props.src) : authenticatedMediaPath(props.src)));
 const placeholderSource = computed(() => props.placeholderSrc
-  ?? (props.src.startsWith("data:") || props.src.startsWith("blob:")
-    ? ""
-    : authenticatedThumbnailPath(props.src, "placeholder")));
+  ?? (props.src.startsWith("/generated-images/") || /^https?:\/\//i.test(props.src)
+    ? authenticatedThumbnailPath(props.src, "placeholder")
+    : ""));
 const state = shallowRef<"loading" | "ready" | "error">("loading");
 
 watch(mainSource, (source) => {
