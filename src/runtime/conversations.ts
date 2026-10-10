@@ -18,6 +18,7 @@ import {
   incomingConversationMessageId,
   isWebConversationId,
   normalizeConversationId,
+  parseConversationId,
   persistedAttachments,
   persistedQuoteReferences
 } from "./messagingAttachmentHelpers.js";
@@ -232,6 +233,7 @@ export function runtime_upsertConversationRecordForReplySetting(this: RuntimeHos
     const now = new Date().toISOString();
     const record: ConversationRecord = {
       id: descriptor.id,
+      accountId: parseConversationId(descriptor.id)?.accountId,
       scope: descriptor.scope,
       title: descriptor.title,
       userId: descriptor.userId,

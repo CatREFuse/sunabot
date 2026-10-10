@@ -93,6 +93,15 @@ afterEach(() => {
 });
 
 describe("SunaRuntime reply debounce", () => {
+  it("keeps the account when an administrator creates a conversation setting", () => {
+    const harness = createCompletedHarness("unused");
+    const record = harness.runtime.setConversationReplyEnabled({
+      id: "account:secondary:group:20002",
+      replyEnabled: true
+    });
+    expect(record.accountId).toBe("secondary");
+    expect(harness.runtime.conversationRecords.get(record.id)?.accountId).toBe("secondary");
+  });
   it.each([
     [[], "decision_missing"],
     [["add_workmemory"], "decision_unresolved"]

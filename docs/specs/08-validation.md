@@ -328,6 +328,10 @@ Codex 输出目录专项还必须证明：默认单聊与群聊提示词以及�
 
 ## 12. 已知验收限制
 
+2026-10-10 WSL 阿罗娜故障复核：NapCat 4.18.28 在约 11:32 后停止自身收消息日志，WebUI 仍报告登录、TCP 仍连接；目标群 SQLite 停在 11:33，重启扫码后其他群新消息恢复入库。13:06 重启阶段 Worker 曾以 139 退出并自动重拉，不能将这次启动崩溃倒推为原始停收根因。上游 [#2071](https://github.com/NapNeko/NapCatQQ/issues/2071) 与 [9a06abb](https://github.com/NapNeko/NapCatQQ/commit/9a06abb) 描述相似静默离线及自动恢复修复；本次缺少明确 status=20 日志，匹配仅为推断。升级组件与长期稳定运行仍需单独验收，不能以 TCP 或 WebUI 登录状态替代真实入站证据。
+
+同次复核发现旧账号前缀会话缺少 `accountId`，后台消息补查和身份查询因此落到未在线 primary。确定性回归覆盖合法群会话账号恢复、消息/开关/计数保留、只读加载零写回、显式账号优先、传统私聊/Web Chat 和管理新建会话账号保留。案例见 [`account-conversation-recovery.md`](../user-tests/cases/admin-console/account-conversation-recovery.md)；该修复不等同于修复 QQ 原生停收。
+
 `FLOW-001`、`FLOW-002`、`FLOW-003`、`MIG-001`、`MIG-002`、`RECOVERY-001` 与 `ONBOARD-002` 至 `ONBOARD-005` 的历史代码、故障注入和受控 E2E 已完成。v0.3.0 仍需在真实 Linux Native Core + 多 NapCat Docker 与 WSL2 Native Core + 多 NapCat Docker 环境完成 amd64/arm64 安装、双 QQ 首次 Landing、账号定向文字/图片/文件/语音外发、Lightpanda 动态 WebFetch、启动零下载和重启恢复；受控 Provider/OneBot fixture 不能替代真实部署证据。
 
 在线语音 adapter、Profile 迁移、连接检测和管理台只能由封闭 fixture 验证协议与失败门禁。当前未提供任何供应商 API Key，也未替部署者选择或注册可商用音色，因此仍需使用至少两个 Agent 的真实在线模型与授权音色完成日语合成、真实 NapCat `record` 外发、供应商限额/鉴权失败、断线恢复，以及 Linux/WSL Native Core + NapCat Docker 的平台验收；完成这些人工项目之前不能把在线语音标记为生产就绪。

@@ -11,7 +11,7 @@ import {
   ConversationRecord,
   ParsedIncomingMessage
 } from "../types.js";
-import { persistedAttachments, persistedQuoteReferences } from "./messagingAttachmentHelpers.js";
+import { parseConversationId, persistedAttachments, persistedQuoteReferences } from "./messagingAttachmentHelpers.js";
 import { MAX_STORED_CONVERSATION_MESSAGES } from "./runtimeContracts.js";
 
 export class TaskLimiter {
@@ -151,6 +151,7 @@ export function loadConversationRecords(config?: Pick<AppConfig, "persona">) {
     store.ensureLegacyConversationsImported(conversationStorePath());
     return store.readConversations().filter(isConversationRecord).map((record) => ({
       ...record,
+      accountId: record.accountId ?? parseConversationId(record.id)?.accountId,
       disabledTools: normalizeConversationDisabledTools(record.disabledTools),
       messages: record.messages
         .slice(-MAX_STORED_CONVERSATION_MESSAGES)

@@ -42,6 +42,7 @@
 | `docs/operations/sqlite-backup-recovery.md` | 默认 Plana 与全部 Agent 业务库/queue 数据库对的一致恢复点、7/30 天保留、恢复校验、季度演练和故障门禁 | 执行每日备份、恢复、保留清理或故障演练时读取 |
 | `docs/references/README.md` | OneBot v11、v12 协议资料的来源、版本和本地入口 | 核对 OneBot 事件、消息段、动作或兼容性时读取 |
 | `docs/user-tests/README.md` | user test harness、用例文档、隔离 workspace、质量评审与上线门禁 | 开发任何功能、编写 user test case 或执行上线前验证时读取 |
+| `docs/user-tests/cases/admin-console/account-conversation-recovery.md` | 历史非 primary 会话账号恢复与后台消息查询 | 修改会话加载、后台历史查询或账号元数据时读取 |
 | `docs/user-tests/current-system-tools.md` | 当前 Agent 工具目录的角色、平台与真实 Provider user test 计划 | 修改工具注册、会话权限、Native Bash 或工具验收矩阵时读取 |
 | `docs/user-tests/soul-package-roundtrip.md` | 当前 Agent 人格提示词灵魂文件的导出、预览、冲突导入与往返 | 修改灵魂文件 schema、批量提示词事务、WebUI 或 CLI 入口时读取 |
 | `docs/user-tests/offline-release-first-run.md` | Linux/WSL 自包含发行版、安装完整性、零下载启动与首次 Landing | 修改发行资产、安装脚本、首次启动或管理员初始化时读取 |

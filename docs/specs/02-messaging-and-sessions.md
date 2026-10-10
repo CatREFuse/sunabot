@@ -6,6 +6,8 @@
 
 ### 3.1 OneBot 接入
 
+历史 SQLite 会话缺少 `accountId` 时，加载阶段从合法 `account:<accountId>:private|group:<id>` 会话键恢复账号上下文，保留显式账号字段，不在只读加载时写回数据库。管理操作新建账号前缀会话时同步保存账号；后台消息、引用与身份查询不得因元数据缺失回落到 primary。
+
 - 仅在专用 OneBot listener 的配置路径接收 OneBot v11 反向 WebSocket。
 - NapCat 只能通过同机 Compose 私有网络或容器到宿主网关连接，不支持公开或跨主机 OneBot 入口。
 - 所有连接都使用 `workspace/secrets/runtime.env` 中的 access token 校验；缺失 token 时 Core 与 NapCat 都拒绝启动。
