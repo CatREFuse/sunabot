@@ -647,7 +647,9 @@ describe("emoji durable delivery chain", () => {
       expect(rewriteToneText).toHaveBeenCalledTimes(1);
       expect(delivery.outbox).toHaveLength(0);
     } finally {
-      await fs.writeFile(imagePath, imageBytes);
+      const restoredPath = path.join(path.dirname(imagePath), ".restore-emoji.png");
+      await fs.writeFile(restoredPath, imageBytes);
+      await fs.rename(restoredPath, imagePath);
     }
   });
 

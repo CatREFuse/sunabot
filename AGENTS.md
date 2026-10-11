@@ -20,6 +20,8 @@
 | `docs/audits/2026-07-23-llm-token-cache-audit.md` | 全部 LLM/图像节点的请求级 Token、缓存率、Prefix 复算、失败盲区与分层改进方案 | 调整模型路由、提示词缓存、上下文预算、记忆/编排/Tone 流程或模型调用统计前读取 |
 | `docs/audits/2026-07-23-llm-token-cache-audit.html` | LLM Token 与 Prompt Cache 审计的自包含交互式 HTML 报告 | 浏览审计结论、图表、完整节点清单、改进优先级和验收路线图时读取 |
 | `docs/audits/2026-07-24-memory-system-topology-and-logs-audit.md` | 工作记忆、长期记忆、用户画像、召回、Dream、调度器与操作日志的运行证据和高问题节点 | 排查记忆不更新、积压、模型门禁、Dream 失败或记忆操作历史前读取 |
+| `docs/audits/2026-10-12-file-tool-permission-audit.md` | Windows 主机 WSL 的文件权限、表情资源、真实 Bash 冒烟及审核失败证据 | 排查当前 Windows 环境文件、表情或 Bash 操作失败时读取 |
+| `docs/audits/2026-10-12-built-in-tool-validation.md` | 26 个内置工具的权限、执行证据、500 项本地测试与外部验收边界 | 全面检查工具可用性、MCP 或 Skill 脚本限制时读取 |
 | `docs/design/settings-information-architecture.md` | 管理台设置的信息层级、Provider 类型、字段归属与交互约束 | 调整设置页、Provider 配置或账号操作前读取 |
 | `docs/design/multi-agent-information-architecture.md` | 多 Agent、多 QQ、管理台导航、Agent 工作区与统计口径 | 新增 Agent、调整 Agent 切换、多 QQ 接入或按 Agent 隔离数据前读取 |
 | `docs/design/conversation-artifact-capabilities.md` | 会话文件、图片、单一 canonical Workbench 与 Codex 输入输出的统一产物句柄和能力上下文 | 调整附件获取、聊天媒体、Workbench 路由、Codex 产物或文件外发前读取 |
@@ -45,6 +47,7 @@
 | `docs/user-tests/cases/admin-console/account-conversation-recovery.md` | 历史非 primary 会话账号恢复与后台消息查询 | 修改会话加载、后台历史查询或账号元数据时读取 |
 | `docs/user-tests/cases/admin-console/conversation-image-recovery.md` | Node 24 固定 DNS 图片代理与头像占位请求 | 修改图片代理传输或管理台图片占位前读取 |
 | `docs/user-tests/current-system-tools.md` | 当前 Agent 工具目录的角色、平台与真实 Provider user test 计划 | 修改工具注册、会话权限、Native Bash 或工具验收矩阵时读取 |
+| `docs/user-tests/cases/workbench-resources/emoji-bash-roundtrip.md` | 管理员群聊在 WSL 中通过审核、Skill、Bash 创建表情并读回仓库 | 修改表情 Bash 管理或独立审核兼容配置时读取 |
 | `docs/user-tests/soul-package-roundtrip.md` | 当前 Agent 人格提示词灵魂文件的导出、预览、冲突导入与往返 | 修改灵魂文件 schema、批量提示词事务、WebUI 或 CLI 入口时读取 |
 | `docs/user-tests/offline-release-first-run.md` | Linux/WSL 自包含发行版、安装完整性、零下载启动与首次 Landing | 修改发行资产、安装脚本、首次启动或管理员初始化时读取 |
 | `docs/user-tests/native-core-single-container-boundary.md` | Native Core 与每账号一个 NapCat 容器的唯一运行边界 | 修改 Core、NapCat、Bash、MCP、Skill 或 Renderer 运行形态时读取 |

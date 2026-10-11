@@ -111,6 +111,10 @@ OneBot 入站图片的媒体数组保持原消息中的可用地址顺序，正�
 聊天媒体导出不把消息字节、Base64、临时 URL、协议 token 或宿主路径加入会话 SQLite、提示词变量或增长型 JSONL。当前/引用图片按需进入当前 Agent 内容寻址附件缓存，文件复用入站获取产生的同 Agent acquired blob；通过类型、摘要和文件身份复验后，才把一份 0600 原始字节副本发布到当前 Agent 的 canonical Workbench；管理员私聊、普通私聊和群聊共用同一根。返回的宽高仅来自已成功解码的图片，普通文件返回 `null`；文件名扩展与检测格式不一致、声明 MIME 与检测 MIME 不一致、损坏图片、空文件、超限或源文件变化均失败关闭。只有 Codex 输入冻结和产物 finalizer 的封闭调用点允许未知但有界的普通文件继续流转，并把无可信 magic 的类型降为 `application/octet-stream` 与 `.bin`。导出副本属于 Bot 明确保存的工作产物，不自动进入知识库、Skill、自拍或表情选择。
 
 聊天表情导入直接复用 `EmojiLibraryRepository` 的规范化 admission 与 `EmojiJsonlStore` 串行原子写，不产生第二份目录索引。相同 key 与相同规范化 SHA 返回去重状态且不增加版本；不同 key 可引用同一内容寻址表情文件，不复制图片字节。工具返回规范化图片的 SHA、尺寸和字节数，原始聊天图片仍只保留在缓存生命周期内。
+
+当前或明确引用的聊天图片使用 `import_chat_emoji` 导入；已验证的本地图像和现有表情清单可由本轮授权的 Native Bash 按 Workbench Skill 合同维护。导入工具说明不得另加全局 Bash 禁令；管理员身份、逐命令审核、目录边界、表情格式与原子发布合同继续适用。
+
+Workbench Skill 的 Bash 表情写入说明必须对应消费者的规范化 PNG 合同：1024×1024、8-bit、非索引颜色类型 0/2/4/6。ImageMagick 6 默认可产生低位深或调色板 PNG，因此明确使用 `-depth 8 PNG32:` 输出并按最终字节计算摘要。命令成功和 JSONL 可解析仍需追加表情 repository 读回，不能把图片查看器可打开当作入库成功。
 自拍改写的 Provider strict JSON schema 只使用目标 Provider 支持的关键字，不在数组节点提交 `uniqueItems`。既有 `selfie_prompt_rewrite.json` 通过一次性保留式迁移只移除该关键字，管理员自定义正文与其他 schema 字段保持不变；节点空选、未知、重复或超量 ID 继续由运行时解码器严格拒绝。
 
 出站媒体必须先通过生成图片根目录、直接子文件、PNG 文件名、常规文件和大小校验，再读取为 OneBot `base64://` 内联数据。Native Core 与 NapCat 之间固定使用该传输方式，NapCat 不读取 Core workspace，不接受共享绝对路径。超过 OneBot 内联预算的文件必须使用独立、鉴权、限流、可过期的传输协议；不能用容器路径或宿主路径作为降级。

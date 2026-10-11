@@ -207,6 +207,7 @@ describe("outbound conversation assets", () => {
     await fs.mkdir(path.join(outsideDir, "exports"), { recursive: true });
     await fs.writeFile(path.join(outsideDir, "exports", "report.txt"), "outside-secret");
     let read: ReturnType<typeof vi.fn> | undefined;
+    const rootCtimeNs = (await fs.lstat(rootDir, { bigint: true })).ctimeNs;
     const delivery = createDelivery(rootDir, {
       openFile: async (filePath, flags) => {
         await fs.rename(rootDir, originalRoot);
@@ -218,6 +219,12 @@ describe("outbound conversation assets", () => {
         } finally {
           await fs.rm(rootDir, { force: true });
           await fs.rename(originalRoot, rootDir);
+          // Filesystems can coalesce directory ctime changes within one clock tick.
+          while ((await fs.lstat(rootDir, { bigint: true })).ctimeNs === rootCtimeNs) {
+            await new Promise((resolve) => setTimeout(resolve, 1));
+            await fs.rename(rootDir, originalRoot);
+            await fs.rename(originalRoot, rootDir);
+          }
         }
       }
     });
@@ -230,6 +237,7 @@ describe("outbound conversation assets", () => {
   it("rejects a root swapped away and restored while the descriptor is being read", async () => {
     const originalRoot = `${rootDir}-original`;
     let swapped = false;
+    const rootCtimeNs = (await fs.lstat(rootDir, { bigint: true })).ctimeNs;
     const delivery = createDelivery(rootDir, {
       openFile: async (filePath, flags) => {
         const handle = await fs.open(filePath, flags);
@@ -243,6 +251,11 @@ describe("outbound conversation assets", () => {
           } finally {
             await fs.rm(rootDir, { force: true });
             await fs.rename(originalRoot, rootDir);
+            while ((await fs.lstat(rootDir, { bigint: true })).ctimeNs === rootCtimeNs) {
+              await new Promise((resolve) => setTimeout(resolve, 1));
+              await fs.rename(rootDir, originalRoot);
+              await fs.rename(originalRoot, rootDir);
+            }
           }
         });
         return handle;

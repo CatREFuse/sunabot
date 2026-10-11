@@ -127,6 +127,8 @@ Tone delivery:
 
 Workbench resources:
 
+- [`cases/workbench-resources/emoji-bash-roundtrip.md`](./cases/workbench-resources/emoji-bash-roundtrip.md)
+
 - [`single-workbench-resource-addressing.md`](./single-workbench-resource-addressing.md)
 - [`bash-skill-repository-install.md`](./bash-skill-repository-install.md)
 

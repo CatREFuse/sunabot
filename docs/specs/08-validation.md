@@ -2,6 +2,8 @@
 
 [返回当前系统规范索引](./index.md)
 
+2026-10-12 Windows 主机的 WSL 文件、表情、工具与权限审计见 `../audits/2026-10-12-file-tool-permission-audit.md` 与 `../audits/2026-10-12-built-in-tool-validation.md`。真实 Bubblewrap 进程冒烟与隔离存储断言、mock 端口测试、真实外部 Provider 验收必须分别报告；MCP 未配置与 `run_skill_script` 默认关闭不能计作执行成功。表情 Bash 往返用例为 `../user-tests/cases/workbench-resources/emoji-bash-roundtrip.md`。
+
 会话图片恢复验收使用真实本地 HTTP 图片服务与生产默认 Undici 传输，覆盖 IPv4 与混合地址族固定 DNS；`AuthenticatedImage` 组件测试覆盖头像、远程图片和显式占位，`conversation-images.visual.spec.ts` 检查 light/dark 的移动端和桌面图片加载及无无效头像缩略请求。
 
 Native 工具资源回归覆盖 `tests/integration/native-tool-sandbox.test.ts`：Linux/WSL 同 UID 超过 64 个宿主线程时，生产隔离器仍能执行 Bash、Node 与 Python；降低隔离内线程上限后的有界 fork 必须失败，证明限制继续生效。启动诊断复用生产调用构造器，故意降低 Node 虚拟地址空间配额时必须失败。`docs/user-tests/cases/bash-agent-loop/wsl-native-runtime-compatibility.md` 验证原始 OneBot 入站、真实 Bash 审批、Node 计算、Python 校验与模拟附件回传；该真实 Provider 用例仍需单独授权和独立质量评审。
@@ -342,4 +344,4 @@ Codex 输出目录专项还必须证明：默认单聊与群聊提示词以及�
 
 Provider 工具组合回归必须覆盖五种协议中的 sibling assistant text、多个 inline 工具、跨模型轮次的本地与联网调用、多个 MCP server、失败调用后的后续工具、`read_file → write_file → send_file`、Skill/知识库/素材导出后启动 Codex、查询后 `no_reply` 以及查询后语音；对应 runtime contract、类型检查、构建和冒烟全部通过前，工具循环改动不能交付。
 
-Agent 扩展 W2 后端已接入 API 组合根、Provider 与运行时，管理 WebUI 已覆盖当前 Agent 的 Skill 安装、审查、启停、卸载、跨 Agent 迁移预览与应用，以及 MCP 描述符、完整命令确认、运行目录、OAuth 状态和一次性批准。界面验收必须使用封闭 API fixture 覆盖 light/dark、桌面/移动端、弹层键盘焦点、危险操作确认、错误行内呈现和切换 Agent 后的数据隔离，并证明浏览器状态、请求与截图不包含 secret、OAuth token 或宿主路径。隔离目录、墓碑、锁墓碑与普通 Skill 终态日志继续只保留 W1 审计证据；跨 Agent copy archive 在终态或 orphan recovery 时清理，copy terminal journal 严格执行 16 份/8 MiB 上限，MCP 运行投影继续执行自身 stale GC，不能误述为会清理其他 Skill 事务证据。真实外部 OAuth Provider、Linux/WSL bwrap stdio server与远端 Streamable HTTP server仍需在隔离测试实例完成手工验收；当前分支只执行 Native invocation、固定 entrypoint 与 Linux/WSL Bubblewrap 静态合同，不连接 Docker daemon。Skill 脚本只在 Native 审计执行器与当前平台隔离探针同时可用时开放；任一门禁失败即标记 unavailable，不能回退到容器。
+Agent 扩展 W2 后端已接入 API 组合根、Provider 与运行时，管理 WebUI 已覆盖当前 Agent 的 Skill 安装、审查、启停、卸载、跨 Agent 迁移预览与应用，以及 MCP 描述符、完整命令确认、运行目录、OAuth 状态和一次性批准。界面验收必须使用封闭 API fixture 覆盖 light/dark、桌面/移动端、弹层键盘焦点、危险操作确认、错误行内呈现和切换 Agent 后的数据隔离，并证明浏览器状态、请求与截图不包含 secret、OAuth token 或宿主路径。隔离目录、墓碑、锁墓碑与普通 Skill 终态日志继续只保留 W1 审计证据；跨 Agent copy archive 在终态或 orphan recovery 时清理，copy terminal journal 严格执行 16 份/8 MiB 上限，MCP 运行投影继续执行自身 stale GC，不能误述为会清理其他 Skill 事务证据。真实外部 OAuth Provider、Linux/WSL bwrap stdio server与远端 Streamable HTTP server仍需在隔离测试实例完成手工验收；当前分支只执行 Native invocation、固定 entrypoint 与 Linux/WSL Bubblewrap 静态合同，不连接 Docker daemon。当前所有平台的默认组合根均不注册 run_skill_script，也不提供 runScript 端口；Native 审计执行器与平台隔离探针属于未接线基础模块，其可用不能单独视为脚本能力已交付。Skill 激活与已登记资源读取继续可用，不得回退到容器执行脚本。

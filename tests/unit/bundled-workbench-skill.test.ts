@@ -10,6 +10,7 @@ import {
 import { getRootDir } from "../../packages/platform/projectPaths.js";
 import { buildSkillCatalog } from "../../services/extensions/public.js";
 import { testTempRoot } from "./test-temp-root.js";
+import { importChatEmojiTool } from "../../services/tools/chatMediaTool.js";
 
 const TEST_DATA_ROOT = testTempRoot("bundled-workbench-skill");
 let workspace = "";
@@ -86,6 +87,10 @@ describe("bundled Workbench configuration Skill", () => {
     await expect(bashOperations).resolves.toContain("Manage knowledge");
     await expect(bashOperations).resolves.toContain("Manage selfie references");
     await expect(bashOperations).resolves.toContain("Manage emoji");
+    await expect(bashOperations).resolves.toContain("PNG32:<temporary.png>");
+    await expect(bashOperations).resolves.toContain("do not rely on its default PNG encoding");
+    expect(importChatEmojiTool.description).not.toContain("Do not edit emoji files or emojis.jsonl with Bash");
+    expect(importChatEmojiTool.description).toContain("authorized administrator QQ private chat or group chat");
     await expect(bashOperations).resolves.toContain("Maintain Skill source packages");
     await expect(bashOperations).resolves.toContain("mv -f -- \"$temporary\" \"$target\"");
     await expect(bashOperations).resolves.toContain(
