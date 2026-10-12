@@ -13,6 +13,7 @@ import {
 import { fetchTextWithTransportRetry, normalizeAnthropicBaseUrl, resolveModelRequestMaxAttempts } from "./transport.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 import { processProviderToolRound } from "./toolRound.js";
+import { completeProviderText } from "./turnToolState.js";
 import { assertMappedProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
 import {
   anthropicMemoryToolChoice,
@@ -98,8 +99,7 @@ export async function completeAnthropicMessages(
     state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, calls, maxToolCalls);
     if (!calls.length) {
       assertMemoryToolDecisionsResolved(options);
-      if (!text) throw new Error("模型没有返回可发送内容。");
-      return { kind: "completed", text };
+      return completeProviderText(text, state, options);
     }
 
     const toolRound = await processProviderToolRound({

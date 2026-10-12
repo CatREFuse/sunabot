@@ -390,6 +390,103 @@ describe("Provider tool composition", () => {
     expect(effects.callMcp).toHaveBeenCalledTimes(2);
   });
 
+  it.each(PROVIDERS)("completes an empty final round after delivered text and a file on %s", async (
+    _providerLabel, kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "assistant_text", args: { text: "正在处理。" } }] },
+      { calls: [{ name: "send_file", args: { path: "result.txt", kind: "file", name: null } }] },
+      kind === "gemini-official" ? { text: " " } : {}
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送文件" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "正在处理。", messageOrigin: "assistant_text", textAlreadyDelivered: true });
+    expect(effects.send).toHaveBeenCalledOnce();
+    expect(effects.options.onAssistantText).toHaveBeenCalledOnce();
+  });
+
+  it.each(PROVIDERS)("rejects empty completion after read-only tools with no delivered text on %s", async (
+    _providerLabel, kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "read_file", args: { path: "safe.txt" } }] },
+      kind === "gemini-official" ? { text: " " } : {}
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "读文件" }], effects.options))
+      .rejects.toThrow("模型没有返回可发送内容。");
+    expect(effects.options.onAssistantText).not.toHaveBeenCalled();
+  });
+
+  it.each(PROVIDERS)("keeps an empty system configuration confirmation failed on %s", async (
+    _providerLabel, kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "assistant_text", args: { text: "正在处理。" } }] },
+      kind === "gemini-official" ? { text: " " } : {}
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "改设置" }], {
+      ...effects.options,
+      systemConfig: { execute: vi.fn(), mutationStaged: () => true }
+    })).rejects.toThrow("模型没有返回可发送内容。");
+  });
+
+  it.each(PROVIDERS)("does not treat a failed inline delivery as delivered text on %s", async (
+    _providerLabel, kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    const transport = installRounds(provider, kind, [
+      { calls: [{ name: "assistant_text", args: { text: "正在处理。" } }] },
+      kind === "gemini-official" ? { text: " " } : {}
+    ]);
+    const effects = sideEffects();
+    effects.options.onAssistantText.mockRejectedValueOnce(new Error("fixture_delivery_failed"));
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送文件" }], effects.options))
+      .rejects.toThrow("模型没有返回可发送内容。");
+    expect(JSON.stringify(transport.requestBody(1))).toContain("fixture_delivery_failed");
+  });
+
+  it("keeps a Codex transport failure after delivered text visible", async () => {
+    const provider = new OpenAIProvider(providerConfig("codex-responses"));
+    installRounds(provider, "codex-responses", [
+      { calls: [{ name: "assistant_text", args: { text: "正在处理。" } }] }
+    ]);
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      error: { message: "fixture_transport_failed" }
+    }), { status: 400 }));
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送文件" }], effects.options))
+      .rejects.toThrow("fixture_transport_failed");
+    expect(effects.options.onAssistantText).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["failed", { code: "server_error", message: "fixture_response_failed" }, "fixture_response_failed"],
+    ["failed", null, "模型请求失败。"],
+    ["incomplete", null, "模型没有返回可发送内容。"]
+  ])("rejects an explicit %s Responses payload after delivered text", async (status, error, message) => {
+    const provider = new OpenAIProvider(providerConfig("openai-official"));
+    const create = vi.fn()
+      .mockResolvedValueOnce({ output: responsesOutput({
+        calls: [{ name: "assistant_text", args: { text: "正在处理。" } }]
+      }, 0) })
+      .mockResolvedValueOnce({ status, error, output: [] });
+    vi.spyOn(provider as never, "createClient").mockReturnValue({ responses: { create } });
+    const effects = sideEffects();
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送文件" }], effects.options))
+      .rejects.toThrow(message as string);
+    expect(effects.options.onAssistantText).toHaveBeenCalledOnce();
+    expect(appendRequestLog).toHaveBeenCalledWith(expect.objectContaining({
+      category: "model.response", action: "responses.complete",
+      response: expect.objectContaining({ ok: false, error: message })
+    }));
+  });
+
   it.each(PROVIDERS)("allows read_file, write_file and send_file across model rounds on %s", async (
     _providerLabel,
     kind

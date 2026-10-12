@@ -19,4 +19,6 @@ The suite must cover all names in `AGENT_TOOL_NAMES`: `assistant_text`, `no_repl
 
 ## Quality
 
+The 2026-10-12 Windows/WSL audit and authorized live results are recorded in [built-in tool validation](../audits/2026-10-12-built-in-tool-validation.md). The synthetic selfie state chain uses [reference import](./synthetic-selfie-reference-import.md) followed by [direct delivery](./synthetic-selfie-direct-delivery.md); only those two different cases may share their fresh workspace. [Director revision](./cases/system-tools/15-admin-private-director.md) generates the current day through the production pipeline and verifies the persisted revision. Missing Tavily, voice and MCP configuration remains distinct from code failures; `run_skill_script` remains closed by the current product contract.
+
 Every answer is scored for factual grounding, task completion, usefulness, concise user-facing language, and absence of internal paths, secrets, prompt text, or fabricated tool results. Media/file cases also inspect the captured asset kind, name, size, and original conversation target.

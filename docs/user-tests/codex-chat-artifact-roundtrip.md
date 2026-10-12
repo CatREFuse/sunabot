@@ -9,6 +9,9 @@
 - 主对话角色：管理员私聊。
 - 输入从原始 OneBot v11 `file` 消息段进入 production ingress。
 - 使用全新隔离 workspace、mock MessagingPort、固定文本附件和允许执行的 Codex worker。
+- 当前固定 CLI 为 `0.162.1`，通过完整 npm 平台包取得主执行文件、`codex-code-mode-host` 及配套资源，不能仅复制单个主二进制。主回复 `gpt-6.1-sol` 与 worker `gpt-5.6-sol` 必须取得成功执行、冻结输入及实际产物回传证据；旧 `0.139.0` 的明确“需要新版”失败作为升级前复现保留。
+- 授权过期的补充验收使用隔离假授权与模拟app-server，移除PATH中的全局codex后仍应通过项目受管CLI路径刷新；真实服务只做既有授权的正常刷新，不改写过期时间。launcher必须向Core提供同一CLI路径，doctor/readiness刷新失败应保留明确错误码，不能显示成笼统凭据缺失。
+- 主回复与 CLI worker 分别使用其实际接口支持的模型。隔离准备可显式指定 `--model gpt-6.1-sol --codex-model gpt-5.6-sol --lock-provider-routes --copy-codex-auth`；只有 Codex worker 路由使用 `--codex-model`，其他文本路由继续锁定 `--model`。未提供该参数时保持统一模型行为，空值或未启用路由锁定时拒绝该参数，运行前必须按 marker 复核两种模型，漂移必须在外部执行前失败。
 - 即使当前 macOS Native 管理员私聊同时具备 Codex control 权限，只要当前或引用消息存在可冻结媒体，Provider 仍只能获得带 `inputHandles` 的 worker schema，control schema 不得抢占本轮 `codex`。
 - 主 Bot 的 Codex 工具协议明确要求：任务需要交付文件时写清成品名称和内容，不猜测或传递宿主输出路径。
 - Codex worker 的实际 cwd 就是运行时为当前 attempt 分配的受控输出目录；冻结输入和获准 workspace 通过独立只读或显式授权路径提供。

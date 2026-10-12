@@ -59,7 +59,7 @@ Native Bash 复用当前 Agent 的 canonical Workbench。macOS 只向管理员 Q
 
 MCP 与 Skill Script 由 Native Core 管理。Linux/WSL 的 stdio 进程和脚本执行使用 Bubblewrap、最小环境与受控 Workbench/扩展投影；秘密只从当前 Agent 的凭据边界按声明键注入。launcher 在检查真实 namespace 后固定 `SUNABOT_BWRAP_EXECUTABLE`：发行形态只允许包内 `runtime/bubblewrap/bwrap`，并向 Native Bash、stdio MCP、Skill Script 与 WebFetch Renderer 注入同一路径；`.env`、会话参数和工具参数不能覆盖，注入缺失时发行进程失败关闭。源码形态可明确使用 `/usr/bin/bwrap`。运行时下载依赖、Docker launcher 和 Docker socket 均不属于当前合同。扩展初始化失败只关闭对应可选能力，不能切换到 Docker 或其他后端。
 
-Codex CLI `0.139.0` 是固定生产依赖。发行包从生产 `node_modules` 提供 CLI；授权保存在当前 workspace 的 `secrets/codex/auth.json`。CLI 缺失或版本不匹配时 doctor 报告明确错误，授权缺失时 Core 保持可启动以完成设备登录，但 Codex 工具不可调用。
+Codex CLI `0.162.1` 是固定生产依赖。发行包从生产 `node_modules` 提供 CLI；授权保存在当前 workspace 的 `secrets/codex/auth.json`。CLI 缺失或版本不匹配时 doctor 报告明确错误，授权缺失时 Core 保持可启动以完成设备登录，但 Codex 工具不可调用。
 
 Linux/WSL Native 工具的 `prlimit` 在 Bubblewrap 完成 user/PID namespace 后启动，64 线程配额作用于本次隔离用户环境，不能在创建隔离环境前使用宿主 UID 的线程总数阻断执行。虚拟地址空间上限为 4 GiB，以支持锁定 Node 24 的地址预留；文件描述符 128、单文件 256 MiB、core dump 禁用及原有命令期限继续保留。当前 Node 位于系统挂载之外时，只读挂载该 Node 发行目录，并将其 bin 目录加入隔离 PATH，不能挂载整个宿主 HOME。`doctor`、启动预检与 Bash 使用同一隔离调用构造器，诊断必须实际执行 Node 和基础命令，不能只以无资源限制的 namespace probe 宣称 Bash 可用。
 
@@ -83,7 +83,7 @@ Provider、Codex CLI 与联网工具的出站 HTTP(S) 可独立使用代理。�
 
 当前公开版本为 `0.3.0`。`package.json`、`package-lock.json`、`deploy/runtime-contract.json`、组件锁、版本目录与 `packages/platform/releaseCatalog.ts` 必须一致。`GET /api/releases` 返回当前版本和按时间倒序排列的更新日志；根 `CHANGELOG.md` 与 GitHub `v<version>` Release 使用同一版本内容。
 
-Linux amd64/arm64 发行包内置 Node.js `24.18.0`、生产 `node_modules`、Codex CLI `0.139.0`、Lightpanda `0.3.3`、对应源码与许可证、Bubblewrap `0.8.0-2+deb12u1`、Bubblewrap 的 Debian ELF loader 与完整动态库闭包、对应源码与许可、Core、管理台和迁移工具。发行构建要求干净且构建期间 revision 不变，manifest 绑定平台、版本、source commit、组件版本与受保护文件 SHA-256；构建用 loader `--list` 验证全部 Bubblewrap `NEEDED` 库解析到归档内部，再执行真实 namespace probe。受保护集合覆盖根 `sunabot.sh`、Node 版本合同、完整 Core/WebFetch 构建、管理台 `dist`、生产依赖、全部 runtime/tooling、`deploy/` 下的 NapCat Compose 与 entrypoint、`packages/platform/` 运行模块、workspace 初始化配置、bundled Workbench Skill、组件来源和许可；受保护树增加、删除、替换或符号链接化都必须失败关闭。
+Linux amd64/arm64 发行包内置 Node.js `24.18.0`、生产 `node_modules`、Codex CLI `0.162.1`、Lightpanda `0.3.3`、对应源码与许可证、Bubblewrap `0.8.0-2+deb12u1`、Bubblewrap 的 Debian ELF loader 与完整动态库闭包、对应源码与许可、Core、管理台和迁移工具。发行构建要求干净且构建期间 revision 不变，manifest 绑定平台、版本、source commit、组件版本与受保护文件 SHA-256；构建用 loader `--list` 验证全部 Bubblewrap `NEEDED` 库解析到归档内部，再执行真实 namespace probe。受保护集合覆盖根 `sunabot.sh`、Node 版本合同、完整 Core/WebFetch 构建、管理台 `dist`、生产依赖、全部 runtime/tooling、`deploy/` 下的 NapCat Compose 与 entrypoint、`packages/platform/` 运行模块、workspace 初始化配置、bundled Workbench Skill、组件来源和许可；受保护树增加、删除、替换或符号链接化都必须失败关闭。
 
 安装脚本下载发行归档与 SHA-256，每次从下载归档解压新的不可变版本目录，在读取组件锁和运行 bootstrap 前使用包内校验器验证完整 manifest。全部运行时 smoke、NapCat 镜像准备和离线 bootstrap 成功后才原子切换 `current` 软链接；同版本重装不执行或覆盖已有目录，当前目录损坏时由新目录完成原子修复，任一失败保留原 `current`。NapCat/QQ 的公开再分发授权尚未确认，不随 Sunabot 归档重分发。安装完成后的普通启动固定使用 `pull never`，不执行 npm、浏览器或系统包下载。
 

@@ -332,6 +332,8 @@ Codex 输出目录专项还必须证明：默认单聊与群聊提示词以及�
 
 ## 12. 已知验收限制
 
+2026-10-12 Windows/WSL工具验收已在隔离合成workspace取得真实Provider、原始OneBot ingress、Session/tool/outbox、独立质量及seal/gate证据：文件23/23、普通用户修复17/17、Bash表情23/23、记忆22/22、画像22/22、静默18/18、设置与cron20/20、知识库19/19、资源导入27/27、原件导出26/26、静态WebFetch28/28、导演27/27、合成自拍26/26＋28/28、新版Codex22/22。Codex依赖固定为0.162.1，worker保留gpt-5.6-sol；原0.139.0失败保留。导出真实空末轮已触发收尾修复并避免重复投递。全部QQ出站为mock，真实QQ发送、Windows原生、真实arm64及动态WebFetch端到端仍需分别验收；Tavily、voice profile与MCP配置缺失不能算成功。明确正方形全白构图生图复测20/20与独立质量通过，原透明留边失败保留。最终冻结版本完整verify退出0，unit3,094、harness39、迁移153、runtime smoke84、E2E53通过，1项既有unit跳过；包括受管CLI凭据刷新及明确失败/空incomplete响应回归。完整证据和图像质量边界见[工具验收](../audits/2026-10-12-built-in-tool-validation.md)。
+
 2026-10-10 WSL 阿罗娜故障复核：NapCat 4.18.28 在约 11:32 后停止自身收消息日志，WebUI 仍报告登录、TCP 仍连接；目标群 SQLite 停在 11:33，重启扫码后其他群新消息恢复入库。13:06 重启阶段 Worker 曾以 139 退出并自动重拉，不能将这次启动崩溃倒推为原始停收根因。上游 [#2071](https://github.com/NapNeko/NapCatQQ/issues/2071) 与 [9a06abb](https://github.com/NapNeko/NapCatQQ/commit/9a06abb) 描述相似静默离线及自动恢复修复；本次缺少明确 status=20 日志，匹配仅为推断。升级组件与长期稳定运行仍需单独验收，不能以 TCP 或 WebUI 登录状态替代真实入站证据。
 
 同次复核发现旧账号前缀会话缺少 `accountId`，后台消息补查和身份查询因此落到未在线 primary。确定性回归覆盖合法群会话账号恢复、消息/开关/计数保留、只读加载零写回、显式账号优先、传统私聊/Web Chat 和管理新建会话账号保留。案例见 [`account-conversation-recovery.md`](../user-tests/cases/admin-console/account-conversation-recovery.md)；该修复不等同于修复 QQ 原生停收。

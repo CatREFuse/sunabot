@@ -48,6 +48,7 @@ import {
 } from "./toolLoopLimits.js";
 import {
   createTurnToolState,
+  completeProviderText,
   withTurnToolState
 } from "./turnToolState.js";
 import { processProviderToolRound } from "./toolRound.js";
@@ -134,19 +135,23 @@ async function completeOpenAIResponses(
       () => client.responses.create(requestBody as never, { signal: options.signal })
     );
     const response = attempt.value;
+    const responseError = response.error?.message || (response.status === "failed" ? "模型请求失败。"
+      : response.status === "incomplete" && !extractProviderText(response) && !extractFunctionCalls(response).length
+        ? "模型没有返回可发送内容。" : undefined);
     await context.logger.response("responses.complete", {
-      ok: true,
+      ok: !responseError,
+      ...(responseError ? { error: responseError } : {}),
       payload: response,
       summary: summarizeResponsesPayload(response, "")
     }, attempt.metadata);
+    if (responseError) throw new Error(responseError);
 
     const toolCalls = extractFunctionCalls(response);
     state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, toolCalls, maxToolCalls);
     if (!toolCalls.length) {
       assertMemoryToolDecisionsResolved(options);
       const text = extractProviderText(response);
-      if (!text) throw new Error("模型没有返回可发送内容。");
-      return { kind: "completed", text };
+      return completeProviderText(text, state, options);
     }
 
     const siblingText = extractProviderText(response);
@@ -293,8 +298,7 @@ async function completeCodexResponses(
     if (!toolCalls.length) {
       assertMemoryToolDecisionsResolved(options);
       const outputText = extractResponsesTextFromSse(text) || extractResponsesText(payload);
-      if (!outputText) throw new Error("模型没有返回可发送内容。");
-      return { kind: "completed", text: outputText };
+      return completeProviderText(outputText, state, options);
     }
 
     const streamText = extractResponsesTextFromSse(text);
@@ -414,8 +418,7 @@ async function completeChatCompletions(
     if (!calls.length) {
       assertMemoryToolDecisionsResolved(options);
       const text = choice.content?.trim();
-      if (!text) throw new Error("模型没有返回可发送内容。");
-      return { kind: "completed", text };
+      return completeProviderText(text, state, options);
     }
 
     const siblingText = choice.content?.trim() ?? "";

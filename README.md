@@ -51,7 +51,7 @@ bash "$HOME/.local/share/sunabot/current/sunabot.sh" up
 发行归档内置：
 
 - Node.js `24.18.0`
-- 生产 `node_modules` 与 Codex CLI `0.139.0`
+- 生产 `node_modules` 与 Codex CLI `0.162.1`
 - Lightpanda `0.3.3` 二进制、许可证和对应源码
 - Bubblewrap `0.8.0-2+deb12u1`
 - Core、管理台、迁移工具、运行合同与文档

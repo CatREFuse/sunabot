@@ -1688,7 +1688,10 @@ function composeEnvironment(context, project = context.project) {
 function nativeProcessEnvironment(context) {
   return {
     ...context.environment,
-    ...context.runtimeEnvironment
+    ...context.runtimeEnvironment,
+    SUNABOT_CODEX_EXECUTABLE: context.runtimeEnvironment.SUNABOT_CODEX_EXECUTABLE?.trim()
+      || context.environment.SUNABOT_CODEX_EXECUTABLE?.trim()
+      || path.resolve(context.root, context.contract.codexCli.executable)
   };
 }
 
@@ -1781,10 +1784,9 @@ async function inspectNativeCapabilities(context) {
 }
 
 async function inspectNativeCodex(context) {
-  const configured = context.runtimeEnvironment.SUNABOT_CODEX_EXECUTABLE?.trim();
-  const executable = configured || path.resolve(context.root, context.contract.codexCli.executable);
   const codexHome = path.join(context.workspace, path.dirname(context.contract.codexCli.authFile));
   const environment = { ...nativeProcessEnvironment(context), CODEX_HOME: codexHome };
+  const executable = environment.SUNABOT_CODEX_EXECUTABLE;
   let version;
   try {
     version = (await command(executable, ["--version"], { capture: true, env: environment })).trim();

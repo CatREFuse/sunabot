@@ -292,7 +292,8 @@ describe("Native Core runtime launcher", () => {
       },
       runtimeEnvironment: {
         SUNABOT_RUNTIME_ID: "runtime-env-spoof",
-        SUNABOT_DOCKER_SOCKET: "/tmp/runtime-env.sock"
+        SUNABOT_DOCKER_SOCKET: "/tmp/runtime-env.sock",
+        SUNABOT_CODEX_EXECUTABLE: "  "
       },
       dev: false,
       packaged: true,
@@ -300,6 +301,7 @@ describe("Native Core runtime launcher", () => {
       workspace: "/srv/sunabot/workspace",
       contract: {
         runtimeId: "sunabot-qq-runtime",
+        codexCli: { executable: "node_modules/@openai/codex/bin/codex.js" },
         adminHost: "127.0.0.1",
         adminPort: 8787,
         onebotPort: 8788,
@@ -310,6 +312,7 @@ describe("Native Core runtime launcher", () => {
     expect(nativeCoreEnvironment(context, "127.0.0.1", "darwin")).toMatchObject({
       SUNABOT_RUNTIME_MODE: "macos",
       SUNABOT_RUNTIME_ID: "sunabot-qq-runtime",
+      SUNABOT_CODEX_EXECUTABLE: path.resolve(context.root, "node_modules/@openai/codex/bin/codex.js"),
       SUNABOT_WORKSPACE_ID: "bfa0ec2e0882d0fb",
       SUNABOT_BWRAP_EXECUTABLE: "/opt/sunabot/current/runtime/bubblewrap/bwrap",
       SUNABOT_PACKAGED_RELEASE: "1"
@@ -321,6 +324,9 @@ describe("Native Core runtime launcher", () => {
     expect(macosEnvironment).not.toHaveProperty("SUNABOT_WEBFETCH_RENDERER_URL");
 
     const linuxEnvironment = nativeCoreEnvironment(context, "172.18.0.1", "linux", true);
+    expect(nativeCoreEnvironment({ ...context, runtimeEnvironment: {
+      ...context.runtimeEnvironment, SUNABOT_CODEX_EXECUTABLE: "/opt/managed-codex"
+    } }, "172.18.0.1", "linux").SUNABOT_CODEX_EXECUTABLE).toBe("/opt/managed-codex");
     expect(linuxEnvironment).not.toHaveProperty("SUNABOT_DOCKER_SOCKET");
     expect(linuxEnvironment).not.toHaveProperty("SUNABOT_WEBFETCH_RENDERER_TOKEN");
     expect(linuxEnvironment).toMatchObject({
@@ -882,7 +888,7 @@ describe("Native Core runtime launcher", () => {
       accountId: "io.sunabot.account-id"
     });
     expect(resolved.codexCli).toEqual({
-      version: "0.139.0",
+      version: "0.162.1",
       executable: "node_modules/@openai/codex/bin/codex.js",
       authFile: "secrets/codex/auth.json"
     });

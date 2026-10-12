@@ -10,6 +10,8 @@ Before the conversation run, exercise the production sandbox with Bash, Python a
 
 The conversation must use the raw OneBot ingress, real Provider and independent Bash audit, and mock delivery. Validate the returned archive and its exact content. Every retry uses a new isolated workspace. No production workspace data or real QQ delivery is used.
 
+Credential preparation must support the current `secrets/codex/auth.json` when the selected token variable is absent and `OPEN_ARONA_CODEX_AUTH_FILE` is unset, empty, or whitespace. Copy only the selected access token into the isolated environment, keep the source bytes unchanged, and leave the isolated Codex home empty unless the existing separate auth-copy opt-in is supplied. An explicitly configured auth path still uses the existing source-workspace boundary and must reject an external file before Provider execution.
+
 WSL process probes must parse only successful `ps` stdout and drain captured output through stdio close, including data received after process exit. A terminal-size warning on stderr must not become part of a process start signature or cause a healthy Core or account daemon to be reported as a reused PID. Failed process commands must retain their stderr diagnostics.
 
 <!-- sunabot-user-test-case:v1 -->

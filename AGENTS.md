@@ -78,6 +78,9 @@
 | `docs/user-tests/user-private-attachment-docker-workbench.md` | 0.2.0 Docker Workbench 历史附件用例 | 维护 0.2.0 到 0.3.0 迁移或历史回归时读取 |
 | `docs/user-tests/codex-chat-artifact-roundtrip.md` | 聊天文件句柄冻结为 Codex 输入并将产物回传原会话的用户用例 | 修改 Codex 异步输入、产物校验或会话资产回传前读取 |
 | `docs/user-tests/selfie-direct-delivery.md` | 阿罗娜单人自拍由异步图片任务直接回传的用户用例 | 修改自拍工具派发、完成回调或媒体发送时读取 |
+| `docs/user-tests/synthetic-selfie-reference-import.md` | 仅合成机器人参考的自拍状态链导入步骤 | 无真实人格外发的自拍验收时读取 |
+| `docs/user-tests/synthetic-selfie-direct-delivery.md` | 合成机器人自拍生成、直接回传与语音未配置边界 | 无真实人格外发的自拍验收时读取 |
+| `docs/user-tests/cases/system-tools/15-admin-private-director.md` | 合成当日日程自然生成与真实导演工具修订 | 验收 call_director 的 Provider、revision 与隔离持久化时读取 |
 | `docs/user-tests/selfie-knowledge-reference-direct-delivery.md` | 阿罗娜使用知识库普拉娜参考图生成双人自拍并直接回传的用户用例 | 修改自拍知识参考、Workbench 路径快照或异步媒体发送时读取 |
 | `docs/user-tests/address-name-priority.md` | 多称呼用户画像在主回复中优先使用第一个称呼的用户用例 | 修改称呼数组、用户画像提示上下文或回复称呼规则时读取 |
 | `docs/user-tests/add-workmemory-direct-write.md` | 主对话模型同轮调用 `add_workmemory` 直写短期工作记忆的用户用例 | 修改工作记忆工具、主回复工具调用规则或直写审计前读取 |

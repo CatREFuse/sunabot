@@ -89,7 +89,7 @@
     "@lezer/highlight": "^1.2.3",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@napi-rs/canvas": "^1.0.2",
-    "@openai/codex": "0.139.0",
+    "@openai/codex": "0.162.1",
     "boxicons": "^2.1.4",
     "chardet": "^2.2.0",
     "codemirror": "^6.0.2",

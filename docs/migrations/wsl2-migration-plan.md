@@ -56,7 +56,7 @@ Docker Engine、Compose 插件和当前 WSL 用户的 Docker 访问权限必须�
 
 Docker Desktop 用户需要为目标发行版启用 WSL Integration。WSL 内置 Docker Engine 用户不得同时启用 Docker Desktop integration；`docker context show`、`docker info` 与实际 daemon 必须指向同一实现。Launcher 根据运行网络 gateway 是否属于当前 WSL 网络命名空间选择安全监听方式，不依赖 daemon 名称或可伪造环境变量。
 
-发行归档已经内置 Node `24.18.0`、生产 `node_modules`、Codex CLI `0.139.0`、Lightpanda `0.3.3`、对应源码与许可，以及锁定的 Bubblewrap。WSL 不需要另行安装 Node、npm、Codex、Lightpanda 或 Bubblewrap。
+发行归档已经内置 Node `24.18.0`、生产 `node_modules`、Codex CLI `0.162.1`、Lightpanda `0.3.3`、对应源码与许可，以及锁定的 Bubblewrap。WSL 不需要另行安装 Node、npm、Codex、Lightpanda 或 Bubblewrap。
 
 ## 4. 新实例安装
 

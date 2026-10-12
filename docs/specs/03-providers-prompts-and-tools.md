@@ -184,7 +184,7 @@ Native runner 使用进程组、`--die-with-parent`、30 秒 watchdog、TERM→K
 
 `send_voice_message` 只在当前 transport 为真实 OneBot、Voice Profile 已启用、默认语言在线音色 ID 就绪、当前会话有 OneBot `record` 能力和 durable outbox callback 时进入 Provider 工具定义；Web Chat、关闭的 Profile、默认语言未配置和缺少投递能力均不可用。工具目标完全继承触发回复的当前 Agent、账号、会话和 reply gate，模型不能传入或改写语言、QQ、群号、账号、服务地址、模型、音色或文件路径。OpenAI Audio 兼容探针供管理员检测在线连接，单次探针失败不伪造可用结果；已进入 Provider turn 后的合成失败只记录安全错误并保留同源文字，不创建损坏或空语音 outbox。
 
-Codex CLI 是 Native Core 的固定版本运行依赖。Linux/WSL 发行包从生产 `node_modules` 提供 `0.139.0` CLI，源码运行在启动时验证同一版本。Deferred worker 只从当前 workspace 的 `secrets/codex/auth.json` 复制授权到单次任务隔离目录；管理工具目录与真实回复 Provider 共用同一能力解析器，同时检查 CLI、授权与 Native Bash 隔离探针并在异常时安全关闭。CLI 缺失或版本不匹配时 Core 拒绝启动，授权缺失时 Core 保持可启动以允许管理员完成设备登录，但 Codex 工具不得被标记为可调用。
+Codex CLI 是 Native Core 的固定版本运行依赖。Linux/WSL 发行包从生产 `node_modules` 提供 `0.162.1` CLI，源码运行在启动时验证同一版本。Deferred worker 只从当前 workspace 的 `secrets/codex/auth.json` 复制授权到单次任务隔离目录；管理工具目录与真实回复 Provider 共用同一能力解析器，同时检查 CLI、授权与 Native Bash 隔离探针并在异常时安全关闭。CLI 缺失或版本不匹配时 Core 拒绝启动，授权缺失时 Core 保持可启动以允许管理员完成设备登录，但 Codex 工具不得被标记为可调用。
 
 `codex` 继续使用既有 deferred dispatch、durable tool job、ACK 和完成回调，只向宿主重新确认的管理员触发回合开放。管理员 QQ 私聊与群聊可获得 `local|research|analysis` worker schema，worker 固定使用 `workspace-write` sandbox，可在所选工作区内读取、创建、修改、移动和删除文件；普通用户不能获得定义，伪造调用也不能启动 worker。只有管理员私聊或已认证管理员 Web Chat、macOS Native Core、非 prompt override turn 同时成立且当前/引用消息没有可冻结媒体时，同名工具才替换为代码固定的控制 schema，允许 `list_sessions`、`start` 与 `resume`；存在可冻结媒体时必须保留含 `inputHandles` 的 worker schema 和 deferred path，不能追加内部控制授权标记。运行时在持久化 job 前追加不可由 Provider schema 提交的管理员授权标记，实际控制模式再追加独立控制授权标记；worker 在启动进程前逐项校验。普通用户、未授权回调和缺少授权标记的任务均不能获得或伪造该能力。
 
@@ -201,6 +201,8 @@ Codex CLI JSONL 与 app-server stdout 累计超过 4 MiB 后继续只解析有�
 管理员本机新建或带目录续聊固定使用 `workspaceWrite`，只允许当前 attempt 合约输出目录与所选绝对项目目录两个 writable root，网络可用，approval policy 为 `never`，不能升格为 `dangerFullAccess` 或写入两根之外。异步 worker 不等待交互审批；需要更高权限的任务应明确失败并由管理员改用现有逐命令审批的 `native_bash`。本机进程以单次 attempt 目录内的唯一 Codex launcher 启动，SSH 命令携带唯一 run marker；两者都先持久化 PID、进程组与命令标记，再进入协议循环，超时、取消、崩溃恢复和 PID 重用保护复用 Codex 子进程组合同。
 
 Codex access token 只有在三段 base64url JWT、payload object 和正的安全整数 `exp` 全部有效且未进入刷新窗口时才可复用；缺失、畸形或非数值过期时间必须走受管刷新。刷新子进程的 stdout/stderr 有固定上限，POSIX 使用独立进程组；成功、协议失败和超时都等待 child `close`，关闭 stdin 后按 TERM/KILL 有界回收整个进程组，不能留下 app-server 子进程或未处理管道错误。
+
+Native launcher 默认向 Core 及受管子进程提供项目 CLI 的 `SUNABOT_CODEX_EXECUTABLE` 绝对路径，既有显式 CLI 覆盖继续优先，并用于同一组件的版本检查与实际执行；刷新调用的显式 command 优先，其次使用该环境路径，不能要求另外全局安装 CLI。doctor/readiness 通过 Node 包解析取得项目 CLI，源码及编译后 dist 均不依赖相对 node_modules 层级；刷新失败保留 `CODEX_AUTH_REFRESH_*` 错误码，不吞成笼统的 credential missing。真实凭据仅通过既有 app-server 正常刷新，测试使用隔离假凭据，不修改生产 token 的到期时间。
 
 macOS 的 `native_bash` 向模型返回当前 Agent canonical Workbench 的真实绝对路径，并保留命令 stdout/stderr 中的宿主路径；Linux/WSL Bubblewrap 形态把同一 Workbench 投影为 `/workbench` 并脱敏宿主路径。审批票据固定绑定 Native backend。
 
@@ -230,6 +232,16 @@ Dream 的 Provider-facing `response_format` 固定为 `text`，JSON 由提示词
 
 `dream.payload` 发送给模型前执行白名单投影与 256 KiB 总预算。当前工作记忆以完整 `workingMemory` 字符串进入压缩；既有长期记忆只作为新增去重参考，其投影不携带 `sourceWorkingMemoryIds`、`sourceLongTermMemoryIds` 或其他旧单项来源链。实际对话、任务、日程与人格只用于理解事实和生成梦境。凭据、秘密、邮箱、签名参数和宿主绝对路径继续脱敏；工作记忆、长期记忆、会话、任务与日程是软链接，提交时版本变化只跳过对应写入或按既有快照合同失败，不恢复旧数据，也不扩展 Dream 的写入范围。
 
+### 工具已投递文字后的空末轮（2026-10-12）
+
+五种 Provider 协议在成功的无工具末轮保留本 turn 已通过回调投递的文字，并设置 `textAlreadyDelivered`；普通回复不会再次发送该文字，有新图片或软错误时仍交付新内容。完全空的回复、未成功投递文字、运输失败和待提交配置的空确认继续保留原错误。原 memory decision、原子图片回复、held 配置确认和 durable outbox 合同不变。
+
+OpenAI Responses 即使 HTTP 成功，响应体有明确 error 或 `status=failed` 时也必须记录 `ok:false` 并抛出原始错误（缺少明细时为模型请求失败）；空的 `status=incomplete` 保留无可发送内容错误，不能沿已投递文字的空末轮路径完成。
+
 ### Codex 模型目录与本地模型选择（2026-10-09）
+
+2026-10-12 的实际文件任务确认 `0.139.0` 对 `gpt-5.6-sol` 返回需要更新 CLI 的 HTTP 400；固定依赖与组件摘要因此升级为 `0.162.1`。安装保留完整 npm 平台包及其 code-mode host 和配套资源，继续使用 Native、隔离授权目录、既有工作区权限及产物验证。主回复模型与 CLI worker 模型分别核验，不自动替换模型。
+
+此处模型目录指 Sunabot 的 Codex Responses Provider。CLI worker 使用 `bot.tools.codex.model`，其实际可用模型由已登录 CLI 的目录及执行结果核验，不能从 Responses 请求成功推断 CLI 同样支持该模型。
 
 Codex 模型目录增加 `gpt-6.1-sol` 和 `gpt-6-luna`。GPT-6.1 Sol 支持 low、medium、high、xhigh、max；GPT-6 Luna 另支持 none。默认推理强度均为 medium。管理员为阿罗娜选择主回复 gpt-6.1-sol/medium、独立 Tone gpt-6-luna/low；已核对目录 API 与配置回读，两模型的真实 Codex 订阅测试均返回成功；38 项目录/配置测试、84 项 runtime smoke、运行合同、类型检查和构建通过。既有人格与其他模型路由保持原配置。

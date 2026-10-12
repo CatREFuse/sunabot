@@ -105,7 +105,7 @@
     },
     "codexCli": {
       "managedBy": "native",
-      "version": "0.139.0",
+      "version": "0.162.1",
       "executable": "node_modules/@openai/codex/bin/codex.js",
       "authFile": "secrets/codex/auth.json",
       "failClosed": true

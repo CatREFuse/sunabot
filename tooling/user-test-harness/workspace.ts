@@ -50,6 +50,7 @@ export async function prepareUserTestWorkspace(input: {
   agentId?: string;
   providerId?: string;
   model?: string;
+  codexModel?: string;
   lockProviderRoutes?: boolean;
   copyCodexAuth?: boolean;
 }) {
@@ -60,6 +61,7 @@ export async function prepareUserTestWorkspace(input: {
     agentId: input.agentId,
     providerId: input.providerId,
     model: input.model,
+    codexModel: input.codexModel,
     lockProviderRoutes: input.lockProviderRoutes,
     copyCodexAuth: input.copyCodexAuth,
     copyAgentWorkspace: (copy: ProviderSmokeAgentCopyInput) => (
@@ -111,6 +113,7 @@ export async function prepareUserTestWorkspace(input: {
         providerRouteLock: {
           providerId: prepared.routeLock.providerId,
           model: prepared.routeLock.model,
+          ...(prepared.routeLock.codexModel ? { codexModel: prepared.routeLock.codexModel } : {}),
           providerApiKeyEnv: prepared.routeLock.providerApiKeyEnv,
           onebotAccessTokenEnv: prepared.routeLock.onebotAccessTokenEnv
         }
@@ -201,6 +204,7 @@ export async function installIsolatedCodexGuiHome(
 export function isProviderRouteLockMarker(value: unknown): value is {
   providerId: string;
   model: string;
+  codexModel?: string;
   providerApiKeyEnv: string;
   onebotAccessTokenEnv: string;
 } {
@@ -210,6 +214,8 @@ export function isProviderRouteLockMarker(value: unknown): value is {
     && Boolean(record.providerId.trim())
     && typeof record.model === "string"
     && Boolean(record.model.trim())
+    && (record.codexModel === undefined
+      || (typeof record.codexModel === "string" && Boolean(record.codexModel.trim())))
     && typeof record.providerApiKeyEnv === "string"
     && Boolean(record.providerApiKeyEnv.trim())
     && typeof record.onebotAccessTokenEnv === "string"

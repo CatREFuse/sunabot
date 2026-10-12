@@ -2,7 +2,7 @@
 
 ## 目标与环境
 
-管理员群聊在 Windows 主机的 WSL Native Core 中，通过当前 Agent 已批准的 Workbench Skill 和真实 Native Bash 创建、回读并管理一个表情。独立审核模型必须支持当前默认 Provider；不绕过审核，不连接真实 QQ，所有文件均位于全新隔离工作区。
+管理员群聊通过标准 OneBot at 消息明确向 Bot 发出指令，在 Windows 主机的 WSL Native Core 中使用已批准的 Workbench Skill 和真实 Native Bash 创建、回读并管理一个表情。独立审核模型必须支持当前默认 Provider；不绕过审核，不连接真实 QQ，所有文件均位于全新隔离工作区。
 
 ## 验收
 
@@ -32,8 +32,11 @@
       "group_id": 30001,
       "time": 1791738000,
       "sender": { "nickname": "fixture-admin" },
-      "message": "请激活 workbench-config，读取表情管理资源文档和当前 index.md，用 native_bash 与本机 convert 创建一个纯绿色合成测试表情，key 为 测试绿块。按 Skill 的表情合同规范化为1024×1024，校验摘要与命名，同目录原子发布 emojis.jsonl，再回读核验清单与图片，使用 send_file 发回测试表情。不要调用生图、搜索、语音或其他外部工具，回复只说明实际完成的结果；失败时报告实际错误。",
-      "raw_message": "请激活 workbench-config，读取表情管理资源文档和当前 index.md，用 native_bash 与本机 convert 创建一个纯绿色合成测试表情，key 为 测试绿块。按 Skill 的表情合同规范化为1024×1024，校验摘要与命名，同目录原子发布 emojis.jsonl，再回读核验清单与图片，使用 send_file 发回测试表情。不要调用生图、搜索、语音或其他外部工具，回复只说明实际完成的结果；失败时报告实际错误。"
+      "message": [
+        { "type": "at", "data": { "qq": "40004" } },
+        { "type": "text", "data": { "text": "请激活 workbench-config，读取表情管理资源文档和当前 index.md，用 native_bash 与本机 convert 创建一个纯绿色合成测试表情，key 为 测试绿块。按 Skill 的表情合同规范化为1024×1024，校验摘要与命名，同目录原子发布 emojis.jsonl，再回读核验清单与图片，使用 send_file 发回测试表情。不要调用生图、搜索、语音或其他外部工具，回复只说明实际完成的结果；失败时报告实际错误。" } }
+      ],
+      "raw_message": "[CQ:at,qq=40004] 请激活 workbench-config，读取表情管理资源文档和当前 index.md，用 native_bash 与本机 convert 创建一个纯绿色合成测试表情，key 为 测试绿块。按 Skill 的表情合同规范化为1024×1024，校验摘要与命名，同目录原子发布 emojis.jsonl，再回读核验清单与图片，使用 send_file 发回测试表情。不要调用生图、搜索、语音或其他外部工具，回复只说明实际完成的结果；失败时报告实际错误。"
     }
   },
   "expected": {

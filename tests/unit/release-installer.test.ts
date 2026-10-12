@@ -243,7 +243,7 @@ async function writeRelease(stage: string) {
       "  *process.versions.node*) printf '%s\\n' 'node:version-smoke' >> \"$INSTALL_TRACE\"; exit 0 ;;",
       "  *validateReleaseManifest*) printf '%s\\n' 'node:release-integrity' >> \"$INSTALL_TRACE\"; test \"${FAKE_INVALID_MANIFEST:-0}\" != '1' ;;",
       "  *Promise.all*) printf '%s\\n' 'node:dependency-smoke' >> \"$INSTALL_TRACE\"; exit 0 ;;",
-      "  *codex.js*--version*) printf '%s\\n' 'node:codex-smoke' >> \"$INSTALL_TRACE\"; printf '%s\\n' 'codex-cli 0.139.0'; exit 0 ;;",
+      "  *codex.js*--version*) printf '%s\\n' 'node:codex-smoke' >> \"$INSTALL_TRACE\"; printf '%s\\n' 'codex-cli 0.162.1'; exit 0 ;;",
       `  *component.lock.json*) printf '%s\\n' 'node:component-lock' >> \"$INSTALL_TRACE\"; printf '%s\\n%s' '${napcatVersion}' '${napcatRef}'; exit 0 ;;`,
       "  *) exit 2 ;;",
       "esac"

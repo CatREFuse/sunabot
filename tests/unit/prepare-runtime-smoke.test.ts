@@ -98,6 +98,48 @@ describe("prepare provider smoke workspace", () => {
     expect(environment).not.toContain("OPEN_ARONA_CODEX_AUTH_FILE");
   });
 
+  it.each([undefined, "", "   "])("uses the standard Codex auth path for an unset or blank override (%j)", async (override) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-prepare-smoke-codex-default-"));
+    temporaryDirectories.push(root);
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    const authContent = JSON.stringify({ tokens: { access_token: "canonical-test-access-token" } });
+    await writeRouteLockSource(source, "codex-responses");
+    await write(path.join(source, ".env"), override === undefined
+      ? ""
+      : `OPEN_ARONA_CODEX_AUTH_FILE=${JSON.stringify(override)}\n`);
+    await write(codexAuthPath(source), authContent);
+
+    const result = await prepareProviderSmokeWorkspace({
+      source,
+      destination,
+      confirmCredentialCopy: true,
+      providerId: "selected",
+      model: "gpt-5.6-sol",
+      lockProviderRoutes: true
+    });
+    const environment = await fs.readFile(result.envPath, "utf8");
+    expect(environment).toContain('SELECTED_KEY="canonical-test-access-token"');
+    expect(environment).not.toContain("OPEN_ARONA_CODEX_AUTH_FILE");
+    await expect(fs.readFile(codexAuthPath(source), "utf8")).resolves.toBe(authContent);
+    await expect(fs.readdir(path.dirname(codexAuthPath(destination)))).resolves.toEqual([]);
+  });
+
+  it("rejects an explicit Codex auth override outside the source workspace", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-prepare-smoke-codex-external-"));
+    temporaryDirectories.push(root);
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    const externalAuth = path.join(root, "external-auth.json");
+    await writeRouteLockSource(source, "codex-responses");
+    await write(externalAuth, JSON.stringify({ tokens: { access_token: "external-test-token" } }));
+    await write(path.join(source, ".env"), `OPEN_ARONA_CODEX_AUTH_FILE=${JSON.stringify(externalAuth)}\n`);
+
+    await expect(prepareProviderSmokeWorkspace({ source, destination, confirmCredentialCopy: true }))
+      .rejects.toThrow(/不在源 workspace/);
+    await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("copies the standard Codex auth file exactly only with the locked opt-in", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-prepare-smoke-codex-auth-"));
     temporaryDirectories.push(root);
@@ -466,6 +508,55 @@ describe("prepare provider smoke workspace", () => {
       providerApiKeyEnv: "CODEX_KEY",
       onebotAccessTokenEnv: "ONEBOT_ACCESS_TOKEN"
     })).rejects.toThrow("USER_TEST_PROVIDER_ROUTE_LOCK_INVALID: shared.providers");
+  });
+
+  it("locks an explicit CLI model separately and rejects subsequent worker drift", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-prepare-smoke-cli-model-"));
+    temporaryDirectories.push(root);
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    await writeRouteLockSource(source, "codex-responses");
+    const prepared = await prepareProviderSmokeWorkspace({
+      source, destination, confirmCredentialCopy: true,
+      providerId: "selected", model: "gpt-6.1-sol", codexModel: "gpt-5.4",
+      lockProviderRoutes: true
+    });
+    expect(prepared.routeLock.codexModel).toBe("gpt-5.4");
+    const agentConfigPath = path.join(destination, "business/agents/plana/agent.json");
+    for (const filePath of [prepared.configPath, agentConfigPath]) {
+      const document = JSON.parse(await fs.readFile(filePath, "utf8"));
+      expect(document.bot.tools.codex.model).toBe("gpt-5.4");
+      document.bot.tools.codex.model = "gpt-6.1-sol";
+      expectRouteLock(document, "selected", "gpt-6.1-sol");
+    }
+    await expect(assertProviderRouteLockDocuments({
+      configPath: prepared.configPath, agentConfigPath,
+      envPath: prepared.envPath, ...prepared.routeLock
+    })).resolves.toBeUndefined();
+    const agent = JSON.parse(await fs.readFile(agentConfigPath, "utf8"));
+    agent.bot.tools.codex.model = "gpt-6.1-sol";
+    await fs.writeFile(agentConfigPath, JSON.stringify(agent));
+    await expect(assertProviderRouteLockDocuments({
+      configPath: prepared.configPath, agentConfigPath,
+      envPath: prepared.envPath, ...prepared.routeLock
+    })).rejects.toThrow("USER_TEST_PROVIDER_ROUTE_LOCK_INVALID: agent.bot.tools.codex.model");
+  });
+
+  it.each([
+    { codexModel: "gpt-5.4", lockProviderRoutes: false, error: "FLAG_REQUIRED" },
+    { codexModel: "   ", lockProviderRoutes: true, error: "CODEX_MODEL_REQUIRED" }
+  ])("rejects invalid explicit CLI model options: $error", async (input) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-prepare-smoke-cli-invalid-"));
+    temporaryDirectories.push(root);
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    await writeRouteLockSource(source, "codex-responses");
+    await expect(prepareProviderSmokeWorkspace({
+      source, destination, confirmCredentialCopy: true,
+      ...(input.lockProviderRoutes ? { providerId: "selected", model: "gpt-6.1-sol" } : {}),
+      codexModel: input.codexModel, lockProviderRoutes: input.lockProviderRoutes
+    })).rejects.toThrow(`USER_TEST_PROVIDER_ROUTE_LOCK_${input.error}`);
+    await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects a missing or non-Codex locked provider before creating the destination", async () => {

@@ -19,7 +19,7 @@ const PROVIDER_ROUTE_LOCK_FIELDS = Object.freeze([
   ["bot.orchestrator.userGroupchatOrchestratorModel", "model"],
   ["bot.orchestrator.groupThreadProviderId", "provider"],
   ["bot.orchestrator.groupThreadModel", "model"],
-  ["bot.tools.codex.model", "model"],
+  ["bot.tools.codex.model", "codex-model"],
   ["bot.bash.auditModel", "model"]
 ]);
 const INLINE_SECRET_FIELD_NAMES = new Set([
@@ -80,9 +80,8 @@ export async function prepareProviderSmokeWorkspace(options) {
   const sourceEnvironment = dotenv.parse(await fs.readFile(sourceEnvPath, "utf8"));
   let providerToken = String(sourceEnvironment[provider.apiKeyEnv] ?? "").trim();
   if (!providerToken && provider.kind === "codex-responses") {
-    const configuredAuthFile = String(
-      sourceEnvironment.OPEN_ARONA_CODEX_AUTH_FILE ?? "workspace/security/codex/auth.json"
-    ).trim();
+    const configuredAuthFile = String(sourceEnvironment.OPEN_ARONA_CODEX_AUTH_FILE ?? "").trim()
+      || `workspace/${CODEX_AUTH_RELATIVE_PATH}`;
     const authFile = resolveSourcePath(source, configuredAuthFile);
     await assertFileInside(authFile, source, "Codex 授权文件");
     const auth = JSON.parse(await fs.readFile(authFile, "utf8"));
@@ -208,6 +207,7 @@ export async function prepareProviderSmokeWorkspace(options) {
         envPath: destinationEnvPath,
         providerId: routeLock.providerId,
         model: routeLock.model,
+        ...(routeLock.codexModel ? { codexModel: routeLock.codexModel } : {}),
         providerApiKeyEnv: provider.apiKeyEnv,
         onebotAccessTokenEnv: onebotEnvironment
       });
@@ -279,6 +279,9 @@ export async function resolveValidatedCodexHome(workspace, options = {}) {
 export async function assertProviderRouteLockDocuments(input) {
   const providerId = requiredLockValue(input.providerId, "PROVIDER");
   const model = requiredLockValue(input.model, "MODEL");
+  const codexModel = input.codexModel === undefined
+    ? model
+    : requiredLockValue(input.codexModel, "CODEX_MODEL");
   const providerApiKeyEnv = requiredLockValue(
     input.providerApiKeyEnv,
     "PROVIDER_API_KEY_ENV"
@@ -326,7 +329,8 @@ export async function assertProviderRouteLockDocuments(input) {
       );
     }
     for (const [routePath, valueKind] of PROVIDER_ROUTE_LOCK_FIELDS) {
-      const expected = valueKind === "provider" ? providerId : model;
+      const expected = valueKind === "provider" ? providerId
+        : valueKind === "codex-model" ? codexModel : model;
       if (readPath(document, routePath) !== expected) {
         throw new Error(`USER_TEST_PROVIDER_ROUTE_LOCK_INVALID: ${documentName}.${routePath}`);
       }
@@ -361,14 +365,17 @@ function providerRouteLockOptions(options) {
   const providerId = optionalLockValue(options.providerId);
   const model = optionalLockValue(options.model);
   if (!options.lockProviderRoutes) {
-    if (providerId || model) {
+    if (providerId || model || options.codexModel !== undefined) {
       throw new Error("USER_TEST_PROVIDER_ROUTE_LOCK_FLAG_REQUIRED");
     }
     return undefined;
   }
   return {
     providerId: requiredLockValue(providerId, "PROVIDER"),
-    model: requiredLockValue(model, "MODEL")
+    model: requiredLockValue(model, "MODEL"),
+    ...(options.codexModel === undefined ? {} : {
+      codexModel: requiredLockValue(options.codexModel, "CODEX_MODEL")
+    })
   };
 }
 
@@ -387,7 +394,8 @@ function applyProviderRouteLock(document, routeLock) {
     writePath(
       document,
       routePath,
-      valueKind === "provider" ? routeLock.providerId : routeLock.model
+      valueKind === "provider" ? routeLock.providerId
+        : valueKind === "codex-model" ? routeLock.codexModel ?? routeLock.model : routeLock.model
     );
   }
 }

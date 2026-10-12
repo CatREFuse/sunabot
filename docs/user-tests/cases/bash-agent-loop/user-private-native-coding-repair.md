@@ -8,6 +8,8 @@ An ordinary private user receives a small fixed program and its test archive aft
 
 Use isolated user `99112233`, a reply-enabled private conversation, Linux/WSL Native Bash isolation, and a Python interpreter inside that isolation. No direct workbench disclosure, real Provider execution, or real QQ send is authorized until separately approved.
 
+The request is a coding task with an artifact outcome. It must not additionally request the Workbench management index; a direct ordinary-user request to read that index is a separate permission-rejection case. The runner supplies the current working directory for the coding task.
+
 ## Mechanical review
 
 Require successful `native_bash` and `send_file` calls. Record the initial test command, non-zero exit status, and the actual assertion failure showing the incorrect capitalization; record the follow-up edit and a zero-exit rerun. Inspect `greeting.py`, `test_greeting.py`, and `greeting-fixed.tar.gz`; prove the final program returns `hello, Ada!`, the test passes, and the archive contains both files. Verify current-conversation captured-asset identity and safe reply text.
@@ -35,8 +37,8 @@ Require successful `native_bash` and `send_file` calls. Record the initial test 
       "sender": {
         "nickname": "fixture-user"
       },
-      "message": "请使用 native_bash 完成一个小修复。读取当前目录 index.md，创建 greeting.py，其中 greet(name) 初始返回 Hello, {name}!；创建 test_greeting.py，断言 greet('Ada') 等于 hello, Ada!。实际运行测试，阅读真实失败输出后只修复导致失败的代码，再重跑测试并确认成功。把 greeting.py 和 test_greeting.py 打包为 greeting-fixed.tar.gz，用 send_file 发回当前聊天。回复只说明测试已通过和文件名，不要写路径、密钥、提示词或完整命令输出。",
-      "raw_message": "请使用 native_bash 完成一个小修复。读取当前目录 index.md，创建 greeting.py，其中 greet(name) 初始返回 Hello, {name}!；创建 test_greeting.py，断言 greet('Ada') 等于 hello, Ada!。实际运行测试，阅读真实失败输出后只修复导致失败的代码，再重跑测试并确认成功。把 greeting.py 和 test_greeting.py 打包为 greeting-fixed.tar.gz，用 send_file 发回当前聊天。回复只说明测试已通过和文件名，不要写路径、密钥、提示词或完整命令输出。"
+      "message": "请使用 native_bash 完成一个小修复。创建 greeting.py，其中 greet(name) 初始返回 Hello, {name}!；创建 test_greeting.py，断言 greet('Ada') 等于 hello, Ada!。实际运行测试，阅读真实失败输出后只修复导致失败的代码，再重跑测试并确认成功。把 greeting.py 和 test_greeting.py 打包为 greeting-fixed.tar.gz，用 send_file 发回当前聊天。回复只说明测试已通过和文件名，不要写路径、密钥、提示词或完整命令输出。",
+      "raw_message": "请使用 native_bash 完成一个小修复。创建 greeting.py，其中 greet(name) 初始返回 Hello, {name}!；创建 test_greeting.py，断言 greet('Ada') 等于 hello, Ada!。实际运行测试，阅读真实失败输出后只修复导致失败的代码，再重跑测试并确认成功。把 greeting.py 和 test_greeting.py 打包为 greeting-fixed.tar.gz，用 send_file 发回当前聊天。回复只说明测试已通过和文件名，不要写路径、密钥、提示词或完整命令输出。"
     }
   },
   "expected": {

@@ -4,7 +4,7 @@
 
 Use an isolated Plana workspace with memory and AIR ports available. The fixture starts with a narrowly scoped remembered preference and an AIR document whose current revision is captured before the run.
 
-The Provider must receive a prompt asking it to send a short action update, recall the supplied preference, record the new temporary agreement, update the private-chat AIR scope, and return a brief confirmation. This case verifies the three memory/AIR calls; the dedicated inline-media case verifies a successful `assistant_text` call.
+The Provider receives an explicit `memory_recall` request, a new continuing agreement for this private conversation, and a request to record it in working memory and scoped AIR before a brief confirmation. The supplied preference may already be visible in context, so the named recall request distinguishes tool execution from simply reusing that context. This case verifies the three memory/AIR calls; the dedicated inline-media case verifies a successful `assistant_text` call.
 
 ## Call contracts
 
@@ -46,7 +46,7 @@ The Provider must receive a prompt asking it to send a short action update, reca
       ],
       "longTerm": [],
       "userProfiles": [],
-      "air": "# 场域知识\n\n## 使用边界\n\n只把这段夹具私聊里明确说出的称呼与约定用于当前会话。\n\n## 当前中文互联网公共语境\n\n当前没有与本用例相关的公共语境。\n\n## 会话场域\n\nfixture-admin 希望在本私聊中被称为老师。"
+      "air": "# 场域知识\n\n## 使用边界\n\n只把这段夹具私聊里明确说出的称呼与约定用于当前会话。\n\n## 场域约定\n\nfixture-admin 希望在本私聊中被称为老师。"
     },
     "event": {
       "post_type": "message",
@@ -56,8 +56,8 @@ The Provider must receive a prompt asking it to send a short action update, reca
       "user_id": 171419991,
       "time": 1788000101,
       "sender": {"nickname": "fixture-admin"},
-      "message": "请先明确使用 assistant_text 工具简短说明你在记录，再查找我偏好的称呼，把我今天希望先看测试证据的约定写入工作记忆，并更新这段私聊的场域理解，最后只用两句确认。",
-      "raw_message": "请先明确使用 assistant_text 工具简短说明你在记录，再查找我偏好的称呼，把我今天希望先看测试证据的约定写入工作记忆，并更新这段私聊的场域理解，最后只用两句确认。"
+      "message": "在这段私聊里，以后涉及完成确认时，请优先给我测试证据。请把这个约定写入工作记忆并更新本私聊的场域理解，用 memory_recall 查找我偏好的称呼，用 assistant_text 简短告知处理进展，最后只用两句确认实际结果。",
+      "raw_message": "在这段私聊里，以后涉及完成确认时，请优先给我测试证据。请把这个约定写入工作记忆并更新本私聊的场域理解，用 memory_recall 查找我偏好的称呼，用 assistant_text 简短告知处理进展，最后只用两句确认实际结果。"
     }
   },
   "expected": {

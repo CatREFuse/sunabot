@@ -4,24 +4,54 @@
 
 ## 结论
 
-当前 Windows 主机通过 Ubuntu-24.04 WSL 运行 Native Core 与 Native 工具。已部署文件操作、Bubblewrap 隔离、Node/Python 执行及本地图片转换在隔离目录中通过冒烟验证；Arona 与 Plana 的表情资源完整，未发现文件所有权、读取权限或清单损坏造成的阻塞。
+当前 Windows 主机通过 Ubuntu-24.04 WSL 运行 Native Core 与 Native 工具。已部署文件操作、Bubblewrap 隔离、Node/Python 执行及本地图片转换在隔离目录中通过冒烟验证；审计时 Arona 与 Plana 的表情资源完整，未发现文件所有权、读取权限或清单损坏造成的阻塞。
+
+26 个内置工具中，当前已配置且开放的 23 个已通过真实 Provider 隔离合成链、独立质量评审及 seal/gate；Tavily 凭据缺失、在线 voice profile 缺失、run_skill_script 规范关闭的 3 项不计成功。MCP server 数为 0，动态 MCP 不计入 26 个内置工具。真实 QQ 外发、Windows 原生、arm64 与动态 WebFetch 端到端仍未验收。
 
 生产中两次表情操作的直接阻塞点是独立 Bash 审核：2026-10-12 01:00、01:02 的 `native_bash` 返回 `BASH_AUDIT_UNAVAILABLE: independent audit failed`，未执行命令。主 Agent 核查对应审核请求，确认 `codex.complete` 使用 `gpt-5.4-mini`，收到 HTTP 400，错误为该模型不支持当前 ChatGPT 账号。该故障发生在执行文件命令之前，不能归为文件权限错误。
 
-另有一处工具说明与已部署 Skill 的语义冲突，以及本地 PNG 格式要求的说明遗漏，可能影响模型选择和发布操作，需与审核 Provider 故障分别处理。Arona、Plana 的审核模型配置已热更新为 `gpt-6-luna`，冲突描述与 PNG32 说明已发布；本报告没有执行真实 Provider 请求，因此模型配置已调整不等于审核链已通过外部验收。
+另有一处工具说明与已部署 Skill 的语义冲突，以及本地 PNG 格式要求的说明遗漏，可能影响模型选择和发布操作，需与审核 Provider 故障分别处理。Arona、Plana 的审核模型配置已热更新为 `gpt-6-luna`，冲突描述与 PNG32 说明已发布；基础检查阶段没有执行真实 Provider 请求；用户后续授权后的完整链路证据见下节。
 
-## 范围与方式
+## 授权后的完整链路复核
+
+真实 gpt-6-luna Bash 审核已返回 HTTP200 allow，原始 OneBot ingress、Session、Provider、工具、outbox 与 mock 投递的表情用例23/23及独立质量通过。生成图为1024×1024、8-bit/color6、6,570 B，production repository实际读回并核对发送字节。模型该次发布没有执行 fsync，因此不能将这一真实 run 声称为覆盖断电持久性；前述确定性发布测试另有 fsync 证据。
+
+专用群聊 emoji/selfie 导入27/27、原件导出26/26均通过。导出复测明确出现模型空末轮：已有进度与资产投递后，旧代码返回空内容错误，修复后无重复或异常；完全空输出、未成功投递、运输失败、空设置确认仍保留原错误。五种协议及普通Runtime分别有确定性回归。
+
+另确认原固定CLI 0.139.0的现有worker模型gpt-5.6-sol返回“需要新版”。完整npm 0.162.1和必要helper已在隔离实例通过真实聊天文件回传，22/22及独立质量通过。测试准备也修复auth默认路径与空值，并允许显式锁定CLI模型，未放宽凭据复制和运行前漂移校验。
+
+本节均使用合成内容与模拟 QQ 投递，不覆盖真实 QQ 出站、Windows 原生或 arm64。静态 WebFetch 已通过真实 IANA 页面验收，动态 WebFetch 仅取得 Native Renderer 隔离、健康和鉴权预检。生图原用例 50% 透明留边的质量失败保留，独立明确正方形全白不透明构图复测 20/20、质量 4/5/5 通过，不能保证任意上游构图确定输出。汇总矩阵、缺配置项及限制见[内置工具验收](./2026-10-12-built-in-tool-validation.md)。
+
+## 当前部署、凭据修复与证据保留
+
+凭据到期后的刷新路径已修复并完成复审：刷新 helper 优先使用受管 CLI 配置；launcher 仅在未配置时补充默认项目 CLI 绝对路径，保留 runtime/env 的既有显式覆盖，inspect 版本检查与 Core 使用同一最终值；probe 使用 Node createRequire 解析项目 CLI 包，source/dist 两种入口均正确，显式环境 CLI 优先。`CODEX_AUTH_REFRESH_UNAVAILABLE` 保留原错误，不再被转换为 credential missing。相关定向测试 68 项通过、1 项既有跳过。
+
+凭据修复前最近已确认的完整 `npm run verify` 退出 0：unit 270 文件、3,089 项通过、1 项既有跳过，harness 39、integration 43、Skill sandbox 13、backup 45、memory migration 153、runtime smoke 84、E2E 53，以及运行合同、架构、类型检查、benchmark、build 均通过。
+
+凭据刷新修复后的一轮 verify 因复审发现 CLI 配置一致性问题而有界中止，日志与 abort 状态保留；修正后完整 unit 3,091 项通过。最后另复现并修复 OpenAI Responses 明确失败、无明细失败及空 incomplete 被误判完成，相关 114 项回归与独立 6 场景复审通过。
+
+最终冻结版本完整 `npm run verify` 于 2026-10-12 12:36:35 退出 0：unit 270 文件、3,094 项通过、1 项既有跳过，harness 39、integration 43、Skill sandbox 13、backup 45、memory migration 153、runtime smoke 84、E2E 53 全部通过，累计 3,524 项通过；运行合同、架构、类型检查、benchmark 与 build 通过。持久日志位于隔离 checkout `.user-test-runs/completion-final-verify-1791779204271528343.log`，同名状态为 passed / exitCode 0。没有 UI 改动，本轮没有单独执行 visual suite。
+
+WSL 停机重启前的原 `/tmp` 日志已清空，不能声称仍保留；隔离 checkout `.user-test-runs/` 中的密封 reports 持久存在。
+
+最终四文件补丁已完成停服、四库备份、应用、完整 build 与官方 `up`，各阶段退出 0。2026-10-12 12:41:17 独立只读复核：Core HTTP 200 / live=true，启动探针 ready；新 Core 自动取得受管 CLI 路径并解析现存 0.162.1，生产 dist 已包含包解析和响应失败修复。MCP 缺配置使 capability degraded，不能称全部可选能力就绪。Arona CheckLoginStatus code=0 / isLogin=false，OneBot 建立连接为 0；登录缓存没有清空，早前快速登录明确报告登录态失效且无 kick/冲突标记。管理台自动更新的二维码等待手机扫码；没有验证真实 QQ 外发。只读证据位于隔离 `.user-test-runs/production-final-readonly-20261012-KE6Vde/status-safe.json`。
+
+最终部署另保留四个任务源码及 dist 于 `/home/sunabot/sunabot/workspace/backups/tool-final-repair-20261012-1791779860554628189`，对应一致恢复点为 `/home/sunabot/sunabot/workspace/backups/sqlite-recovery/sqlite-recovery-20261012T043844094Z-f9cacf28`，create/verify 成功且包含四库。该末次部署前后 auth 摘要一致；此前通过 app-server 的正常刷新独立记录，不将正常凭据轮换描述为全程字节不变。
+
+回滚目录 `/home/sunabot/sunabot/workspace/backups/tool-deployment-20261012-034514` 保留原 source、dist、CLI 与 `sqlite-backup.log`。备份 create 返回 `ok:true`，实际数据库恢复点另存于 `/home/sunabot/sunabot/workspace/backups/sqlite-recovery/sqlite-recovery-20261012T034618660Z-32d4e4c9`；manifest.databases 共 4 个数据库，覆盖两 Agent 各自的业务库与队列库。停服一致恢复点的 schema/invariants 校验由创建命令 verify 成功，数据库本体不位于 source 回滚目录。原 auth 已正常刷新，没有删除 QQ 缓存或改写生产人格、历史。
+
+## 历史基线：授权前审计范围与方式
 
 - Windows 源码：`F:\sunabot`。
 - 实际运行源码与产物：`/home/sunabot/sunabot`、其 `dist/`。
 - 运行身份：`sunabot`，UID/GID 1000。
 - 生产检查只读取资源入口、文件元数据和图片字节，用于摘要及尺寸验证；不读取或记录凭据、登录缓存或用户消息正文。
 - 冒烟使用 `/tmp/sunabot-file-smoke-*` 下的全新临时 Agent 工作区，结束后删除该临时目录。
-- 未在生产工作区构造 Runtime，未执行迁移、Core/NapCat 重启、外发或真实 Provider 调用。生产写入仅为下述已备份的模型配置、工具说明及 bundled Skill 说明更新，未改业务数据库或表情清单。
+- 授权前审计与确定性冒烟没有在生产工作区构造 Runtime、执行迁移、Core/NapCat 重启、外发或真实 Provider 调用。该阶段生产写入仅为已备份的模型配置、工具说明及 bundled Skill 说明更新，未改业务数据库或表情清单；后续真实隔离验收、生产 build/up 与回滚结果另见前述当前段落。
 
 审计依据为 `docs/specs/index.md` 及模块 03、04、06，结合 `conversationCapability.ts`、`replyContext.ts`、`workbenchFiles.ts`、Bash sandbox、文件存储实现和已发布 `workbench-config` Skill。
 
-## 生产文件与资源检查
+## 历史快照：生产文件与资源检查
 
 两角色各自的 canonical Workbench 为：
 
@@ -68,7 +98,7 @@ Linux/WSL 的 Bash 使用真实 Bubblewrap，把当前 Agent Workbench 投影为
 
 当前代码在 `win32` 原生 Node 环境没有 Native Bash 隔离实现。本次验证覆盖 Windows 主机上的实际 WSL 部署，不能作为 Windows 原生 Core 或 PowerShell 工具支持的证据。
 
-## 已执行冒烟
+## 历史基线：已执行的确定性冒烟
 
 使用生产 `dist/services/tools/bashTool.js` 与 `workbenchFileStore.js`，在临时 Agent 目录执行。Bash 注入确定性的隔离夹具审核结果，未调用外部模型；未更换或绕过生产审核端口。
 
@@ -89,9 +119,9 @@ Linux/WSL 的 Bash 使用真实 Bubblewrap，把当前 Agent Workbench 投影为
 
 WSL 中已安装 Node、Python、git、rg、bwrap、prlimit、ImageMagick `convert`。当前为 ImageMagick 6，`magick` 命令不存在；本次图片操作使用已安装的 `convert` 与 `identify` 成功。
 
-该冒烟证明已部署执行和文件存储链能够运行，不覆盖真实审核 Provider、完整主对话入站、生产表情清单发布或 QQ 外发。
+该阶段的冒烟证明已部署执行和文件存储链能够运行，不覆盖真实审核 Provider、完整主对话入站、生产表情清单发布或 QQ 外发。后续真实审核与原始入站资源链已通过，仍没有生产表情清单写入或真实 QQ 外发验收。
 
-## 表情发布与生产消费者独立复测
+## 历史基线：表情发布与生产消费者确定性复测
 
 新增复测仍只使用生产 `dist` 与全新 `/tmp/sunabot-emoji-consumer-smoke-*` 工作区，创建 `fixture-one`、`fixture-two` 两个隔离 Agent。两者均从空表情清单开始；运行前已明确设置临时 `SUNABOT_WORKSPACE`，全部消费者 SQLite 初始化均定向该临时工作区。没有复制生产数据库或写入生产资源。
 
@@ -122,7 +152,7 @@ convert -size 1024x1024 xc:cyan -depth 8 PNG32:emoji/.source.png
 
 重新创建 `EmojiJsonlStore` 后仍读回两版；原 `createdAt` 保留，`updatedAt` 对应第二版。另一 Agent 的清单字节和表情文件列表与运行前完全一致。机械断言通过；独立质量评审确认读回原图真实可用、版本指向正确、时间字段保留、跨 Agent 隔离、失败与成功边界表达准确。本次测试的图像是受控白色和青色样本，只用于验证文件链，不作为表情内容或画面质量验收。
 
-中间一次运行因夹具误用 `repo.versions` 方法名失败，实际方法为 `listVersions`；该次结果未计为通过，目录清理后重新准备全新工作区完成以上验收。所有测试仍使用确定性 fixture audit，没有真实 Provider、原始 OneBot ingress 或 QQ 外发证据。
+中间一次运行因夹具误用 `repo.versions` 方法名失败，实际方法为 `listVersions`；该次结果未计为通过，目录清理后重新准备全新工作区完成以上验收。本节测试使用确定性 fixture audit，当时没有真实 Provider、原始 OneBot ingress 或 QQ 外发证据；后续真实审核与完整入站资源链的通过结果已在本文当前复核段单独记录。
 
 ## 说明冲突与修复依据
 
@@ -138,9 +168,9 @@ Do not edit emoji files or emojis.jsonl with Bash.
 
 Skill 的本地 PNG 发布说明已补充现有 8-bit、非调色板消费者合同及 `PNG32` / `-depth 8` 转换示例，保留消费者回读要求。消费者边界没有扩大。
 
-生产审核模型已调整，保留独立审核和失败错误；新的真实审核请求尚未执行。单纯调整目录权限不能解决已确认的 HTTP 400。
+生产审核模型已调整，保留独立审核和失败错误。授权前该阶段尚未执行新审核请求；随后真实 gpt-6-luna 审核已返回 HTTP 200 allow 并完成表情链验收。单纯调整目录权限不能解决已确认的模型 HTTP 400。
 
-## 修复与发布
+## 历史记录：首批配置与 Skill 发布
 
 Arona、Plana 的 Bash `auditModel` 已通过认证管理台热更新为 `gpt-6-luna`；Plana 已启用的编排模型同样更新。两个 Agent 的 `import_chat_emoji` 自定义说明已去除旧 Bash 禁句，生产源码和已构建模块也仅删除该句，其他内容保留。
 
@@ -148,23 +178,29 @@ Workbench 说明通过 `BundledAgentSkillInstaller` 的现有安装、确定性�
 
 发布后用生产 `AgentSkillRuntimeReader` 与 `SkillActivationService` 在本地临时会话中读取两角色安装包，两次 activate 与 readResource 均成功，PNG32 说明实际返回 8,273 B，资源 SHA-256 为 `267685e3073841d70ab634d62df297d2c568458418ef61ddcee13c99c7e95dd8`。这项只读消费者核验没有进入生产对话、写入业务数据库或调用 Provider，不能当作新的模型 tool.call 证据。
 
-旧模型配置、Skill 包、索引与本次生产文本更新的原件保留在 `workspace/backups/tool-config-20261012/`，目录 0700、文件 0600。没有改写 QQ 缓存或业务数据库，没有重启 Core 或 NapCat。
+首批旧模型配置、Skill 包、索引与生产文本更新原件保留在 `workspace/backups/tool-config-20261012/`，目录 0700、文件 0600。该批热更新没有改写 QQ 缓存或业务数据库，也没有重启 Core/NapCat；后续完整部署已执行 build/up，不能将该历史阶段的未重启描述用于当前部署状态。
 
-生产 `./sunabot.sh doctor` 返回 liveness live、readiness ready，Core API、OneBot listener、Codex 认证、Native Bash 执行探针和 Lightpanda Renderer 均通过。capability degraded、退出 1 的两项原因是 `MCP_OAUTH_VAULT_UNAVAILABLE`（未配置 vault key）与 `MCP_STDIO_RUNTIME_UNAVAILABLE`（stdio 后端关闭）；两个 Agent 当前 MCP server 数均为 0，未将未配置能力记为就绪。
+该阶段生产 `./sunabot.sh doctor` 返回 liveness live、readiness ready，Core API、OneBot listener、Codex 认证、Native Bash 执行探针和 Lightpanda Renderer 均通过。capability degraded、退出 1 的两项原因是 `MCP_OAUTH_VAULT_UNAVAILABLE`（未配置 vault key）与 `MCP_STDIO_RUNTIME_UNAVAILABLE`（stdio 后端关闭）；两个 Agent 当前 MCP server 数均为 0，未将未配置能力记为就绪。
 
-## 全量测试失败定位与复测
+## 历史记录：早期全量测试失败定位与复测
 
 第一次完整 verify 的 unit 阶段在表情破坏测试后恢复原文件时失败，第二次全量 unit 在根目录快速移走并恢复的错误分支断言失败。两文件单独重跑均通过，因此另做真实 WSL 元数据复现，没有将单独通过作为结案。
 
 根目录替换/恢复 500 次中，371 次捕获与恢复的 ctimeNs 完全相同，随后仍被 descriptor/path 不匹配拒绝；其余 129 次返回 `SEND_FILE_ROOT_CHANGED`，全部 500 次实际文件读取次数为 0。表情同尺寸破坏再原地恢复 250 次中，181 次 inode/size/mtimeNs/ctimeNs 完全碰撞，正确原字节仍命中负缓存；改为同目录临时文件加原子 rename 后 250/250 恢复。正缓存损坏测试 250 次全部拒绝，实际字节读取没有接受损坏图片。
 
-测试夹具据此使用原子 rename 恢复内容寻址图片；两处目录替换 hook 在元数据同时间片时等待并再次 rename，核验真实 ctime 变化。原错误码、拒绝与零外部读取断言均保留，产品代码没有增加处理或放宽校验。受影响 2 文件 41 项通过，最终全量 unit 为 270 文件、3,060 项通过、1 项跳过；其余 verify 阶段逐项通过，完整命令首次失败日志保留，未重复整条命令。
+测试夹具据此使用原子 rename 恢复内容寻址图片；两处目录替换 hook 在元数据同时间片时等待并再次 rename，核验真实 ctime 变化。原错误码、拒绝与零外部读取断言均保留，产品代码没有增加处理或放宽校验。受影响 2 文件 41 项通过；该阶段全量 unit 为 270 文件、3,060 项通过、1 项跳过，其余 verify 阶段逐项通过，当时尚未重复整条命令。随后最近一次完整 verify 已确认 3,089 项 unit 与全部后续阶段通过，凭据刷新修复后的完整 verify 已因审查问题有界中止并请求重跑，尚未取得最终结果。原 `/tmp` 首次失败与复测日志已清空，本文保留已确认的故障、复现计数和测试结果，不声称原日志仍存。
 
-## 剩余验收
+## 历史待验项的后续结果与当前边界
 
-- 审核模型修复后的真实审核请求、工具调用结果及错误传播。
-- 从原始 OneBot ingress 进入隔离 Session/Provider/tool/outbox 链的资源管理用例，包含机械断言与独立质量评审。
-- 已完成确定性审核夹具下的本地图像发布与生产消费者读取；真实审核 Provider 下的对应回归仍待授权验收。
-- 当前 Windows/WSL amd64 的文件执行与安装结果已核验；Windows 原生与 arm64 只能由对应构建及运行证据确认。
+授权前待验的真实 Bash 审核、原始 OneBot ingress→Session/Provider/tool/outbox 资源管理链，以及专用导入/导出操作，均已由后续真实隔离合成 run 和独立质量评审补齐。该阶段曾写“待授权”只属于历史，不代表当前尚未执行。
 
-本报告没有执行真实 Provider 质量验收，也未将夹具审核的 allow 结果计为生产审核可用。
+当前仍保留以下边界：
+
+- Tavily 凭据、在线 voice profile 缺失，不能验收真实搜索或在线语音；run_skill_script 按规范关闭。
+- MCP server 数为 0，没有动态别名，MCP 不计入 26 个内置工具。
+- 动态 WebFetch 只有 Renderer 隔离、健康、鉴权预检；静态成功不能替代动态端到端。
+- Windows/WSL amd64 已有文件执行、安装与真实 Provider 隔离成功证据；Windows 原生和真实 arm64 未验。
+- 全部真实 QQ 发送未验；当前 Arona 登录态失效，二维码自动更新并等待扫码，尚未确认恢复。
+- 凭据刷新修复后的完整 verify 已因审查问题有界中止并请求重跑，未判定测试失败，不能提前写成功。
+
+密封 `.user-test-runs/` 报告持续保留；WSL 重启前的原 `/tmp` 日志已清空，本轮审查中止的日志与 abort 状态另行保留。模拟投递不等于真实 QQ 已收到。
