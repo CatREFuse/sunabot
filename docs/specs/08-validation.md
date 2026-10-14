@@ -2,6 +2,8 @@
 
 [返回当前系统规范索引](./index.md)
 
+2026-10-14 工作记忆容量宽门禁回归：已复现旧实现跨越 64 KiB 时追加失败及已有超限文件读取失败。修复后容量检查记录 `WORKING_MEMORY_TOO_LARGE` 错误和 `blocking=false`，完整读写继续执行，工具成功结果携带容量告警；原记忆、来源 ID、幂等重放、revision 冲突及取消回滚保持。受影响单测 34 项通过，原始管理员私聊 OneBot ingress 的受控 Provider 夹具 2/2 与独立质量评审通过；不将受控输出计作真实模型自主选择。隔离 WSL 完整 `npm run verify` 退出 0：unit 3,168 项通过、1 项既有跳过，harness 41、integration 43、Skill sandbox 13、backup 45、migration 153、runtime smoke 84、E2E 53 项通过，runtime contract、architecture、check、benchmark、build 通过。部署包限定三个后端模块及其构建文件，未修改生产记忆；生产生效等待用户确认单独重启 Core。
+
 Core 单独重启用例见 `../user-tests/cases/runtime/core-only-restart.md`。`runtime-core-restart.test.ts` 在 Linux 隔离 workspace 使用真实 Native 进程、账号 daemon、进程身份和 HTTP 健康检查，Docker、Renderer 引擎及 Provider/workspace 探针使用夹具；验证连续重启替换 Native 进程、无关进程保留、预检失败不停止旧 Core、启动失败仅清理 Native 并可重试，以及缺失状态/网络时不修改部署。夹具通过不能替代真实 NapCat 登录、OneBot 重连和新消息接收验收。
 
 2026-10-14 NapCat 4.18.30、WSL 稳定进程身份、Windows 对时及 QQ 状态修复的部署、备份和验收证据见 `../audits/2026-10-14-napcat-wsl-reliability-repair.md`。对应用户用例为 `../user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md`、`../user-tests/cases/admin-console/qq-runtime-status-recovery.md` 和 `../user-tests/cases/runtime/wsl-process-identity-clock-change.md`。生产 Gateway 半开连接 11.285 秒回收、同账号重接，以及真实 NapCat 连接重建后保留登录态并继续收信均已核验；腾讯登录失效仍需单独处理，长期稳定与 arm64 实机尚未验收。真实消息接收、账号定向断线重连与腾讯登录失效必须分别报告，不能用容器或 Core 健康状态替代。
@@ -254,7 +256,7 @@ Web Chat 生命周期专项必须以可控时钟证明发送入口后的排队�
 
 工作记忆提示词回归必须证明生成说明要求当前 Agent 用第一人称自然叙述一件事，在输入有依据时把时间、地点或会话场域、人物、事件与感受融进同一段，禁止字段标签和补造缺失信息；整理说明同时引用正文内部时间、`occurredAt`、`occurredEndAt` 与消息顺序，只把有连续事件证据的片段串联为综合记忆，并保留感受或判断变化。正文宽容回归必须覆盖第三人称句首、第一人称直接引语、回忆提示语、标签式正文、未知称呼、称呼—QQ 交叉排列、额外正文 QQ、高风险词和低置信文本均可写入；无效可选 QQ 或因果键只丢弃对应元数据。无法安全绑定的单条用户画像只记录并跳过，同批其他内容继续提交。
 
-工作记忆与用户画像工具专项必须覆盖每 Agent 隔离、后续 turn 热读取、当前发言人绑定、宿主 IANA 时间、隐藏来源、损坏 metadata、64 KiB 文件容量、符号链接拒绝、revision 冲突和原子替换。五种 Provider 协议均需证明未调用记忆工具时仍可返回正文、companion、deferred、no_reply 和其他业务工具，且不注入强制双工具顺序。工具结果覆盖 record/skip、长正文、额外描述字段、缺少更新字段保留旧画像或称呼、空工作记忆零新增、未知 action 返回错误、宿主身份不可改绑、并发或重复决定只有一个实际写入、写入失败可纠正。正文与称呼不进入日志；Session 崩溃恢复使用 event 级 sourceDecisionKey 去重。管理 API 返回完整 Markdown、文件名和 revision，不返回绝对路径；工作记忆 UI 只读文档。旧 SQLite 工作记忆不迁移、不删除且不成为当前来源，Dream 使用同一 Markdown 并遵守 revision CAS。
+工作记忆与用户画像工具专项必须覆盖每 Agent 隔离、后续 turn 热读取、当前发言人绑定、宿主 IANA 时间、隐藏来源、损坏 metadata、64 KiB 宽门禁（超限读写成功且记录非阻断错误、原文完整保留）、符号链接拒绝、revision 冲突和原子替换。五种 Provider 协议均需证明未调用记忆工具时仍可返回正文、companion、deferred、no_reply 和其他业务工具，且不注入强制双工具顺序。工具结果覆盖 record/skip、长正文、额外描述字段、缺少更新字段保留旧画像或称呼、空工作记忆零新增、未知 action 返回错误、宿主身份不可改绑、并发或重复决定只有一个实际写入、写入失败可纠正。正文与称呼不进入日志；Session 崩溃恢复使用 event 级 sourceDecisionKey 去重。管理 API 返回完整 Markdown、文件名和 revision，不返回绝对路径；工作记忆 UI 只读文档。旧 SQLite 工作记忆不迁移、不删除且不成为当前来源，Dream 使用同一 Markdown 并遵守 revision CAS。
 
 旧记忆批次的群聊锚点窗口、FIFO 尾批、静默唤醒、claim 与 crash-running 恢复属于已退役流程；当前运行时回归应证明这些路径不再接线。正常会话历史选择、群聊编排和 Session FIFO 按各自专项验证，不以停用的记忆批次结果作为本轮验收。
 

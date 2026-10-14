@@ -61,6 +61,13 @@ export interface WorkingMemoryDocumentSnapshot {
   content: string;
   revision: string;
   items: WorkingMemoryDocumentItem[];
+  capacityWarning?: {
+    code: "WORKING_MEMORY_TOO_LARGE";
+    message: string;
+    blocking: false;
+    actualBytes: number;
+    limitBytes: number;
+  };
 }
 
 export async function ensureWorkingMemoryDocument(config: AppConfig) {
@@ -77,9 +84,12 @@ export async function readWorkingMemoryDocument(config: AppConfig): Promise<Work
     return { filePath, content: "", revision: revision(""), items: [] };
   }
   const normalized = content.replace(/\r\n/g, "\n").trimEnd();
-  assertDocumentSize(normalized);
   const items = parseWorkingMemoryMarkdown(normalized);
-  return { filePath, content: normalized, revision: revision(normalized), items };
+  const capacityWarning = reportDocumentCapacity(config, content);
+  return {
+    filePath, content: normalized, revision: revision(normalized), items,
+    ...(capacityWarning ? { capacityWarning } : {})
+  };
 }
 
 export async function replaceWorkingMemoryDocument(
@@ -91,7 +101,6 @@ export async function replaceWorkingMemoryDocument(
   signal?.throwIfAborted();
   const normalizedItems = items.map(validateWorkingMemoryItem);
   const content = renderWorkingMemoryMarkdown(normalizedItems);
-  assertDocumentSize(`${content}\n`);
   const parsed = parseWorkingMemoryMarkdown(content);
   if (JSON.stringify(parsed) !== JSON.stringify(normalizedItems)) {
     throw workingMemoryError("WORKING_MEMORY_DOCUMENT_INVALID", "Working memory document failed round-trip validation.");
@@ -191,7 +200,7 @@ export async function appendWorkingMemoryDocumentItem(
         afterRevision: current.revision,
         reasonCode: "idempotent_replay"
       });
-      return { item: existing, revision: current.revision, deduplicated: true };
+      return { item: existing, revision: current.revision, deduplicated: true, capacityWarning: current.capacityWarning };
     }
     lastRevision = current.revision;
     lastCount = current.items.length;
@@ -211,7 +220,7 @@ export async function appendWorkingMemoryDocumentItem(
         beforeRevision: current.revision,
         afterRevision: result.current.revision
       });
-      return { item, revision: result.current.revision, deduplicated: false };
+      return { item, revision: result.current.revision, deduplicated: false, capacityWarning: result.current.capacityWarning };
     }
   }
   recordMemoryOperation(config, {
@@ -484,7 +493,6 @@ export function renderWorkingMemoryMarkdown(items: readonly WorkingMemoryDocumen
 }
 
 export function parseWorkingMemoryMarkdown(content: string) {
-  assertDocumentSize(content);
   const normalized = content.replace(/\r\n/g, "\n").trimEnd();
   const legacy = normalized.startsWith(LEGACY_DOCUMENT_HEADER);
   const header = legacy ? LEGACY_DOCUMENT_HEADER : DOCUMENT_HEADER;
@@ -678,9 +686,6 @@ async function readOptionalRegularFile(filePath: string) {
     if (!stat.isFile()) {
       throw workingMemoryError("WORKING_MEMORY_PATH_INVALID", "WORKING_MEMORY.md must be a regular file.");
     }
-    if (stat.size > WORKING_MEMORY_MAX_BYTES + 1) {
-      throw workingMemoryError("WORKING_MEMORY_TOO_LARGE", "WORKING_MEMORY.md exceeds the 64 KiB limit.");
-    }
     return await handle.readFile("utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
@@ -751,10 +756,23 @@ function optionalTimestamp(value: unknown) {
   return normalized;
 }
 
-function assertDocumentSize(content: string) {
-  if (Buffer.byteLength(content, "utf8") > WORKING_MEMORY_MAX_BYTES) {
-    throw workingMemoryError("WORKING_MEMORY_TOO_LARGE", "WORKING_MEMORY.md exceeds the 64 KiB limit.");
-  }
+function reportDocumentCapacity(config: AppConfig, content: string): WorkingMemoryDocumentSnapshot["capacityWarning"] {
+  const actualBytes = Buffer.byteLength(content, "utf8");
+  if (actualBytes <= WORKING_MEMORY_MAX_BYTES) return undefined;
+  const warning = {
+    code: "WORKING_MEMORY_TOO_LARGE" as const,
+    message: `工作记忆超过 64 KiB 阈值（${actualBytes} 字节），继续处理。`,
+    blocking: false as const,
+    actualBytes,
+    limitBytes: WORKING_MEMORY_MAX_BYTES
+  };
+  console.error("[working-memory] capacity exceeded", { agentId: config.persona.defaultAgentId, ...warning });
+  recordMemoryOperation(config, {
+    source: "working", operation: "capacity_check", actor: "system", outcome: "failed",
+    reasonCode: warning.code, capacityError: warning,
+    afterRevision: revision(content.replace(/\r\n/g, "\n").trimEnd())
+  });
+  return warning;
 }
 
 function revision(content: string) {

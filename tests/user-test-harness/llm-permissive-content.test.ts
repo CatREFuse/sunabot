@@ -6,9 +6,9 @@ import { defaultConfig } from "../../src/config.js";
 import { readUserTestCaseDocument } from "../../tooling/user-test-harness/caseDocument.js";
 import { prepareUserTestWorkspace } from "../../tooling/user-test-harness/workspace.js";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-it("delivers a raw OneBot reply without forced memory decisions", { timeout: 30_000 }, async () => {
+it.each([false, true])("delivers a raw OneBot reply with over-capacity recording=%s", { timeout: 30_000 }, async (recordMemory) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-permissive-harness-"));
   const source = path.join(root, "source");
   const destination = path.join(root, "destination");
@@ -34,11 +34,17 @@ it("delivers a raw OneBot reply without forced memory decisions", { timeout: 30_
     }]
   };
   const requests: Array<Record<string, unknown>> = [];
+  const existingContent = "已有评审记录😀".repeat(4_000);
+  const recordedContent = "我会在明天下午三点前发送评审稿，发出前确认附件能打开。";
+  const capacityErrors = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => {
     requests.push(JSON.parse(String(init?.body)));
-    const item = {
+    const item = recordMemory && requests.length === 1 ? {
+      type: "function_call", id: "fc_memory", call_id: "call_memory", status: "completed",
+      name: "add_workmemory", arguments: JSON.stringify({ action: "record", content: recordedContent })
+    } : {
       type: "message", role: "assistant", status: "completed",
-      content: [{ type: "output_text", text: "已收到" }]
+      content: [{ type: "output_text", text: recordMemory ? "已记住评审稿的发送时间和附件检查要求。" : "已收到" }]
     };
     return new Response([
       { type: "response.output_item.done", output_index: 0, item },
@@ -53,23 +59,50 @@ it("delivers a raw OneBot reply without forced memory decisions", { timeout: 30_
     await fs.mkdir(path.join(source, "secrets"), { recursive: true });
     await fs.writeFile(path.join(source, "business/config/sunabot.json"), JSON.stringify(config));
     await fs.writeFile(path.join(source, "secrets/runtime.env"), "FIXTURE_PROVIDER_KEY=fixture-token\n");
-    await prepareUserTestWorkspace({ source, destination, confirmCredentialCopy: true });
+    const prepared = await prepareUserTestWorkspace({ source, destination, confirmCredentialCopy: true });
     process.env.SUNABOT_WORKSPACE = destination;
     process.env.SUNABOT_USER_TEST_TIMEOUT_MS = "5000";
     vi.resetModules();
-    const document = await readUserTestCaseDocument(path.resolve("docs/user-tests/llm-permissive-content.md"));
+    const document = await readUserTestCaseDocument(path.resolve(recordMemory
+      ? "docs/user-tests/add-workmemory-direct-write.md" : "docs/user-tests/llm-permissive-content.md"));
+    if (recordMemory && document.case.kind === "conversation") {
+      document.case.input.fixture = {
+        workingMemory: [{ id: "large-existing", content: existingContent,
+          occurredAt: "2026-08-29T08:00:00.000Z",
+          conversationId: "private:10001", conversationScope: "private" }],
+        longTerm: [], userProfiles: []
+      };
+    }
     const { runRuntimeUserTest } = await import("../../tooling/user-test-harness/runtimeDriver.js");
     const report = await runRuntimeUserTest(document.case, document.digest);
     expect(report.execution.status, JSON.stringify(report.execution)).toBe("passed");
     expect(report.execution.assertions.every((assertion) => assertion.passed)).toBe(true);
-    expect(report.observation.toolCalls).toEqual([]);
-    expect(JSON.stringify(report.observation.outbound)).toContain("已收到");
+    if (!recordMemory) expect(report.observation.toolCalls).toEqual([]);
+    expect(JSON.stringify(report.observation.outbound)).toContain(recordMemory ? "已记住评审稿" : "已收到");
     expect(requests.length).toBeGreaterThan(0);
     expect(requests.every((request) => request.tool_choice == null || request.tool_choice === "auto")).toBe(true);
     const { readWorkingMemoryDocument } = await import("../../services/memory/workingMemoryDocument.js");
     const { loadConfig } = await import("../../src/config.js");
-    const memory = await readWorkingMemoryDocument(await loadConfig());
-    expect(memory.items).toEqual([]);
+    const sharedConfig = await loadConfig();
+    const memory = await readWorkingMemoryDocument({
+      ...sharedConfig,
+      persona: { ...sharedConfig.persona, defaultAgentId: prepared.agentId,
+        agentWorkspace: path.join(destination, "business/agents", prepared.agentId) }
+    });
+    if (recordMemory) {
+      expect(memory.items.map((item) => item.content)).toEqual([existingContent, recordedContent]);
+      expect(memory.items[0]?.id).toBe("large-existing");
+      expect(Buffer.byteLength(memory.content, "utf8")).toBeGreaterThan(65_536);
+      expect(memory.capacityWarning).toMatchObject({ code: "WORKING_MEMORY_TOO_LARGE", blocking: false });
+      expect(capacityErrors).toHaveBeenCalledWith("[working-memory] capacity exceeded", expect.objectContaining({ blocking: false }));
+      expect(JSON.stringify(requests)).toContain("WORKING_MEMORY_TOO_LARGE");
+      expect(JSON.stringify(requests)).toContain("工作记忆已记录");
+      expect(report.observation.requestLogs).toEqual(expect.arrayContaining([
+        expect.objectContaining({ action: "working.capacity_check", response: expect.objectContaining({
+          outcome: "failed", capacityError: expect.objectContaining({ blocking: false })
+        }) })
+      ]));
+    } else expect(memory.items).toEqual([]);
     console.info("LLM_PERMISSIVE_HARNESS", JSON.stringify({
       runId: report.runId,
       execution: report.execution,

@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKING_MEMORY_FILE,
-  WORKING_MEMORY_MAX_BYTES,
   readWorkingMemoryDocument,
   renderWorkingMemoryMarkdown,
   replaceWorkingMemoryDocument,
@@ -64,7 +63,7 @@ describe("working-memory Markdown document", () => {
     expect((await readWorkingMemoryDocument(other)).items[0]?.content).toBe("另一个 Agent 的事项。");
   });
 
-  it("fails closed on stale revisions, symbolic links, and oversized files", async () => {
+  it("fails closed on stale revisions and symbolic links", async () => {
     const initial = await readWorkingMemoryDocument(config);
     await appendWorkingMemoryDocumentItem(config, "并发写入。", {
       conversationId: "private:10001",
@@ -83,21 +82,70 @@ describe("working-memory Markdown document", () => {
       code: "WORKING_MEMORY_PATH_INVALID"
     });
 
-    await fs.unlink(filePath);
-    await fs.writeFile(filePath, "x".repeat(WORKING_MEMORY_MAX_BYTES + 1));
-    await expect(readWorkingMemoryDocument(config)).rejects.toMatchObject({
-      code: "WORKING_MEMORY_TOO_LARGE"
+  });
+
+  it("appends across the former 64 KiB boundary without changing existing items", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const original = "已有记忆😀".repeat(3_800);
+    await appendWorkingMemoryDocumentItem(config, original, {
+      conversationId: "private:10001", scope: "private"
     });
+    const before = await readWorkingMemoryDocument(config);
+    expect(Buffer.byteLength(before.content, "utf8")).toBeLessThan(64 * 1024);
+    const added = "新增待办：明天下午三点前确认评审稿附件。".repeat(200);
+    await appendWorkingMemoryDocumentItem(config, added, {
+      conversationId: "private:10001", scope: "private"
+    });
+    const after = await readWorkingMemoryDocument(config);
+    expect(Buffer.byteLength(after.content, "utf8")).toBeGreaterThan(64 * 1024);
+    expect(after.items[0]).toEqual(before.items[0]);
+    expect(after.items[1]?.content).toBe(added);
+    expect(await fs.readFile(after.filePath, "utf8")).toBe(`${after.content}\n`);
+    expect(after).toMatchObject({ capacityWarning: {
+      code: "WORKING_MEMORY_TOO_LARGE", blocking: false, limitBytes: 64 * 1024,
+      actualBytes: Buffer.byteLength(`${after.content}\n`, "utf8")
+    } });
+    expect(errorLog).toHaveBeenCalledWith("[working-memory] capacity exceeded", expect.objectContaining({
+      code: "WORKING_MEMORY_TOO_LARGE", blocking: false
+    }));
+  });
+
+  it("reads and replaces large documents while preserving revision conflicts and cancellation rollback", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const items = workingMemoryItemsFromFacts(
+      [{ id: "large-original", fact: "完整保留😀".repeat(10_000) }],
+      [], { conversationId: "dream:large", conversationScope: "dream" }, () => "large-original"
+    );
+    const filePath = path.join(config.persona.agentWorkspace, WORKING_MEMORY_FILE);
+    await fs.writeFile(filePath, `${renderWorkingMemoryMarkdown(items)}\n`);
+    const before = await readWorkingMemoryDocument(config);
+    expect(before.items).toEqual(items);
+    const replacement = [{ ...items[0]!, content: "整理后的完整记忆😀".repeat(8_000) }];
+    await expect(replaceWorkingMemoryDocument(config, before.revision, replacement))
+      .resolves.toMatchObject({ status: "updated", current: { items: replacement } });
+    const updated = await readWorkingMemoryDocument(config);
+    await expect(replaceWorkingMemoryDocument(config, before.revision, items))
+      .resolves.toMatchObject({ status: "conflict" });
+    const controller = new AbortController();
+    const originalRename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementationOnce(async (oldPath, newPath) => {
+      await originalRename(oldPath, newPath);
+      controller.abort(new DOMException("Runtime closed.", "AbortError"));
+    });
+    await expect(replaceWorkingMemoryDocument(config, updated.revision, items, controller.signal))
+      .rejects.toMatchObject({ name: "AbortError" });
+    expect(await readWorkingMemoryDocument(config)).toEqual(updated);
   });
 
   it("reads a legacy 64 KiB document whose trailing newline made the raw file one byte larger", async () => {
+    const legacyMaxBytes = 64 * 1024;
     const items = workingMemoryItemsFromFacts(
       Array.from({ length: 16 }, (_, index) => ({ id: `working-limit-${index}`, fact: "x" })),
       [],
       { conversationId: "dream:limit", conversationScope: "dream" },
       (_, index) => `working-limit-${index}`
     );
-    let remaining = WORKING_MEMORY_MAX_BYTES - Buffer.byteLength(renderWorkingMemoryMarkdown(items), "utf8");
+    let remaining = legacyMaxBytes - Buffer.byteLength(renderWorkingMemoryMarkdown(items), "utf8");
     for (const item of items) {
       const added = Math.min(Math.max(remaining, 0), 3_999);
       item.content += "x".repeat(added);
@@ -105,7 +153,7 @@ describe("working-memory Markdown document", () => {
     }
     const content = renderWorkingMemoryMarkdown(items);
     expect(remaining).toBe(0);
-    expect(Buffer.byteLength(content, "utf8")).toBe(WORKING_MEMORY_MAX_BYTES);
+    expect(Buffer.byteLength(content, "utf8")).toBe(legacyMaxBytes);
 
     const filePath = path.join(config.persona.agentWorkspace, WORKING_MEMORY_FILE);
     await fs.writeFile(filePath, `${content}\n`);

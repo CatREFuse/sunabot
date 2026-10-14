@@ -84,7 +84,8 @@ export class RuntimeWorkingMemory {
             conversationScope: result.item.conversationScope,
             revision: result.revision,
             deduplicated: result.deduplicated,
-            message: "工作记忆已记录。"
+            ...(result.capacityWarning ? { warnings: [result.capacityWarning] } : {}),
+            message: result.capacityWarning ? "工作记忆已记录，容量超过 64 KiB 阈值。" : "工作记忆已记录。"
           };
         } catch (error) {
           decision = undefined;
