@@ -349,7 +349,7 @@ describe("tone outbound delivery", () => {
     expect(delivery.outbox[0].payload.payload.bubbleSequence).toBeUndefined();
   });
 
-  it("restores an omitted generated-image suffix while rejecting a changed media sequence", async () => {
+  it("restores omitted images and accepts changes to their presentation order", async () => {
     const incoming: ParsedIncomingMessage = {
       schemaVersion: 1,
       transport: "onebot",
@@ -447,8 +447,12 @@ describe("tone outbound delivery", () => {
       "run-changed-image",
       () => true,
       delivery
-    )).rejects.toMatchObject({ code: "SEGMENTED_REPLY_CONTRACT_INVALID" });
-    expect(delivery.outbox).toEqual([]);
+    )).resolves.toBeUndefined();
+    expect(delivery.outbox).toHaveLength(3);
+    expect(delivery.outbox.map((draft) => draft.kind === "onebot.reply"
+      ? draft.payload.payload.generatedImages.map((image) => image.revisedPrompt)
+      : [])).toEqual([[], ["second"], ["first"]]);
+    delivery.outbox.length = 0;
 
     rewriteToneDelivery.mockResolvedValueOnce({
       segmented: true,
@@ -465,11 +469,11 @@ describe("tone outbound delivery", () => {
       "run-bubble-overflow",
       () => true,
       delivery
-    )).rejects.toThrow("分段回复最多包含 32 个气泡");
-    expect(delivery.outbox).toEqual([]);
+    )).resolves.toBeUndefined();
+    expect(delivery.outbox).toHaveLength(33);
   });
 
-  it("retries hard-gate failures with cumulative errors before creating outbox drafts", async () => {
+  it("does not retry model content and never resolves an unknown media handle", async () => {
     const incoming: ParsedIncomingMessage = {
       schemaVersion: 1,
       transport: "onebot",
@@ -532,25 +536,8 @@ describe("tone outbound delivery", () => {
       delivery
     );
 
-    expect(rewriteToneDelivery).toHaveBeenCalledTimes(3);
+    expect(rewriteToneDelivery).toHaveBeenCalledTimes(1);
     expect(rewriteToneDelivery.mock.calls[0]?.[2]).not.toHaveProperty("hardGateRetry");
-    expect(rewriteToneDelivery.mock.calls[1]?.[2]).toMatchObject({
-      hardGateRetry: {
-        attempt: 2,
-        maxAttempts: 3,
-        errors: ["分段回复改变了本轮媒体资源。"]
-      }
-    });
-    expect(rewriteToneDelivery.mock.calls[2]?.[2]).toMatchObject({
-      hardGateRetry: {
-        attempt: 3,
-        maxAttempts: 3,
-        errors: [
-          "分段回复改变了本轮媒体资源。",
-          "分段回复节点不能嵌套标签。"
-        ]
-      }
-    });
     expect(delivery.outbox).toHaveLength(2);
 
     delivery.outbox.length = 0;
@@ -570,19 +557,12 @@ describe("tone outbound delivery", () => {
       "run-hard-gate-exhausted",
       () => true,
       delivery
-    )).rejects.toMatchObject({ code: "SEGMENTED_REPLY_CONTRACT_INVALID" });
-    expect(rewriteToneDelivery).toHaveBeenCalledTimes(3);
-    expect(rewriteToneDelivery.mock.calls[2]?.[2]).toMatchObject({
-      hardGateRetry: {
-        attempt: 3,
-        maxAttempts: 3,
-        errors: [
-          "分段回复改变了本轮媒体资源。",
-          "分段回复改变了本轮媒体资源。"
-        ]
-      }
-    });
-    expect(delivery.outbox).toEqual([]);
+    )).resolves.toBeUndefined();
+    expect(rewriteToneDelivery).toHaveBeenCalledTimes(1);
+    expect(delivery.outbox).toHaveLength(2);
+    expect(delivery.outbox[0]).toMatchObject({ payload: { payload: {
+      text: "原始正文\n（错误：表达优化暂不可用）"
+    } } });
   });
 
   it("waits after outbox claim before sending a later bubble", async () => {

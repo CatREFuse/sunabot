@@ -4,6 +4,7 @@ import type {
   DirectorScheduleShareV1,
   DirectorScheduleV1
 } from "./types.js";
+import { modelContentText, parseModelJson } from "../../packages/contracts/model/modelContent.js";
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const ITEM_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,47}$/;
@@ -13,60 +14,45 @@ export function parseDirectorScheduleDraft(
   text: string,
   expected: { date: string; timeZone: string }
 ): DirectorScheduleDraftV1 {
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch (error) {
-    throw new Error(`Director schedule is not valid JSON: ${errorMessage(error)}`);
-  }
-  return normalizeDirectorScheduleDraft(value, expected);
+  return normalizeDirectorScheduleDraft(parseModelJson(text), expected);
 }
 
 export function normalizeDirectorScheduleDraft(
   value: unknown,
   expected: { date: string; timeZone: string }
 ): DirectorScheduleDraftV1 {
-  return normalizeDirectorSchedule(value, expected, 1);
+  return normalizeDirectorSchedule(value, expected);
 }
 
 function normalizeDirectorSchedule(
   value: unknown,
-  expected: { date: string; timeZone: string },
-  minimumShares: 0 | 1
+  expected: { date: string; timeZone: string }
 ): DirectorScheduleDraftV1 {
   const record = strictRecord(value, "Director schedule must be an object.");
-  exactKeys(record, ["schemaVersion", "date", "timeZone", "theme", "summary", "items"], "schedule");
-  if (record.schemaVersion !== 1) throw new Error("Director schedule schemaVersion must be 1.");
   const date = requiredDate(record.date, "date");
-  const timeZone = boundedText(record.timeZone, "timeZone", 80);
+  const timeZone = requiredText(record.timeZone, "timeZone");
   if (date !== expected.date) throw new Error(`Director schedule date must be ${expected.date}.`);
   if (timeZone !== expected.timeZone) {
     throw new Error(`Director schedule timeZone must be ${expected.timeZone}.`);
   }
-  if (!Array.isArray(record.items) || record.items.length < 3 || record.items.length > 16) {
-    throw new Error("Director schedule items must contain 3 to 16 entries.");
+  if (!Array.isArray(record.items)) {
+    throw new Error("Director schedule items must be an array.");
   }
-  const items = record.items.map((item, index) => normalizeItem(item, index, { date, timeZone }));
+  const items = record.items.map((item, index) => normalizeItem(item, index, { date, timeZone }))
+    .sort((left, right) => Date.parse(left.startAt) - Date.parse(right.startAt));
   const ids = new Set(items.map((item) => item.id));
   if (ids.size !== items.length) throw new Error("Director schedule item ids must be unique.");
   for (let index = 1; index < items.length; index += 1) {
-    if (Date.parse(items[index - 1]!.startAt) > Date.parse(items[index]!.startAt)) {
-      throw new Error("Director schedule items must be ordered by startAt.");
-    }
     if (Date.parse(items[index - 1]!.endAt) > Date.parse(items[index]!.startAt)) {
       throw new Error("Director schedule items must not overlap.");
     }
-  }
-  const shares = items.filter((item) => item.share.enabled);
-  if (shares.length < minimumShares || shares.length > 3) {
-    throw new Error("Director schedule must contain 1 to 3 daily shares.");
   }
   return {
     schemaVersion: 1,
     date,
     timeZone,
-    theme: boundedText(record.theme, "theme", 120),
-    summary: boundedText(record.summary, "summary", 500),
+    theme: requiredText(record.theme, "theme"),
+    summary: requiredText(record.summary, "summary"),
     items
   };
 }
@@ -86,8 +72,8 @@ export function isDirectorSchedule(value: unknown): value is DirectorScheduleV1 
     };
     const draft = normalizeDirectorSchedule(draftValue, {
       date: requiredDate(record.date, "date"),
-      timeZone: boundedText(record.timeZone, "timeZone", 80)
-    }, source === "character_revision" ? 0 : 1);
+      timeZone: requiredText(record.timeZone, "timeZone")
+    });
     return Boolean(
       draft
       && Number.isSafeInteger(record.revision)
@@ -152,27 +138,19 @@ function normalizeItem(
   expected: { date: string; timeZone: string }
 ): DirectorScheduleItemV1 {
   const record = strictRecord(value, `items[${index}] must be an object.`);
-  exactKeys(
-    record,
-    ["id", "startAt", "endAt", "activity", "location", "participants", "intent", "variant", "share"],
-    `items[${index}]`
-  );
-  const id = boundedText(record.id, `items[${index}].id`, 48);
+  const id = requiredText(record.id, `items[${index}].id`);
   if (!ITEM_ID_PATTERN.test(id)) throw new Error(`items[${index}].id is invalid.`);
   const startAt = requiredOffsetTimestamp(record.startAt, `items[${index}].startAt`, expected);
   const endAt = requiredOffsetTimestamp(record.endAt, `items[${index}].endAt`, expected);
   if (Date.parse(startAt) >= Date.parse(endAt)) {
     throw new Error(`items[${index}].endAt must be after startAt.`);
   }
-  if (!Array.isArray(record.participants) || record.participants.length > 8) {
-    throw new Error(`items[${index}].participants must contain at most 8 names.`);
+  if (!Array.isArray(record.participants)) {
+    throw new Error(`items[${index}].participants must be an array.`);
   }
   const participants = record.participants.map((item, participantIndex) => (
-    boundedText(item, `items[${index}].participants[${participantIndex}]`, 80)
+    requiredText(item, `items[${index}].participants[${participantIndex}]`)
   ));
-  if (new Set(participants).size !== participants.length) {
-    throw new Error(`items[${index}].participants must be unique.`);
-  }
   const share = normalizeShare(record.share, index, expected);
   if (
     share.enabled
@@ -185,11 +163,11 @@ function normalizeItem(
     id,
     startAt,
     endAt,
-    activity: boundedText(record.activity, `items[${index}].activity`, 240),
-    location: boundedText(record.location, `items[${index}].location`, 120),
+    activity: requiredText(record.activity, `items[${index}].activity`),
+    location: requiredText(record.location, `items[${index}].location`),
     participants,
-    intent: boundedText(record.intent, `items[${index}].intent`, 300),
-    variant: boundedText(record.variant, `items[${index}].variant`, 120),
+    intent: requiredText(record.intent, `items[${index}].intent`),
+    variant: requiredText(record.variant, `items[${index}].variant`),
     share
   };
 }
@@ -200,19 +178,15 @@ function normalizeShare(
   expected: { date: string; timeZone: string }
 ): DirectorScheduleShareV1 {
   const record = strictRecord(value, `items[${index}].share must be an object.`);
-  exactKeys(record, ["enabled", "at", "textIntent", "selfiePrompt"], `items[${index}].share`);
   if (typeof record.enabled !== "boolean") throw new Error(`items[${index}].share.enabled must be boolean.`);
   if (!record.enabled) {
-    if (record.at !== null || record.textIntent !== null || record.selfiePrompt !== null) {
-      throw new Error(`items[${index}].share fields must be null when disabled.`);
-    }
     return { enabled: false, at: null, textIntent: null, selfiePrompt: null };
   }
   return {
     enabled: true,
     at: requiredOffsetTimestamp(record.at, `items[${index}].share.at`, expected),
-    textIntent: boundedText(record.textIntent, `items[${index}].share.textIntent`, 500),
-    selfiePrompt: boundedText(record.selfiePrompt, `items[${index}].share.selfiePrompt`, 800)
+    textIntent: requiredText(record.textIntent, `items[${index}].share.textIntent`),
+    selfiePrompt: requiredText(record.selfiePrompt, `items[${index}].share.selfiePrompt`)
   };
 }
 
@@ -237,13 +211,9 @@ function requiredDate(value: unknown, field: string) {
   return value;
 }
 
-function boundedText(value: unknown, field: string, maxLength: number) {
-  if (typeof value !== "string") throw new Error(`${field} must be text.`);
-  const normalized = value.trim();
-  if (!normalized || normalized.length > maxLength || /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(normalized)) {
-    throw new Error(`${field} is invalid.`);
-  }
-  return normalized;
+function requiredText(value: unknown, field: string) {
+  if (value == null) throw new Error(`${field} must be text.`);
+  return modelContentText(value).trim();
 }
 
 function strictRecord(value: unknown, message: string): Record<string, unknown> {
@@ -251,18 +221,7 @@ function strictRecord(value: unknown, message: string): Record<string, unknown> 
   return value as Record<string, unknown>;
 }
 
-function exactKeys(record: Record<string, unknown>, keys: readonly string[], field: string) {
-  const expected = new Set(keys);
-  const unexpected = Object.keys(record).find((key) => !expected.has(key));
-  const missing = keys.find((key) => !Object.hasOwn(record, key));
-  if (unexpected) throw new Error(`${field} contains unsupported field ${unexpected}.`);
-  if (missing) throw new Error(`${field} is missing field ${missing}.`);
-}
 
 function validTimestamp(value: unknown) {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }

@@ -140,7 +140,7 @@ describe("working-memory Markdown document", () => {
     expect(await fs.readdir(config.persona.agentWorkspace)).toEqual([WORKING_MEMORY_FILE]);
   });
 
-  it("uses Unicode characters for the 4000-character item boundary", async () => {
+  it("preserves items beyond 4000 characters within the document storage boundary", async () => {
     const content = "😀".repeat(4_000);
     await expect(appendWorkingMemoryDocumentItem(config, content, {
       conversationId: "private:10001",
@@ -152,8 +152,8 @@ describe("working-memory Markdown document", () => {
     await expect(appendWorkingMemoryDocumentItem(config, "😀".repeat(4_001), {
       conversationId: "private:10001",
       scope: "private"
-    })).rejects.toMatchObject({
-      code: "WORKING_MEMORY_ITEM_INVALID"
+    })).resolves.toMatchObject({
+      item: { content: "😀".repeat(4_001) }
     });
   });
 

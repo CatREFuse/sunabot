@@ -230,14 +230,14 @@ describe("Provider tool schema compatibility contract", () => {
     )).not.toThrow();
   });
 
-  it("keeps add_workmemory strict with required nullable content on every Provider protocol", () => {
+  it("keeps add_workmemory content optional and permissive on every Provider protocol", () => {
     const canonical = structuredClone(addWorkMemoryTool) as unknown as Record<string, any>;
     expect(canonical).toMatchObject({
-      strict: true,
+      strict: false,
       parameters: {
         type: "object",
-        additionalProperties: false,
-        required: ["action", "content"],
+        additionalProperties: true,
+        required: ["action"],
         properties: {
           action: { type: "string", enum: ["record", "skip"] },
           content: { type: ["string", "null"] }
@@ -259,14 +259,14 @@ describe("Provider tool schema compatibility contract", () => {
     expect(mapped["gemini-generate-content"]).not.toHaveProperty("parameters");
   });
 
-  it("keeps add_user_profile strict with required nullable aggregate fields on every Provider protocol", () => {
+  it("keeps add_user_profile content optional and permissive on every Provider protocol", () => {
     const canonical = structuredClone(addUserProfileTool) as unknown as Record<string, any>;
     expect(canonical).toMatchObject({
-      strict: true,
+      strict: false,
       parameters: {
         type: "object",
-        additionalProperties: false,
-        required: ["action", "profile", "addressNames"],
+        additionalProperties: true,
+        required: ["action"],
         properties: {
           action: { type: "string", enum: ["record", "skip"] },
           profile: { type: ["string", "null"] },

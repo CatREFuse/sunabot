@@ -142,9 +142,6 @@ export function buildUserPrompt(
   admin: AdminIdentity,
   attachmentContext = ""
 ) {
-  const boundedAttachmentContext = truncateToEstimatedTokens(attachmentContext, 5_120);
-  const currentTextBudget = Math.max(1_024, 6_144 - estimatePromptTokens(boundedAttachmentContext));
-  const boundedText = truncateToEstimatedTokens(text, currentTextBudget);
   const scopeName = incoming.scope === "private" ? "私聊" : incoming.scope === "user_group" ? "用户群聊" : "bot群聊";
   const timeZone = systemModelTimeZone();
   const messageTimeLine = `消息时间：${formatModelTimestamp(incoming.time, timeZone)} [${timeZone}]\n`;
@@ -163,8 +160,8 @@ export function buildUserPrompt(
   const attachmentLine = incoming.messageId == null || !incoming.attachments.length
     ? ""
     : `文件：${formatAttachmentListForContext(incoming.attachments, String(incoming.messageId))}\n`;
-  const attachmentContentLine = boundedAttachmentContext ? `文件内容：\n${boundedAttachmentContext}\n` : "";
-  return `消息场景：${scopeName}\n${messageTimeLine}${groupLine}用户：${formatIncomingUserLabel(incoming, admin)}\n${roleLine}${imageLine}${quoteLine}${attachmentLine}${attachmentContentLine}内容：${boundedText}`;
+  const attachmentContentLine = attachmentContext ? `文件内容：\n${attachmentContext}\n` : "";
+  return `消息场景：${scopeName}\n${messageTimeLine}${groupLine}用户：${formatIncomingUserLabel(incoming, admin)}\n${roleLine}${imageLine}${quoteLine}${attachmentLine}${attachmentContentLine}内容：${text}`;
 }
 
 export function buildMemoryPromptVariables(input: {
@@ -180,19 +177,7 @@ export function buildMemoryPromptVariables(input: {
 }
 
 function formatPromptMemory(entries: MemoryEntry[]) {
-  return truncateToEstimatedTokens(formatMemoryMatchesForPrompt(entries), 2_048);
-}
-export function truncateToEstimatedTokens(text: string, budget: number) {
-  if (!text || estimatePromptTokens(text) <= budget) return text;
-  let used = 0;
-  let output = "";
-  for (const character of text) {
-    const cost = /^[\x00-\x7F]$/.test(character) ? (/\s/.test(character) ? 0.25 : 0.5) : 1;
-    if (Math.ceil(used + cost) > budget) break;
-    output += character;
-    used += cost;
-  }
-  return `${output.trimEnd()}\n[内容已截断]`;
+  return formatMemoryMatchesForPrompt(entries);
 }
 export function toContextChatMessage(
   message: ConversationRecord["messages"][number],

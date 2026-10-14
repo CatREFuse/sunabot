@@ -26,10 +26,10 @@ describe("add_user_profile tool", () => {
 
   it("requires one complete aggregate-profile decision for the current speaker", () => {
     expect(addUserProfileTool).toMatchObject({
-      strict: true,
+      strict: false,
       parameters: {
-        additionalProperties: false,
-        required: ["action", "profile", "addressNames"]
+        additionalProperties: true,
+        required: ["action"]
       }
     });
     expect(addUserProfileTool.description).toContain("current speaker");
@@ -51,19 +51,26 @@ describe("add_user_profile tool", () => {
     }, undefined);
   });
 
-  it.each([
-    { action: "skip", profile: "", addressNames: null },
-    { action: "record", profile: null, addressNames: [] },
-    { action: "record", profile: "有效", addressNames: null },
-    { action: "record", profile: "有效", addressNames: [""] },
-    { action: "record", profile: "有效", addressNames: [], userId: "forged" }
-  ])("rejects invalid or host-owned arguments: %#", async (input) => {
-    const execute = vi.fn();
-    await expect(runAddUserProfile(input, { execute })).resolves.toMatchObject({
-      ok: false,
-      code: "ADD_USER_PROFILE_INVALID"
-    });
-    expect(execute).not.toHaveBeenCalled();
+  it("accepts missing content, large content, and extra fields without changing host identity", async () => {
+    const execute = vi.fn(async()=>({ok:true}));
+    const profile = "记".repeat(5000);
+    const addressNames = Array.from({length:20},(_,i)=>"称".repeat(80)+i);
+    await expect(runAddUserProfile({action:"record",profile,addressNames,userId:"forged"},{execute})).resolves.toEqual({ok:true});
+    expect(execute).toHaveBeenCalledWith({action:"record",profile,addressNames},undefined);
+    await expect(runAddUserProfile({action:"skip"},{execute})).resolves.toEqual({ok:true});
+    await expect(runAddUserProfile({action:"record"},{execute})).resolves.toEqual({ok:true});
+  });
+
+  it("preserves the old profile and names when model fields are absent", async () => {
+    root=await fs.mkdtemp(path.join(os.tmpdir(),"sunabot-profile-partial-"));
+    const config=createAdminTestConfig(path.join(root,"agent-a"));
+    await fs.mkdir(config.persona.agentWorkspace,{recursive:true});
+    const runtime=new RuntimeUserProfile({config});
+    await runtime.toolPort(incoming()).execute({action:"record",profile:"existing profile",addressNames:["name"]});
+    await expect(runtime.toolPort(incoming()).execute({action:"record"})).resolves.toMatchObject({ok:true,recorded:false});
+    expect(await readUserProfileForUser(config,"171419991")).toMatchObject({text:"existing profile",addressNames:["name"]});
+    await runtime.toolPort(incoming()).execute({action:"record",profile:"updated profile"});
+    expect(await readUserProfileForUser(config,"171419991")).toMatchObject({text:"updated profile",addressNames:["name"]});
   });
 
   it("replaces only the bound current speaker profile and preserves ordered address names", async () => {

@@ -18,6 +18,17 @@ const auditInput = {
 };
 
 describe("independent Bash audit", () => {
+  it("accepts wrapped results and optional unbounded explanations without inventing approval", () => {
+    const result = { decision: "allow", risk: "low", outsideWorkbench: false, outsideAccesses: [], extra: true };
+    expect(parseBashAuditResult(`Result:\n\`\`\`json\n${JSON.stringify(result)}\n\`\`\``))
+      .toMatchObject({ decision: "allow", summary: "", violations: [] });
+    const summary = "detail".repeat(1000);
+    expect(parseBashAuditResult(JSON.stringify({ ...result, summary, violations: [summary] })))
+      .toMatchObject({ summary, violations: [summary] });
+    expect(() => parseBashAuditResult("looks okay" )).toThrow("BASH_AUDIT_INVALID");
+    expect(() => parseBashAuditResult(JSON.stringify({ ...result, decision: null }))).toThrow("BASH_AUDIT_INVALID");
+  });
+
   it("builds a no-tools strict structured audit request", () => {
     const request = buildBashAuditRequest(auditInput);
 

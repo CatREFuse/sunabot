@@ -4,7 +4,10 @@ import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import {
   CALL_DIRECTOR_TOOL_NAME
 } from "../tools/public.js";
-import { DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE } from "../director/public.js";
+import {
+  DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE,
+  DIRECTOR_SCHEDULE_OUTPUT_EXAMPLE
+} from "../director/public.js";
 import {
   extractPromptVariables,
   parseFinalPromptTemplate,
@@ -15,6 +18,43 @@ import { resolveSafePromptFilePath } from "./promptWorkspace.js";
 
 const MIGRATION_VERSION = "director-daily-v1";
 const SCHEMA_MIGRATION_VERSION = "director-schema-v2";
+export const DIRECTOR_SOFT_OUTPUT_MIGRATION_VERSION = "director-soft-output-v1";
+
+export async function migrateDirectorSoftOutputPrompt(
+  config: AppConfig,
+  fileName: string,
+  canonicalContent: string
+) {
+  const filePath = await resolveSafePromptFilePath(config, "system", fileName);
+  const markerPath = await resolveSafePromptFilePath(
+    config,
+    "system",
+    path.join(path.dirname(fileName), `.${path.basename(fileName)}.${DIRECTOR_SOFT_OUTPUT_MIGRATION_VERSION}`)
+  );
+  if (await readOptional(markerPath) === `${DIRECTOR_SOFT_OUTPUT_MIGRATION_VERSION}\n`) return false;
+  const content = await readOptional(filePath);
+  if (!content.trim()) return false;
+  const migrated = migrateDirectorSoftOutputTemplate(
+    parseFinalPromptTemplate(content),
+    parseFinalPromptTemplate(canonicalContent)
+  );
+  if (migrated) await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
+  await atomicWriteText(markerPath, `${DIRECTOR_SOFT_OUTPUT_MIGRATION_VERSION}\n`);
+  return Boolean(migrated);
+}
+
+export function migrateDirectorSoftOutputTemplate(
+  template: FinalPromptTemplate,
+  canonical: FinalPromptTemplate
+): FinalPromptTemplate | undefined {
+  const legacyMessages = canonical.messages.map((message) => (
+    typeof message === "object" && typeof message.content === "string"
+      ? { ...message, content: message.content.replace(`\n${DIRECTOR_SCHEDULE_OUTPUT_EXAMPLE}`, "") }
+      : message
+  ));
+  if (JSON.stringify(template.messages) !== JSON.stringify(legacyMessages)) return undefined;
+  return { ...template, messages: structuredClone(canonical.messages) };
+}
 
 export async function migrateDirectorScheduleSchemaPrompt(
   config: AppConfig,

@@ -1763,38 +1763,16 @@ describe("user test harness", () => {
         })
       },
       {
-        text: "",
-        calls: [{
-          name: "add_workmemory",
-          args: { action: "skip", content: null }
-        }]
+        text: "夹具主对话已收到。"
       },
       {
-        text: "夹具主对话已收到。",
-        calls: [{
-          name: "add_user_profile",
-          args: { action: "skip", profile: null, addressNames: null }
-        }]
-      },
-      {
-        text: "",
-        calls: [{
-          name: "add_workmemory",
-          args: { action: "skip", content: null }
-        }]
-      },
-      {
-        text: "夹具私聊已收到。",
-        calls: [{
-          name: "add_user_profile",
-          args: { action: "skip", profile: null, addressNames: null }
-        }]
+        text: "夹具私聊已收到。"
       }
     ];
     const fetchMock = vi.fn(async () => {
       const output = providerOutputs.shift();
       if (!output) throw new Error("unexpected fixture Provider request");
-      return codexSseResponse(output.text, output.calls);
+      return codexSseResponse(output.text);
     });
     vi.stubGlobal("fetch", fetchMock);
     try {
@@ -1855,7 +1833,7 @@ describe("user test harness", () => {
         id: "provider_prompt.ordered:conversation.group-reply",
         passed: true
       }));
-      expect(report.observation.tools).toEqual(["add_user_profile", "add_workmemory"]);
+      expect(report.observation.tools).toEqual([]);
       expect(await fs.readFile(
         path.join(
           destination,
@@ -1893,7 +1871,7 @@ describe("user test harness", () => {
         passed: true
       }));
       expect(JSON.stringify(privateReport.observation.outbound)).toContain("夹具私聊已收到");
-      expect(fetchMock).toHaveBeenCalledTimes(5);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     } finally {
       vi.unstubAllGlobals();
       if (previousWorkspace == null) delete process.env.SUNABOT_WORKSPACE;

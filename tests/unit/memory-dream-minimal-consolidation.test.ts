@@ -127,6 +127,12 @@ describe("minimal Dream consolidation", () => {
     expect(result.working).toContainEqual(retained);
   });
 
+  it("keeps source memory when compression was not returned", () => {
+    const result=plan(output({workingMemoryCompression:null}));
+    expect(result.workingMemoryCompression).toBeNull();
+    expect(result.result.workingMemoryCompression).toEqual({sourceCount:2,outputCount:2,reducedBy:0,unavailable:2});
+  });
+
   it("allows an empty replacement document without inventing an output record", () => {
     const result = plan(output({ workingMemoryCompression: "" }));
     expect(result.workingMemoryCompression).toBe("");

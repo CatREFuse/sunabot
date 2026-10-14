@@ -697,12 +697,11 @@ function normalizeContent(value: unknown) {
   const content = String(value ?? "").replace(/\r\n/g, "\n").trim();
   if (
     !content
-    || Array.from(content).length > WORKING_MEMORY_MAX_ITEM_CHARS
     || content.includes(ITEM_MARKER)
   ) {
     throw workingMemoryError(
       "WORKING_MEMORY_ITEM_INVALID",
-      `Working memory content must contain 1 to ${WORKING_MEMORY_MAX_ITEM_CHARS} characters.`
+      "Working memory content must be non-empty and cannot contain document metadata markers."
     );
   }
   return content;

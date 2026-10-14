@@ -21,6 +21,15 @@ describe("runtime add_workmemory binding", () => {
     if (root) await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("accepts an absent record body without adding an empty memory", async () => {
+    root=await fs.mkdtemp(path.join(os.tmpdir(),"sunabot-workmemory-empty-"));
+    const config=createAdminTestConfig(path.join(root,"agent-a"));
+    await fs.mkdir(config.persona.agentWorkspace,{recursive:true});
+    const runtime=new RuntimeWorkingMemory({config,conversationRecords:new Map()} as never);
+    await expect(runtime.toolPort(incoming()).execute({action:"record"})).resolves.toMatchObject({ok:true,recorded:false});
+    expect((await readWorkingMemoryDocument(config)).items).toHaveLength(0);
+  });
+
   it("binds the current Agent workspace and complete conversation source", async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-runtime-workmemory-"));
     const config = createAdminTestConfig(path.join(root, "agent-a"));

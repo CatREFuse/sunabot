@@ -52,9 +52,6 @@ export const SEGMENTED_TONE_OUTPUT_CONTRACT = [
 ].join("\n");
 
 export function segmentedToneOutputContract(markers: readonly string[]) {
-  if (markers.length > 4 || markers.some((marker) => !/^\[\/[^\]\r\n]{1,64}\]$/u.test(marker))) {
-    throw toneAssetError("Tone 表情标记无效。");
-  }
   return [
     SEGMENTED_TONE_OUTPUT_CONTRACT,
     `本轮允许输出为 <exp> 的表情标记依次为 ${JSON.stringify(markers)}；只能逐字使用该列表中的值。列表为空时不得输出 <exp>；其他形似标记的正文必须保留在文字气泡中。`
@@ -62,7 +59,6 @@ export function segmentedToneOutputContract(markers: readonly string[]) {
 }
 
 export function serializeToneAvailableAssets(assets: readonly ToneAvailableAssetV1[]) {
-  if (assets.length > 32) throw toneAssetError("Tone 可用媒体超过数量限制。");
   const seen = new Set<string>();
   return JSON.stringify(assets.map((asset) => {
     if (!/^(image|voice|file)$/u.test(asset.kind)

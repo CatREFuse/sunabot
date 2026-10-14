@@ -48,6 +48,7 @@
 | `docs/operations/sqlite-backup-recovery.md` | 默认 Plana 与全部 Agent 业务库/queue 数据库对的一致恢复点、7/30 天保留、恢复校验、季度演练和故障门禁 | 执行每日备份、恢复、保留清理或故障演练时读取 |
 | `docs/references/README.md` | OneBot v11、v12 协议资料的来源、版本和本地入口 | 核对 OneBot 事件、消息段、动作或兼容性时读取 |
 | `docs/user-tests/README.md` | user test harness、用例文档、隔离 workspace、质量评审与上线门禁 | 开发任何功能、编写 user test case 或执行上线前验证时读取 |
+| `docs/user-tests/llm-permissive-content.md` | LLM 输入输出宽容处理、Dream 恢复、可选记忆工具与格式偏差回归 | 修改模型内容接纳、结构化结果解析或内容门禁时读取 |
 | `docs/user-tests/cases/admin-console/account-conversation-recovery.md` | 历史非 primary 会话账号恢复与后台消息查询 | 修改会话加载、后台历史查询或账号元数据时读取 |
 | `docs/user-tests/cases/admin-console/conversation-image-recovery.md` | Node 24 固定 DNS 图片代理与头像占位请求 | 修改图片代理传输或管理台图片占位前读取 |
 | `docs/user-tests/current-system-tools.md` | 当前 Agent 工具目录的角色、平台与真实 Provider user test 计划 | 修改工具注册、会话权限、Native Bash 或工具验收矩阵时读取 |
@@ -138,6 +139,7 @@
 ## 修改边界
 
 - 只修改请求涉及的模块，保持现有接口和代码风格。
+- LLM 输入与模型输出采用宽容处理，不因内容长度、字段顺序、附加字段、包装格式或规范化差异拒绝整轮；缺失字段不清空既有数据。工具账号权限、路径、真实执行参数、存储容量与事务边界独立保留。
 - 未经用户明确要求，禁止新增会改变正常业务流程的安全门禁、工具互斥、整轮污染标记、隐式降级、额外审批或失败关闭策略。设计阶段发现风险时，只说明风险、影响和可选方案，并询问用户是否需要；用户明确确认前，不得把建议写成代码、提示词、测试或强制规范。
 - Agent 工具循环默认允许同一 Provider turn 的不同模型轮次依次组合全部已启用且当前会话有权使用的工具，也允许模型响应正文与工具调用并存。不得仅依据“本地/联网”、工具名称、MCP server、先前工具活动、先前失败或 deferred/`no_reply`/语音的出现顺序拒绝后续调用。
 - 已由用户明确要求或现行规范确定的身份鉴权、会话权限、参数 schema、路径边界、执行隔离、持久化事务和外部系统审批继续保留。若协议结构确实无法支持某种组合，必须在设计阶段说明具体技术限制并取得用户选择，不能包装成安全策略自行实施。

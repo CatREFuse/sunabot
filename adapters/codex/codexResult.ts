@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { modelContentText, parseModelJson } from "../../packages/contracts/model/modelContent.js";
 import type {
   CodexResultArtifactV1,
   CodexSupervisorRequest,
@@ -61,15 +62,17 @@ export function parseCodexResultText(raw: string): ModelResult {
   if (Buffer.byteLength(raw) > CODEX_MAX_RESULT_BYTES) {
     throw new CodexProtocolError("result_limit", `Codex result exceeded ${CODEX_MAX_RESULT_BYTES} bytes.`);
   }
-  const parsed = JSON.parse(raw) as Record<string, unknown>;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("result must be an object");
-  const status = String(parsed.status ?? "");
-  if (status !== "succeeded" && status !== "failed" && status !== "needs_input" && status !== "unknown") {
-    throw new Error("result status is invalid");
+  const value = parseModelJson(raw);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { status: "unknown", content: raw, artifacts: [] };
   }
+  const parsed = value as Record<string, unknown>;
+  const declaredStatus = modelContentText(parsed.status).trim().toLowerCase();
+  const status = declaredStatus === "succeeded" || declaredStatus === "failed" || declaredStatus === "needs_input"
+    ? declaredStatus : "unknown";
   return {
     status,
-    content: nullableString(parsed.content),
+    content: nullableString(parsed.content ?? parsed.text ?? parsed.message) ?? raw,
     question: nullableString(parsed.question),
     error: nullableString(parsed.error),
     artifacts: parseArtifactDeclarations(parsed.artifacts)
@@ -266,7 +269,7 @@ export function normalizeModelResult(
     result.status === "failed" ? "codex_task_failed" : "codex_task_unknown",
     result.error?.trim() || result.content?.trim() || "Codex did not provide a conclusive result.",
     result.status === "failed",
-    common
+    { ...common, ...(result.content ? { content: result.content } : {}) }
   );
 }
 
@@ -302,8 +305,7 @@ function parseArtifactDeclarations(value: unknown): ModelResultArtifactDeclarati
     }
     const record = item as Record<string, unknown>;
     if (
-      Object.keys(record).length !== 2
-      || typeof record.relativePath !== "string"
+      typeof record.relativePath !== "string"
       || typeof record.displayName !== "string"
     ) {
       throw new Error("result artifact fields are invalid");

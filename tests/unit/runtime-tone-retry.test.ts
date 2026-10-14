@@ -5,23 +5,16 @@ import { defaultConfig } from "../../src/config.js";
 import type { RuntimePromptPort } from "../../src/runtime/runtimeContracts.js";
 import { RuntimeTone } from "../../src/runtime/tone.js";
 
-describe("Tone hard-gate retry request", () => {
-  it("appends the cumulative retry state and escaped errors as the final request message", async () => {
+describe("Tone permissive request", () => {
+  it("does not inject historical hard-gate retry instructions", async () => {
     const config = defaultConfig();
     config.bot.tone.enabled = true;
     config.bot.tone.segmentedReply = true;
     const provider = new OpenAIProvider(config.providers.items[0]!);
     const completePrompt: RuntimePromptPort["completePrompt"] = vi.fn(async (_provider, request) => {
       expect(request.messages.at(-1)).toEqual({
-        role: "developer",
-        content: [
-          '<tone_retry_state attempt="3" max_attempts="4">',
-          "上一轮 Tone 输出未通过宿主硬编码门禁。以下错误按发生顺序累计：",
-          "1. 第一处 &lt;exp/&gt; 错误",
-          "2. 第二处 &amp; 媒体错误",
-          "请根据全部累计错误重新生成完整结果，严格遵守 tone_output_contract，不要重复任何已经指出的错误。",
-          "</tone_retry_state>"
-        ].join("\n")
+        role: "user",
+        content: "原始输入"
       });
       return "<dialog>已修正</dialog>";
     });

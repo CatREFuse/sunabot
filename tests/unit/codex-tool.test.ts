@@ -888,7 +888,6 @@ describe("isolated Codex preparation", () => {
       "--disable", "shell_tool",
       "--disable", "unified_exec",
       "--json",
-      "--output-schema", prepared.schemaFile,
       "--output-last-message", prepared.resultFile,
       "--ephemeral"
     ]));

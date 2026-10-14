@@ -26,7 +26,6 @@ import type { RuntimePromptPort } from "./runtimeContracts.js";
 
 const READ_AIR_MAX_ATTEMPTS = 2;
 const READ_AIR_MESSAGE_LIMIT = 64;
-const READ_AIR_MESSAGE_MAX_CHARS = 8_000;
 
 interface RuntimeAirHost extends RuntimePromptPort {
   readonly conversationRecords: ReadonlyMap<string, ConversationRecord>;
@@ -149,7 +148,7 @@ function boundedConversation(context: AirConversationContext) {
     },
     messages: context.messages.slice(-READ_AIR_MESSAGE_LIMIT).map((message) => ({
       role: message.role,
-      content: message.content.slice(0, READ_AIR_MESSAGE_MAX_CHARS)
+      content: message.content
     }))
   };
 }

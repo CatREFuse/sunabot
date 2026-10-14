@@ -90,22 +90,6 @@ export async function replaceAirKnowledge(
 export function normalizeAirKnowledge(value: string) {
   const content = value.replace(/^```(?:markdown|md)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
   if (!content) throw new Error("Read-air output is empty.");
-  const headings = content.split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => /^#{1,2}\s/u.test(line));
-  const expectedHeadings = ["# 场域知识", "## 使用边界", "## 场域约定"];
-  if (headings[0] !== expectedHeadings[0]) {
-    throw new Error("Read-air output must start with '# 场域知识'.");
-  }
-  for (const heading of expectedHeadings.slice(1)) {
-    if (!headings.includes(heading)) throw new Error(`Read-air output is missing '${heading.slice(3)}'.`);
-  }
-  if (
-    headings.length !== expectedHeadings.length
-    || headings.some((heading, index) => heading !== expectedHeadings[index])
-  ) {
-    throw new Error("Read-air output contains an unsupported or misplaced heading.");
-  }
   assertAirKnowledgeSize(content);
   return content;
 }

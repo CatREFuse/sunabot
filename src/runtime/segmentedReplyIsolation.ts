@@ -1,5 +1,4 @@
 import type { OutboundMessageV1 } from "../../packages/contracts/messaging/messages.js";
-import { MAX_SEGMENTED_REPLY_BUBBLES } from "../../services/messaging/segmentedReply.js";
 import type { ImageResult } from "../types.js";
 import { appendReplySoftError } from "./replyModuleIsolation.js";
 
@@ -27,9 +26,6 @@ export function appendSegmentedDeliverySoftError(
       text: appendReplySoftError(part.text, reason)
     };
     return parts;
-  }
-  if (parts.length >= MAX_SEGMENTED_REPLY_BUBBLES) {
-    throw segmentedReplyContractError(`分段回复最多包含 ${MAX_SEGMENTED_REPLY_BUBBLES} 个气泡。`);
   }
   parts.push({
     text: appendReplySoftError("", reason),

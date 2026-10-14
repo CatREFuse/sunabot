@@ -15,10 +15,6 @@ import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 import { processProviderToolRound } from "./toolRound.js";
 import { completeProviderText } from "./turnToolState.js";
 import { assertMappedProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
-import {
-  assertMemoryToolDecisionsResolved,
-  geminiMemoryToolConfig
-} from "./memoryToolDecisions.js";
 
 export async function completeGeminiGenerateContent(
   context: ProviderAdapterContext,
@@ -50,11 +46,9 @@ export async function completeGeminiGenerateContent(
       systemInstruction: system ? { parts: [{ text: system }] } : undefined,
       contents,
       tools: definitions.length ? [{ functionDeclarations: definitions }] : undefined,
-      toolConfig: geminiMemoryToolConfig(options),
       generationConfig: {
         temperature: context.provider.temperature,
-        maxOutputTokens: context.provider.maxOutputTokens,
-        ...(request.response_format?.type !== "text" ? { responseMimeType: "application/json" } : {})
+        maxOutputTokens: context.provider.maxOutputTokens
       }
     };
     const metadata = withLogContext({ round, toolCallCount: state.toolCallCount, maxToolCalls, toolNames: definitions.map((tool) => tool.name) }, options.logContext);
@@ -109,7 +103,6 @@ export async function completeGeminiGenerateContent(
     });
     state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, calls, maxToolCalls);
     if (!calls.length) {
-      assertMemoryToolDecisionsResolved(options);
       return completeProviderText(text, state, options);
     }
 

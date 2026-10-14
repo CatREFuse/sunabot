@@ -1,3 +1,5 @@
+import { modelContentText } from "../../packages/contracts/model/modelContent.js";
+
 export const ADD_USER_PROFILE_TOOL_NAME = "add_user_profile";
 export const ADD_USER_PROFILE_MAX_CHARS = 4_000;
 export const ADD_USER_PROFILE_MAX_ADDRESS_NAMES = 16;
@@ -40,7 +42,7 @@ export const addUserProfileTool = {
   ].join(" "),
   parameters: {
     type: "object",
-    additionalProperties: false,
+    additionalProperties: true,
     properties: {
       action: {
         type: "string",
@@ -49,24 +51,19 @@ export const addUserProfileTool = {
       },
       profile: {
         type: ["string", "null"],
-        minLength: 1,
-        maxLength: ADD_USER_PROFILE_MAX_CHARS,
         description: "The complete updated aggregate profile when action=record, or null when action=skip."
       },
       addressNames: {
         type: ["array", "null"],
         items: {
-          type: "string",
-          minLength: 1,
-          maxLength: ADD_USER_PROFILE_MAX_ADDRESS_NAME_CHARS
+          type: "string"
         },
-        maxItems: ADD_USER_PROFILE_MAX_ADDRESS_NAMES,
         description: "The complete ordered forms of address when action=record, or null when action=skip."
       }
     },
-    required: ["action", "profile", "addressNames"]
+    required: ["action"]
   },
-  strict: true
+  strict: false
 } as const;
 
 export async function runAddUserProfile(
@@ -78,63 +75,20 @@ export async function runAddUserProfile(
     return { ok: false, code: "ADD_USER_PROFILE_INVALID", error: "add_user_profile arguments must be an object." };
   }
   const record = input as Record<string, unknown>;
-  if (Object.keys(record).some((key) => key !== "action" && key !== "profile" && key !== "addressNames")) {
-    return { ok: false, code: "ADD_USER_PROFILE_INVALID", error: "add_user_profile contains unsupported arguments." };
-  }
   const action = record.action;
   if (action !== "record" && action !== "skip") {
     return { ok: false, code: "ADD_USER_PROFILE_INVALID", error: "action must be record or skip." };
   }
   if (action === "skip") {
-    if (record.profile !== null || record.addressNames !== null) {
-      return {
-        ok: false,
-        code: "ADD_USER_PROFILE_INVALID",
-        error: "profile and addressNames must be null when action is skip."
-      };
-    }
     return port.execute({ action: "skip" }, signal);
   }
-  if (
-    typeof record.profile !== "string"
-    || !record.profile.trim()
-    || Array.from(record.profile).length > ADD_USER_PROFILE_MAX_CHARS
-  ) {
-    return {
-      ok: false,
-      code: "ADD_USER_PROFILE_INVALID",
-      error: `profile must contain 1 to ${ADD_USER_PROFILE_MAX_CHARS} characters.`
-    };
-  }
-  if (!Array.isArray(record.addressNames) || record.addressNames.length > ADD_USER_PROFILE_MAX_ADDRESS_NAMES) {
-    return {
-      ok: false,
-      code: "ADD_USER_PROFILE_INVALID",
-      error: `addressNames must contain at most ${ADD_USER_PROFILE_MAX_ADDRESS_NAMES} strings.`
-    };
-  }
-  const addressNames: string[] = [];
-  const seen = new Set<string>();
-  for (const value of record.addressNames) {
-    if (
-      typeof value !== "string"
-      || !value.trim()
-      || Array.from(value).length > ADD_USER_PROFILE_MAX_ADDRESS_NAME_CHARS
-    ) {
-      return {
-        ok: false,
-        code: "ADD_USER_PROFILE_INVALID",
-        error: `Each address name must contain 1 to ${ADD_USER_PROFILE_MAX_ADDRESS_NAME_CHARS} characters.`
-      };
-    }
-    const normalized = value.trim();
-    if (seen.has(normalized)) continue;
-    seen.add(normalized);
-    addressNames.push(normalized);
-  }
+  const addressNames = record.addressNames == null ? undefined : [...new Set(
+    (Array.isArray(record.addressNames) ? record.addressNames : [record.addressNames])
+      .map((value) => modelContentText(value).trim()).filter(Boolean)
+  )];
   return port.execute({
     action: "record",
-    profile: record.profile.trim(),
-    addressNames
+    ...(record.profile == null ? {} : { profile: modelContentText(record.profile).trim() }),
+    ...(addressNames == null ? {} : { addressNames })
   }, signal);
 }

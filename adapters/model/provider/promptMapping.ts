@@ -17,21 +17,13 @@ export function promptRequestFields(request: RenderedPromptRequest) {
   delete fields.response_format;
   delete fields.input;
   delete fields.instructions;
+  if (isRecord(fields.text)) {
+    const text = { ...fields.text };
+    delete text.format;
+    if (Object.keys(text).length) fields.text = text;
+    else delete fields.text;
+  }
   return fields;
-}
-
-export function responseFormatFields(responseFormat: Record<string, unknown>, existingText: unknown) {
-  const type = String(responseFormat.type ?? "text");
-  if (type === "text") return {};
-  const format = type === "json_schema" && isRecord(responseFormat.json_schema)
-    ? { type, ...responseFormat.json_schema }
-    : responseFormat;
-  return {
-    text: {
-      ...(isRecord(existingText) ? existingText : {}),
-      format
-    }
-  };
 }
 
 export function readToolName(tool: Record<string, unknown>) {

@@ -188,9 +188,6 @@ export class RuntimeDirector {
     signal?.throwIfAborted();
     if (!this.enabled || !runtimeActive(this.host)) return undefined;
     const draft = parseDirectorScheduleDraft(text, { date, timeZone });
-    if (!draft.items.some((item) => item.share.enabled && Date.parse(item.share.at!) > now.getTime())) {
-      throw new Error("Director daily plan must contain a future share.");
-    }
     signal?.throwIfAborted();
     const committed = repository.director.commit({
       draft,

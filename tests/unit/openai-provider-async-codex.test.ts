@@ -196,12 +196,12 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     });
   });
 
-  it("delivers assistant_text during a multi-round action and still returns the final text", async () => {
+  it.each(["我正在检查。", "完整正文".repeat(1_100)])("delivers untruncated assistant_text during a multi-round action (%#)", async (text) => {
     const provider = codexProvider();
     const onAssistantText = vi.fn(async () => undefined);
     const fetchMock = mockCodexToken(
       provider,
-      codexSseResponse([functionCall("assistant_text", "call_assistant_text", { text: "我正在检查。" })]),
+      codexSseResponse([functionCall("assistant_text", "call_assistant_text", { text })]),
       codexSseResponse([assistantMessage("检查完成。")])
     );
 
@@ -213,7 +213,7 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
 
     expect(result).toEqual({ kind: "completed", text: "检查完成。" });
     expect(onAssistantText).toHaveBeenCalledOnce();
-    expect(onAssistantText).toHaveBeenCalledWith("我正在检查。", "assistant_text");
+    expect(onAssistantText).toHaveBeenCalledWith(text, "assistant_text");
     expect(toolNames(fetchRequestBody(fetchMock, 0))).toContain("assistant_text");
   });
 
@@ -520,7 +520,7 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     ]);
   });
 
-  it("rejects next-round voice when it differs from delivered assistant_text", async () => {
+  it("keeps distinct next-round voice and delivered assistant_text", async () => {
     const provider = codexProvider();
     const onAssistantText = vi.fn(async () => undefined);
     mockCodexToken(
@@ -540,9 +540,12 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
         voice: { enabled: true, languages: ["ja"], defaultLanguage: "ja" },
         onAssistantText,
       }),
-    ).rejects.toThrow(
-      "send_voice_message text must exactly match the accompanying human-readable assistant text",
-    );
+    ).resolves.toMatchObject({
+      kind: "completed",
+      text: "早安。",
+      textAlreadyDelivered: true,
+      voice: { text: "晚安。" }
+    });
   });
 
   it("returns dispatch_message and voice together without starting deferred work inline", async () => {
@@ -643,13 +646,8 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
         description: "由最终提示词定义的搜索说明"
       })
     ]);
-    expect(body.text).toMatchObject({
-      format: {
-        type: "json_schema",
-        name: "answer",
-        strict: true
-      }
-    });
+    expect(body.text).toBeUndefined();
+    expect(body.response_format).toBeUndefined();
   });
 
   it("keeps the legacy instructions request shape for models before GPT-5.6", async () => {

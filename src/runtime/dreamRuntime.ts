@@ -30,10 +30,6 @@ import {
   type RuntimeDreamStorePort
 } from "./dreamPipeline.js";
 
-const MAX_DREAM_PROFILE_RECORDS = 64;
-const MAX_DREAM_CONVERSATIONS = 12;
-const MAX_DREAM_MESSAGES_PER_CONVERSATION = 16;
-const MAX_DREAM_MESSAGE_CHARS = 1_000;
 const MAX_DREAM_TASKS = 100;
 const DREAM_SLEEP_NOTICE_CONTEXT = [
   "管理员刚刚在管理台手动触发了 Dream。",
@@ -186,7 +182,7 @@ async function captureDreamContext(
     workingRevision: workingDocument.revision,
     longTermDigest: digestDreamMemorySnapshot(longTermJson),
     recallStats: [],
-    userProfiles: jsonClone(repository.readMemory("user_profile").slice(-MAX_DREAM_PROFILE_RECORDS)),
+    userProfiles: jsonClone(repository.readMemory("user_profile")),
     recentConversations: observedConversations(repository.readConversations(), input.window),
     activeTasks: jsonClone(repository.scheduledTasks.list({ enabled: true, limit: MAX_DREAM_TASKS }).items),
     plannedDailySchedule: jsonClone(repository.director.read(previousScheduleDate) ?? null),
@@ -332,10 +328,9 @@ function observedConversations(
           at >= start &&
           at < end;
       })
-      .slice(-MAX_DREAM_MESSAGES_PER_CONVERSATION)
       .map((message) => ({
         role: message.role,
-        text: clippedText(message.text),
+        text: String(message.text ?? ""),
         at: message.at,
         ...(message.userId == null ? {} : { userId: String(message.userId) }),
         ...(message.senderName ? { senderName: message.senderName } : {})
@@ -347,7 +342,7 @@ function observedConversations(
       title: record.title,
       messages
     }];
-  }).slice(0, MAX_DREAM_CONVERSATIONS);
+  });
 }
 
 function personaSnapshot(host: SunaRuntime, fieldKnowledge: string): Record<string, unknown> {
@@ -361,10 +356,6 @@ function personaSnapshot(host: SunaRuntime, fieldKnowledge: string): Record<stri
     relation: content("RELATION.md"),
     air: fieldKnowledge
   };
-}
-
-function clippedText(value: unknown) {
-  return String(value ?? "").trim().slice(0, MAX_DREAM_MESSAGE_CHARS);
 }
 
 function jsonClone<T>(value: T): T {

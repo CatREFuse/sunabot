@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OutboundContentSegmentV1 } from "../../packages/contracts/messaging/messages.js";
-import { MAX_EMOJI_MARKERS_PER_REPLY } from "../emojis/public.js";
 
 export interface OutboundMediaDeliveryOptions {
   rootDir: string;
@@ -157,20 +156,11 @@ export async function prepareOutboundImageSources(
 ) {
   const emittedIndexes = emittedImageIndexes(images, contentSegments);
   const localOccurrences = new Map<string, number>();
-  const emojiOccurrences = new Map<string, number>();
   for (const index of emittedIndexes) {
     const image = images[index]!;
     if (!image.filePath) continue;
     const identity = fileIdentity(image.filePath);
     localOccurrences.set(identity, (localOccurrences.get(identity) ?? 0) + 1);
-    if (!contentAddressedEmojiDigest(pathLikeBaseName(image.filePath))) continue;
-    emojiOccurrences.set(identity, (emojiOccurrences.get(identity) ?? 0) + 1);
-  }
-  const markerCount = [...emojiOccurrences.values()].reduce((sum, count) => sum + count, 0);
-  if (markerCount > MAX_EMOJI_MARKERS_PER_REPLY) {
-    throw new Error(
-      `Outbound message exceeds the limit of ${MAX_EMOJI_MARKERS_PER_REPLY} emoji markers.`
-    );
   }
 
   const sources = new Array<string>(images.length);
@@ -289,10 +279,6 @@ function isSafePngFileName(fileName: string) {
 
 function contentAddressedEmojiDigest(fileName: string) {
   return /^emoji-([a-f0-9]{64})\.(?:png|gif)$/u.exec(fileName)?.[1];
-}
-
-function pathLikeBaseName(value: string) {
-  return value.split(/[\\/]/).at(-1) ?? "";
 }
 
 function assertContentAddressedEmoji(fileName: string, content: Buffer) {

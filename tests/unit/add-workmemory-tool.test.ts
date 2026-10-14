@@ -43,7 +43,7 @@ describe("add_workmemory tool", () => {
     expect(execute).toHaveBeenCalledWith({ action: "skip" }, undefined);
   });
 
-  it("uses Unicode characters for the 4000-character boundary", async () => {
+  it("preserves Unicode content beyond the former 4000-character boundary", async () => {
     const execute = vi.fn(async () => ({ ok: true }));
     const content = "😀".repeat(4_000);
 
@@ -52,14 +52,8 @@ describe("add_workmemory tool", () => {
     expect(execute).toHaveBeenCalledWith({ action: "record", content }, undefined);
 
     execute.mockClear();
-    await expect(runAddWorkMemory({
-      action: "record",
-      content: "😀".repeat(4_001)
-    }, { execute })).resolves.toMatchObject({
-      ok: false,
-      code: "ADD_WORKMEMORY_INVALID"
-    });
-    expect(execute).not.toHaveBeenCalled();
+    await expect(runAddWorkMemory({ action: "record", content: "😀".repeat(4_001) }, { execute })).resolves.toEqual({ok:true});
+    expect(execute).toHaveBeenCalledWith({action:"record",content:"😀".repeat(4_001)},undefined);
   });
 
   it.each([
@@ -72,17 +66,19 @@ describe("add_workmemory tool", () => {
     expect(execute).toHaveBeenCalledWith({ action: "record", content }, undefined);
   });
 
+  it("ignores extra metadata while keeping the host-bound write arguments", async () => {
+    const execute = vi.fn(async()=>({ok:true}));
+    await runAddWorkMemory({action:"record", content:42, conversationId:"forged", reason:"extra"},{execute});
+    expect(execute).toHaveBeenCalledWith({action:"record",content:"42"},undefined);
+  });
+
   it.each([
     [null],
     [{}],
     [{ content: "" }],
-    [{ action: "record", content: null }],
-    [{ action: "skip", content: "" }],
-    [{ action: "skip" }],
     [{ action: "other", content: null }],
     [{ content: "有效", recordedAt: "1999-01-01T00:00:00+00:00" }],
-    [{ content: "有效", conversationId: "other-agent:private:1" }],
-    [{ action: "record", content: "x".repeat(4_001) }]
+    [{ content: "有效", conversationId: "other-agent:private:1" }]
   ])("rejects forged metadata and invalid arguments %#", async (input) => {
     const execute = vi.fn();
     await expect(runAddWorkMemory(input, { execute })).resolves.toMatchObject({

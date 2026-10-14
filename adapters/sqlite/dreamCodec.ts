@@ -11,7 +11,6 @@ import type {
 
 type SqlRow = Record<string, unknown>;
 
-const MAX_JSON_BYTES = 1_048_576;
 const CANONICAL_MEMORY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
 export function mapRecallStats(row: SqlRow): MemoryRecallStats {
@@ -48,7 +47,7 @@ export function mapRun(row: SqlRow): DreamRun {
     throw new Error("Stored running dream contains generated or consolidated data.");
   }
   if ((status === "generated" || status === "consolidated" || status === "completed") &&
-    (output == null || dreamText == null)) {
+    output == null) {
     throw new Error(`Stored ${status} dream is missing generated data.`);
   }
   if ((status === "consolidated" || status === "completed") && (
@@ -275,11 +274,7 @@ export function encodeJsonObject(value: JsonObject, field: string) {
   if (Array.isArray(value) || value == null || typeof value !== "object") {
     throw new Error(`${field} must be a JSON object.`);
   }
-  const encoded = JSON.stringify(value);
-  if (Buffer.byteLength(encoded, "utf8") > MAX_JSON_BYTES) {
-    throw new Error(`${field} exceeds ${MAX_JSON_BYTES} bytes.`);
-  }
-  return encoded;
+  return JSON.stringify(value);
 }
 
 function parseJsonObject(value: unknown, field: string): JsonObject {
@@ -291,9 +286,6 @@ function parseJsonObject(value: unknown, field: string): JsonObject {
   }
   if (!isPlainObject(parsed)) throw new Error(`Stored Dream ${field} must be a JSON object.`);
   assertJsonValue(parsed, `stored ${field}`, new Set(), 0);
-  if (Buffer.byteLength(String(value), "utf8") > MAX_JSON_BYTES) {
-    throw new Error(`Stored Dream ${field} exceeds ${MAX_JSON_BYTES} bytes.`);
-  }
   return parsed;
 }
 

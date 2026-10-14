@@ -9,7 +9,7 @@ import { isUsableImageUrl, uniqueStrings, validTimestamp } from "./messagingAtta
 import { MAX_SELFIE_REFERENCE_IMAGES } from "./runtimeContracts.js";
 
 export function normalizeSelfiePrompt(value: unknown) {
-  return String(value ?? "").trim().slice(0, 4_000);
+  return String(value ?? "").trim();
 }
 export function normalizeSelfieSize(value: unknown, fallback: AppConfig["bot"]["tools"]["generateImg"]["size"], resolution: AppConfig["bot"]["tools"]["generateImg"]["resolution"]) {
   if (isImageSize(value)) return value;

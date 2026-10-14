@@ -85,12 +85,5 @@ function collectTargets(incoming: InboundMessageV1) {
 }
 
 export function normalizeImageAltText(value: string) {
-  const text = value
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/^[\s"'“”‘’`]+|[\s"'“”‘’`]+$/g, "")
-    .replace(/\s+/g, " ")
-    .slice(0, 160)
-    .trim();
-  if (!text) return "一张无法读取具体内容的图片";
-  return text.startsWith("一张") ? text : `一张${text}`;
+  return value;
 }

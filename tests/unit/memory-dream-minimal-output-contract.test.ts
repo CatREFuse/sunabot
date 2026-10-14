@@ -1,81 +1,32 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import {
-  DreamModelOutputContractError,
-  parseStrictMinimalDreamModelOutput
-} from "../../services/memory/dream/public.js";
+import { parseStrictMinimalDreamModelOutput } from "../../services/memory/dream/public.js";
 
-function validOutput() {
-  return {
-    workingMemoryCompression: "发布必须等自动回归全部通过后才能确认完成。",
-    longTermMemoryAdditions: ["每次发布都必须等自动回归全部通过后才能确认完成。"],
-    dreamDescription: "我梦见一排测试灯依次亮起，最后一盏亮起时，写着完成的门才缓缓打开。"
-  };
-}
-
-function expectFailure(value: unknown) {
-  expect(() => parseStrictMinimalDreamModelOutput(JSON.stringify(value)))
-    .toThrowError(DreamModelOutputContractError);
-}
-
-describe("minimal Dream output contract", () => {
-  it("accepts exactly three ordered fields and preserves their content", () => {
-    const value = validOutput();
-    expect(parseStrictMinimalDreamModelOutput(JSON.stringify(value))).toEqual(value);
-  });
-
-  it("accepts zero long-term additions without exposing the internal decision", () => {
-    const value = validOutput();
-    value.longTermMemoryAdditions = [];
-    expect(parseStrictMinimalDreamModelOutput(JSON.stringify(value)))
-      .toMatchObject({ longTermMemoryAdditions: [] });
-  });
-
-  it("accepts empty compression and additions when the working batch is empty", () => {
-    const value = {
-      workingMemoryCompression: "",
-      longTermMemoryAdditions: [],
-      dreamDescription: "我梦见一间安静的空房，窗外只有缓慢移动的云。"
-    };
-    expect(parseStrictMinimalDreamModelOutput(JSON.stringify(value)))
-      .toEqual(value);
-  });
-
-  it("rejects a different top-level order and any fourth field", () => {
-    const value = validOutput();
-    expectFailure({
-      dreamDescription: value.dreamDescription,
-      workingMemoryCompression: value.workingMemoryCompression,
-      longTermMemoryAdditions: value.longTermMemoryAdditions
-    });
-    expectFailure({ ...value, personaAdjustment: null });
-  });
-
-  it("rejects the removed item and source-id wrappers", () => {
-    expectFailure({
-      ...validOutput(),
-      workingMemoryCompression: { items: [] }
-    });
-    expectFailure({
-      ...validOutput(),
-      longTermMemoryAdditions: { items: [] }
-    });
-    expectFailure({
-      ...validOutput(),
-      longTermMemoryAdditions: [{ fact: "不再接受对象项" }]
+describe("permissive Dream model output", () => {
+  it("accepts reordered fields, prose, fences, and additional fields while retaining raw output", () => {
+    const value = { dreamDescription: "dream", reason: "context", longTermMemoryAdditions: ["fact"], workingMemoryCompression: "memory" };
+    const text = "Here is the result:\n" + "\x60\x60\x60json\n" + JSON.stringify(value) + "\n\x60\x60\x60";
+    expect(parseStrictMinimalDreamModelOutput(text)).toEqual({
+      workingMemoryCompression: "memory", longTermMemoryAdditions: ["fact"], dreamDescription: "dream", rawOutput: text
     });
   });
-
-  it("rejects visible reasons, decisions, and reasoning fields", () => {
-    expectFailure({ ...validOutput(), reason: "不应输出" });
-    expectFailure({ ...validOutput(), decision: "不应输出" });
-    expectFailure({ ...validOutput(), reasoning: "不应输出" });
+  it("preserves content beyond former model limits and accepts host-like identity text", () => {
+    const value = { workingMemoryCompression: "记".repeat(5000), longTermMemoryAdditions: Array.from({length:70},(_,i)=>"fact "+i), dreamDescription: "人物-1234567890 " + "梦".repeat(65000) };
+    expect(parseStrictMinimalDreamModelOutput(JSON.stringify(value))).toMatchObject(value);
   });
-
-  it("rejects a working-memory replacement larger than the document item limit", () => {
-    expectFailure({
-      ...validOutput(),
-      workingMemoryCompression: "记".repeat(4_001)
-    });
+  it("distinguishes missing compression from an explicitly empty replacement", () => {
+    expect(parseStrictMinimalDreamModelOutput('{"dreamDescription":"dream"}')).toMatchObject({ workingMemoryCompression:null, longTermMemoryAdditions:[] });
+    expect(parseStrictMinimalDreamModelOutput('{"workingMemoryCompression":""}')).toMatchObject({ workingMemoryCompression:"", dreamDescription:"" });
+  });
+  it("retains the actual response when a model supplies its own rawOutput field", () => {
+    const text = JSON.stringify({ dreamDescription: "dream", rawOutput: "other content" });
+    expect(parseStrictMinimalDreamModelOutput(text).rawOutput).toBe(text);
+  });
+  it("keeps plain text without inventing a memory replacement", () => {
+    expect(parseStrictMinimalDreamModelOutput("a dream in prose")).toEqual({workingMemoryCompression:null,longTermMemoryAdditions:[],dreamDescription:"a dream in prose",rawOutput:"a dream in prose"});
+    expect(parseStrictMinimalDreamModelOutput('"a JSON string"').dreamDescription).toBe("a JSON string");
+  });
+  it("accepts alternative value shapes as text and does not reject the whole result", () => {
+    expect(parseStrictMinimalDreamModelOutput(JSON.stringify({working_memory_compression:{text:"memory"},long_term_memory_additions:{fact:"new fact"}}))).toMatchObject({workingMemoryCompression:'{"text":"memory"}',longTermMemoryAdditions:['{"fact":"new fact"}'],dreamDescription:""});
   });
 });

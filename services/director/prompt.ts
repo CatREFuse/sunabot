@@ -68,8 +68,11 @@ const SCHEDULE_SCHEMA = {
   required: ["schemaVersion", "date", "timeZone", "theme", "summary", "items"]
 } as const;
 
+export const DIRECTOR_SCHEDULE_OUTPUT_EXAMPLE = '建议返回 JSON 对象，字段示例为 {"schemaVersion":1,"date":"当天日期","timeZone":"当前 IANA 时区","theme":"当日主题","summary":"行程摘要","items":[{"id":"morning","startAt":"带 UTC 偏移的开始时间","endAt":"带 UTC 偏移的结束时间","activity":"活动","location":"地点","participants":[],"intent":"意图","variant":"日常变种","share":{"enabled":false,"at":null,"textIntent":null,"selfiePrompt":null}}]}。填写当前任务对应的日期、时区、时间和内容。';
+
 const SCHEDULE_CONTRACT = [
   "输出一份可执行的单日语义行程。所有时间使用带明确 UTC 偏移的 ISO 8601，且落在 payload.date 与 payload.timeZone 对应的同一个自然日。",
+  DIRECTOR_SCHEDULE_OUTPUT_EXAMPLE,
   "items 按 startAt 升序排列，互不重叠，覆盖起床后的日常、主要职责、饮食、休息和晚间收束；稳定循环优先，变种只从种子剧本允许的菜单中选择。",
   "活动必须符合角色可知信息、空间约束、职责与关联人物关系。不要制造重大事故、不可逆剧情、原作角色死亡、突然恋爱或改变核心身份。",
   "每天选择 1 至 3 个值得自然分享的轻量节点。share.enabled=true 时 at、textIntent、selfiePrompt 必须为非空字符串，at 必须落在所属事项的 startAt 与 endAt 之间；selfiePrompt 描述角色本人、现场、动作、表情、服装与光线，不写镜头外无法看到的事实。",

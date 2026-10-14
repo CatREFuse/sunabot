@@ -82,8 +82,14 @@ describe("segmented reply XML", () => {
     ["<dialog>老师&同学</dialog>", "未转义"],
     ["<dialog>老师&unknown;</dialog>", "未知实体"],
     ["<dialog>第一条</dialog><dialogc replay=\"msg_id\">第二条</dialogc>", "第一个气泡"]
-  ])("rejects malformed or ambiguous XML: %s", (xml, message) => {
-    expect(() => parseSegmentedReplyXml(xml)).toThrow(message);
+  ])("preserves readable malformed or ambiguous XML: %s", (xml) => {
+    expect(parseSegmentedReplyXml(xml).nodes.length).toBeGreaterThan(0);
+  });
+
+  it("preserves long plain text and more than 32 bubbles", () => {
+    const long = "完整内容".repeat(20_000);
+    expect(parseSegmentedReplyXml(long).nodes).toEqual([{ type: "dialog", text: long, reply: false }]);
+    expect(parseSegmentedReplyXml("<dialog>内容 & 原文</dialog>".repeat(40)).nodes).toHaveLength(40);
   });
 
   it("accepts more than three text bubbles when the content requires them", () => {

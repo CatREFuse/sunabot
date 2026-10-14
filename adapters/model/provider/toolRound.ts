@@ -7,12 +7,6 @@ import type {
 } from "./contracts.js";
 import { NO_REPLY_TOOL_NAME } from "../../../services/tools/noReplyTool.js";
 import { ASSISTANT_TEXT_TOOL_NAME } from "../../../services/tools/assistantTextTool.js";
-import { ADD_WORKMEMORY_TOOL_NAME } from "../../../services/tools/addWorkMemoryTool.js";
-import { ADD_USER_PROFILE_TOOL_NAME } from "../../../services/tools/addUserProfileTool.js";
-import {
-  assertMemoryToolDecisionsResolved,
-  memoryToolDecisionPending
-} from "./memoryToolDecisions.js";
 
 interface ProcessProviderToolRoundInput {
   calls: ResponseFunctionCallItem[];
@@ -39,10 +33,8 @@ export async function processProviderToolRound(
     state,
     executor
   } = input;
-  const memoryDecisionWasPending = memoryToolDecisionPending(options);
   const companion = executor.companionTurn(calls, siblingText, options, definitions, state);
   if (companion) {
-    assertMemoryToolDecisionsResolved(options);
     return { terminal: companion };
   }
 
@@ -62,28 +54,10 @@ export async function processProviderToolRound(
     if (inlineCalls.length) {
       await executor.execute(inlineCalls, options, definitions, state);
     }
-    assertMemoryToolDecisionsResolved(options);
     return { terminal: deferred ?? noReply! };
   }
 
-  if (siblingText.trim() && !memoryDecisionWasPending) await input.emitAssistantText();
+  if (siblingText.trim()) await input.emitAssistantText();
   const outputs = await executor.execute(calls, options, definitions, state);
-  if (
-    memoryDecisionWasPending
-    && !memoryToolDecisionPending(options)
-    && siblingText.trim()
-    && calls.length === 1
-    && (
-      calls[0]?.name === ADD_WORKMEMORY_TOOL_NAME
-      || calls[0]?.name === ADD_USER_PROFILE_TOOL_NAME
-    )
-  ) {
-    return {
-      terminal: {
-        kind: "completed",
-        text: siblingText
-      }
-    };
-  }
   return { outputs };
 }

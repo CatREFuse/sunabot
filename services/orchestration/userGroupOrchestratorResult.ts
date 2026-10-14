@@ -2,6 +2,7 @@ import {
   readUserGroupOrchestratorResult,
   type UserGroupOrchestratorResultV1
 } from "../../packages/contracts/session/runtimeMessages.js";
+import { modelContentText, parseModelJson } from "../../packages/contracts/model/modelContent.js";
 
 export interface UserGroupOrchestratorDecision {
   shouldReply: boolean;
@@ -14,19 +15,13 @@ export function parseUserGroupOrchestratorDecision(
   replyCandidateMessageIds: readonly string[]
 ): UserGroupOrchestratorDecision | null {
   const parsed = parseModelJson(text);
-  if (!isRecord(parsed) || !hasExactKeys(parsed, [
-    "should_reply",
-    "reason",
-    "reply_to_message_id"
-  ])) return null;
-  const shouldReply = parsed.should_reply;
+  if (!isRecord(parsed)) return null;
+  const shouldReply = parsed.should_reply === "true" ? true
+    : parsed.should_reply === "false" ? false : parsed.should_reply;
   if (typeof shouldReply !== "boolean") return null;
-  const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
-  if (!validReason(reason)) return null;
+  const reason = modelContentText(parsed.reason);
   if (!shouldReply) {
-    return parsed.reply_to_message_id === null
-      ? { shouldReply: false, reason, replyToMessageId: null }
-      : null;
+    return { shouldReply: false, reason, replyToMessageId: null };
   }
 
   const replyToMessageId = normalizeMessageId(parsed.reply_to_message_id);
@@ -62,38 +57,10 @@ export function serializeUserGroupOrchestratorResult(
     .replaceAll("\u2029", "\\u2029");
 }
 
-function parseModelJson(text: string): unknown {
-  return tryParseJson(text.trim());
-}
-
-function tryParseJson(text: string) {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
 function normalizeMessageId(value: unknown) {
-  if (typeof value !== "string") return "";
-  const normalized = value.trim();
-  return normalized === value
-    && normalized
-    && Array.from(normalized).length <= 256
-    && !/[\u0000-\u001f\u007f]/u.test(normalized)
-    ? normalized
-    : "";
-}
-
-function validReason(value: string) {
-  return Boolean(value) && Array.from(value).length <= 1_000 && !/[\u0000-\u001f\u007f]/u.test(value);
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value != null && !Array.isArray(value);
-}
-
-function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]) {
-  const keys = Object.keys(value);
-  return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
 }

@@ -10,7 +10,6 @@ import { withLogContext } from "./logger.js";
 import {
   promptRequestFields,
   readToolName,
-  responseFormatFields,
   toChatCompletionTool
 } from "./promptMapping.js";
 import {
@@ -53,11 +52,6 @@ import {
 } from "./turnToolState.js";
 import { processProviderToolRound } from "./toolRound.js";
 import { assertMappedProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
-import {
-  assertMemoryToolDecisionsResolved,
-  chatMemoryToolChoice,
-  responsesMemoryToolChoice
-} from "./memoryToolDecisions.js";
 
 export async function completeProviderTurn(
   context: ProviderAdapterContext,
@@ -112,11 +106,9 @@ async function completeOpenAIResponses(
       max_output_tokens: context.provider.maxOutputTokens,
       reasoning: context.provider.reasoningEffort ? { effort: context.provider.reasoningEffort } : undefined,
       ...requestFields,
-      ...responseFormatFields(request.response_format, requestFields.text),
       prompt_cache_key: cacheKey,
       input: input as never,
       tools: tools.length ? tools as never : undefined,
-      tool_choice: responsesMemoryToolChoice(options),
       parallel_tool_calls: tools.length ? requestFields.parallel_tool_calls ?? false : undefined
     };
     const metadata = withLogContext({
@@ -149,7 +141,6 @@ async function completeOpenAIResponses(
     const toolCalls = extractFunctionCalls(response);
     state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, toolCalls, maxToolCalls);
     if (!toolCalls.length) {
-      assertMemoryToolDecisionsResolved(options);
       const text = extractProviderText(response);
       return completeProviderText(text, state, options);
     }
@@ -222,12 +213,10 @@ async function completeCodexResponses(
         : undefined,
       include: ["reasoning.encrypted_content"],
       ...requestFields,
-      ...responseFormatFields(request.response_format, requestFields.text),
       prompt_cache_key: cacheKey,
       input,
       instructions: stableInputCache ? undefined : systemPrompt,
       tools: tools.length ? tools : undefined,
-      tool_choice: responsesMemoryToolChoice(options),
       parallel_tool_calls: tools.length ? requestFields.parallel_tool_calls ?? false : undefined
     };
     const metadata = withLogContext({
@@ -296,7 +285,6 @@ async function completeCodexResponses(
     const toolCalls = extractFunctionCalls(payload);
     state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, toolCalls, maxToolCalls);
     if (!toolCalls.length) {
-      assertMemoryToolDecisionsResolved(options);
       const outputText = extractResponsesTextFromSse(text) || extractResponsesText(payload);
       return completeProviderText(outputText, state, options);
     }
@@ -374,9 +362,7 @@ async function completeChatCompletions(
       max_completion_tokens: context.provider.maxOutputTokens,
       reasoning_effort: undefined,
       tools: tools.length ? tools : undefined,
-      tool_choice: chatMemoryToolChoice(options),
-      parallel_tool_calls: tools.length ? false : undefined,
-      response_format: request.response_format?.type === "text" ? undefined : request.response_format
+      parallel_tool_calls: tools.length ? false : undefined
     };
     const metadata = withLogContext({
       round,
@@ -416,7 +402,6 @@ async function completeChatCompletions(
     });
     state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, calls, maxToolCalls);
     if (!calls.length) {
-      assertMemoryToolDecisionsResolved(options);
       const text = choice.content?.trim();
       return completeProviderText(text, state, options);
     }

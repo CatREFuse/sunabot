@@ -34,8 +34,8 @@ describe("image alt text", () => {
 
     expect(runtime.getProviderForModel).toHaveBeenCalledWith("gpt-vision", "low", "vision");
     expect(complete).toHaveBeenCalledTimes(1);
-    expect(incoming.media[0]?.altText).toBe("一张红色方块");
-    expect(incoming.quoteReferences[0]?.media?.[0]?.altText).toBe("一张红色方块");
+    expect(incoming.media[0]?.altText).toBe("红色方块");
+    expect(incoming.quoteReferences[0]?.media?.[0]?.altText).toBe("红色方块");
   });
 
   it("does not block inbound preparation when the image reader fails", async () => {
@@ -50,8 +50,10 @@ describe("image alt text", () => {
     error.mockRestore();
   });
 
-  it("normalizes model output to one image sentence", () => {
-    expect(normalizeImageAltText("  “两个人正在看文件”  ")).toBe("一张两个人正在看文件");
+  it("preserves model text including long descriptions and code blocks", () => {
+    const content = `  “两个人正在看文件”\n\x60\x60\x60\n文字\n\x60\x60\x60\n${"细节".repeat(200)}`;
+    expect(normalizeImageAltText(content)).toBe(content);
+    expect(normalizeImageAltText("")).toBe("");
   });
 });
 

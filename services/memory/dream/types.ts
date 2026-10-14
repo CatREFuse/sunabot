@@ -79,9 +79,10 @@ export interface DreamModelOutputExpectations {
 }
 
 export interface DreamMinimalModelOutput {
-  workingMemoryCompression: string;
+  workingMemoryCompression: string | null;
   longTermMemoryAdditions: string[];
   dreamDescription: string;
+  rawOutput?: string;
 }
 
 export interface DreamLongTermArchiveCandidate {

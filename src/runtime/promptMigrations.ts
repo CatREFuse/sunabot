@@ -37,7 +37,8 @@ import {
 } from "../../services/agent/conversationHistoryPromptMigration.js";
 import {
   migrateConversationDirectorPrompt,
-  migrateDirectorScheduleSchemaPrompt
+  migrateDirectorScheduleSchemaPrompt,
+  migrateDirectorSoftOutputPrompt
 } from "../../services/agent/directorPromptMigration.js";
 import {
   migrateDreamCanonicalOutputContractPrompt,
@@ -180,7 +181,11 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
   const dependency = (file: string) => [requiredMigrationId(timeIds, file)];
 
   for (const file of [DIRECTOR_DAILY_PLAN_PROMPT_FILE, DIRECTOR_SCHEDULE_REVISION_PROMPT_FILE]) {
-    add("director-schema-v1", "system", file, () => migrateDirectorScheduleSchemaPrompt(config, file), dependency(file));
+    const schemaId = add("director-schema-v1", "system", file, () => migrateDirectorScheduleSchemaPrompt(config, file), dependency(file));
+    const promptId = file === DIRECTOR_DAILY_PLAN_PROMPT_FILE ? "director.daily-plan" : "director.schedule-revision";
+    add("director-soft-output-v1", "system", file, () => migrateDirectorSoftOutputPrompt(
+      config, file, ADMIN_RUNTIME_PROMPT_DEFAULTS[promptId] ?? ""
+    ), [schemaId]);
   }
   const dreamFlexId = add(
     "dream-flex-contract-v3",
@@ -244,12 +249,19 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     () => migrateDreamMinimalContractPrompt(config, DREAM_PROMPT_FILE),
     [dreamMinimalV9Id]
   );
-  add(
+  const dreamTimePreservationId = add(
     "dream-working-memory-time-preservation-v1",
     "system",
     DREAM_PROMPT_FILE,
     () => migrateDreamMinimalContractPrompt(config, DREAM_PROMPT_FILE),
     [dreamMinimalV9RepairId]
+  );
+  add(
+    "dream-permissive-content-v1",
+    "system",
+    DREAM_PROMPT_FILE,
+    () => migrateDreamCanonicalOutputContractPrompt(config, DREAM_PROMPT_FILE),
+    [dreamTimePreservationId]
   );
   add(
     "scheduled-agent-loop-v2",

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { TextDecoder } from "node:util";
+import { parseModelJson } from "../../packages/contracts/model/modelContent.js";
 import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import {
@@ -29,7 +30,6 @@ import { ConfigDoctorFileError, readConfigFileNoFollow } from "./configDoctorFil
 
 const PROPOSAL_TTL_MS = 10 * 60_000;
 const AI_COOLDOWN_MS = 10_000;
-const MAX_AI_RESPONSE_BYTES = 64 * 1024;
 const MAX_JSON_DEPTH = 64;
 const MAX_JSON_STRUCTURE_TOKENS = 4_096;
 export interface ConfigDoctorIssue {
@@ -164,15 +164,7 @@ export class ConfigDoctorService {
         error instanceof Error ? error.message : "智能诊断失败。"
       );
     }
-    if (Buffer.byteLength(responseText, "utf8") > MAX_AI_RESPONSE_BYTES) {
-      throw new AdminApiError(422, "CONFIG_DOCTOR_AI_OUTPUT_INVALID", "智能诊断响应过大。");
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(responseText);
-    } catch {
-      throw new AdminApiError(422, "CONFIG_DOCTOR_AI_OUTPUT_INVALID", "智能诊断没有返回合法 JSON。");
-    }
+    const parsed = parseModelJson(responseText);
     const modelOperations = parseAiOperations(parsed, aiAllowedPaths);
     const aiOperations = withDerivedMirrorOperations(source.document, modelOperations);
     const existingPaths = new Set(base.ruleOperations.map((operation) => operation.path));
@@ -219,7 +211,7 @@ export class ConfigDoctorService {
         available: true,
         provider: providerInfo,
         summary: typeof (parsed as { summary?: unknown }).summary === "string"
-          ? String((parsed as { summary: string }).summary).slice(0, 500)
+          ? String((parsed as { summary: string }).summary)
           : undefined
       }
     };

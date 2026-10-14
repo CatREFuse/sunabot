@@ -43,15 +43,15 @@ Agent 配置文件夹是跨终端传输角色配置的唯一推荐和支持模�
 
 当前工作记忆位于每个 Agent workspace 根目录的 `WORKING_MEMORY.md`，不要求 Git 跟踪。可见正文只由模型提供，宿主时间、会话来源和事项身份保存在隐藏 metadata；文件以 SHA-256 revision、64 KiB 上限、普通文件与符号链接拒绝、同目录 0600 临时文件和原子 rename 提交，工具、管理 API 与 Dream 共用该文件安全边界。长期记忆与用户画像继续使用 SQLite source revision。主对话中的 `add_workmemory` 与 `add_user_profile` 分别提交工作记忆文件和用户画像 SQLite 记录。Dream 同时捕获供模型读取的规范化长期记忆投影与供 add-only 提交的原始存储快照；提交必须从原始存储快照逐字段保留全部既有记录，不能把投影阶段补入的 schema、身份数组或事件指纹写回历史记录。提交顺序为工作记忆文件 CAS、长期记忆 SQLite 添加事务；SQLite 失败时按新 revision 回滚工作记忆。工作记忆 revision 漂移按软链接处理并保留当前文件，长期记忆 digest 漂移保持事务冲突。Dream 不读写 `AIR.md`、人格文件、长期记忆归档或召回统计。
 
-生产 Dream 的 Provider 数据边界包含当前 Agent 快照中已存在的姓名、称呼、QQ 和参与者身份：这些值在封闭、有界的投影字段与事实正文中保持原值并发送给配置的 Dream Provider，不建立 `人物-*`、`person:*` 或其他身份哈希映射，也不把真实身份绑定另存为恢复表。凭据、秘密、邮箱、签名参数和宿主绝对路径仍在 Provider 请求前脱敏；旧式宿主身份代号不能进入新的有效模型输出或后续记忆、Dream、人格和 `AIR.md` 提交。user-test workspace 只复制非数据配置和明确授权的 Provider 凭据，生产业务 SQLite、WAL/SHM、记忆、会话、AIR、任务、Director、人格运行状态、runtime/cache/backup/voice、workbench、extensions 与链接均不复制；需要内容样本时只能使用只读来源生成独立的不可逆脱敏快照。
+生产 Dream 的 Provider 数据边界包含当前 Agent 快照中已存在的姓名、称呼、QQ 和参与者身份：这些值在已选择的投影字段与事实正文中保持原值并发送给配置的 Dream Provider，正文不再按旧字符或总 payload 上限裁切，不建立 `人物-*`、`person:*` 或其他身份哈希映射，也不把真实身份绑定另存为恢复表。凭据、秘密、邮箱、签名参数和宿主绝对路径仍在 Provider 请求前脱敏；模型正文不因出现旧式宿主身份代号被硬拒绝；实际持久身份仍由宿主绑定，正文不能改绑 Agent、用户、来源或写入目标，Dream 不取得人格或 `AIR.md` 写入能力。user-test workspace 只复制非数据配置和明确授权的 Provider 凭据，生产业务 SQLite、WAL/SHM、记忆、会话、AIR、任务、Director、人格运行状态、runtime/cache/backup/voice、workbench、extensions 与链接均不复制；需要内容样本时只能使用只读来源生成独立的不可逆脱敏快照。
 
 记忆操作审计复用当前 Agent 的 `request_logs`，不新增表或 JSON/JSONL。`memory.operation` 记录来源、操作、执行者、结果、稳定原因码、宿主时间、可用的 conversation/record 标识、数量与 revision；正文、称呼值、模型原始返回和宿主绝对路径禁止进入该事件。读取沿用现有请求日志分页与搜索，写入必须由当前 Agent 配置选择业务库，不能跨 Agent 汇总落盘。
 
 `add_workmemory` 把 durable `incoming_reply` event ID 作为有界 `sourceDecisionKey` 写入 `WORKING_MEMORY.md` 的隐藏事项 metadata，不新增 SQLite 表或用户可见字段。追加在每次 revision CAS 前先查找相同决策键；崩溃恢复、重复 Provider 请求或 CAS 冲突重读命中时返回原事项和 revision，正文不再次追加。`add_user_profile` 使用相同决策键写入当前用户的聚合画像记录；重复执行命中该用户现有记录时返回去重结果，不新增第二条画像。旧 `memory_batches` 与 `memory_scheduler` 在 schema 初始化时显式删除，运行时没有对应 repository、队列或恢复逻辑。
 
-既有 `bot.memory.dreamRecentWindowHours`、`dreamRecentMemoryLimit` 与 `dreamOlderMemoryLimit` 只为旧配置读取兼容保留，不再进入管理台、Dream payload 或运行决策。新建 Dream 运行把完整有界工作记忆批次、长期记忆只读去重上下文和安全上下文写入既有 `dream_runs.input_json`；后续重试复用同一输入。
+既有 `bot.memory.dreamRecentWindowHours`、`dreamRecentMemoryLimit` 与 `dreamOlderMemoryLimit` 只为旧配置读取兼容保留，不再进入管理台、Dream payload 或运行决策。新建 Dream 运行把完整工作记忆文档、长期记忆只读去重上下文和安全上下文写入既有 `dream_runs.input_json`；后续重试复用同一输入。
 
-Dream 严格输出解析失败复用 `dream_runs` 现有 `attempt_count`、`error_code`、`error_text`、`next_retry_at` 与失败时间字段。无效输出在 `markGenerated` 之前失败，自动 claim 最多累计三次；第三次后 `next_retry_at` 为空。generated 阶段只接受能够重新通过当前三字段合同的 parsed JSON；旧六字段、宽松或残缺产物清空生成结果并在下一次 claim 重新调用模型。错误只保存稳定代码与固定安全说明，不保存无效模型原文、Provider payload、秘密或宿主路径。
+Dream 格式偏差不消耗失败重试，不以字段顺序、未知字段、代码围栏或正文长度拒绝模型结果。完整输出保存在现有 output_json，dream_text 只保存符合该历史字段容量的摘要。未返回的压缩不触发文件替换；已存在快照绑定的 revision 与真实事务、租约和并发冲突校验继续生效。
 
 `emojis.jsonl` 一行对应一个 key，并严格保存当前文件名、key 创建/更新时间以及版本数组；`source` 只允许 `upload` 或 `generated`。单 Agent 最多 64 行，每行最多 20 个版本，清单最多 2 MiB。统一 key 校验层在任何清单或图片写入前拒绝原始孤立代理项、replacement character、C0/C1 控制字符、方括号、斜杠和反斜杠，再执行 trim/NFC，并限制为 1—24 个 code point、最多 64 UTF-8 字节；清单中的未知字段、重复 key、重复版本、悬空当前版本或非法值使读取失败关闭。旧 SQLite 毒值在迁移读取时隐藏，不能进入 JSONL 或令列表和内容 API 持续 500。
 
@@ -177,7 +177,7 @@ Agent 根目录及 `extensions`、`skills`、`mcp` 控制目录必须是当前�
 
 ### 8.5 Dream schema v15
 
-业务 schema v15 的既有 Dream 表继续前向兼容。`dream_runs` 保存自然日唯一运行、系统时区、自动或手动窗口、输入摘要、三字段模型输出、租约、重试与添加结果；旧 `memory_recall_stats`、`memory_recall_receipts` 与 `dream_memory_archive` 表暂不删除，当前 Dream 管线不读取、初始化、更新、归档或清除其中数据，长期记忆遗忘功能后续单独设计。
+业务 schema v15 的既有 Dream 表继续前向兼容。`dream_runs` 保存自然日唯一运行、系统时区、自动或手动窗口、输入摘要、宽松提取的模型结果及原文、租约、重试与添加结果；旧 `memory_recall_stats`、`memory_recall_receipts` 与 `dream_memory_archive` 表暂不删除，当前 Dream 管线不读取、初始化、更新、归档或清除其中数据，长期记忆遗忘功能后续单独设计。
 
 同一 Agent、系统时区自然日的 Dream run 唯一，claim、generated、consolidated 与 completed 阶段继续受租约和条件更新保护；persona 阶段固定记为 `none`，不执行人格读写。管理员对 completed 行发起显式手动触发时，以 `status='completed'` 条件更新原子重开该行：写入当前计划时间、窗口、seed、digest 与输入，清空生成、整理、人格、错误和终态字段，把状态设为 `running` 并将 `attempt_count` 重置为 1。条件更新未命中或有效租约存在时不得覆盖当前运行。模型输出先持久化为 generated，重启恢复直接继续提交；暂时模型或传输故障最多尝试三次、间隔 15 分钟，永久输入、长期记忆快照、结果冲突以及 Provider 明确返回的不可重试 HTTP 4xx 只尝试一次。工作记忆 CAS 与长期记忆 add-only 替换快照共享现有恢复和回滚边界，事务必须证明最终长期记忆集合包含提交前全部记录且只增加本次去重后的新记录。
 
