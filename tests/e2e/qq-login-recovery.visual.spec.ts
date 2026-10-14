@@ -10,6 +10,11 @@ test("QQ 被踢下线后自动恢复四视口矩阵", async ({ page }, testInfo)
   test.setTimeout(90_000);
   const theme = await prepareVisualPage(page, testInfo);
   const state = await installMockApi(page);
+  let recoveryGate = Promise.resolve();
+  await page.route(/\/api\/agents\/plana\/accounts\/primary\/login(?:\?|$)/, async (route) => {
+    if (route.request().method() === "POST") await recoveryGate;
+    await route.fallback();
+  });
 
   for (const viewport of visualViewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -19,12 +24,15 @@ test("QQ 被踢下线后自动恢复四视口矩阵", async ({ page }, testInfo)
     state.offline = false;
     state.qqOnline = true;
     state.qqKickedOffline = true;
+    let releaseRecovery!: () => void;
+    recoveryGate = new Promise<void>((resolve) => { releaseRecovery = resolve; });
 
     await page.goto("/agents");
     const primaryAccountRow = page.locator("section").filter({ hasText: "主账号" }).last();
     await primaryAccountRow.getByRole("button", { name: "账号", exact: true }).click();
     await expect(page.getByText("正在恢复登录", { exact: true })).toBeVisible();
     await captureVisual(page, viewport.name, theme, "agents-qq-login-recovery");
+    releaseRecovery();
 
     await expect(page.getByAltText("QQ 登录二维码")).toBeVisible({ timeout: 10_000 });
     await captureVisual(page, viewport.name, theme, "agents-qq-login-recovered");

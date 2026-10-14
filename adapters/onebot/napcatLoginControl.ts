@@ -39,6 +39,7 @@ interface ManualLoginState {
 
 export interface NapcatLoginSnapshot {
   isLogin: boolean;
+  online?: boolean;
   manualLogin: boolean;
   qrcodeUrl?: string;
   loginError?: string;
@@ -108,18 +109,26 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
       };
     }
     const isLogin = source.isLogin === true;
+    const loginError = cleanText(source.loginError);
     if (manualLogin && !isLogin && !this.manualLoginObservedOffline) {
       await this.markManualLoginOffline();
       this.manualLoginObservedOffline = true;
     }
     if (isLogin) {
-      const loginInfo = await this.request<NapcatRawLoginInfo>("/QQLogin/GetQQLoginInfo")
-        .catch((): NapcatRawLoginInfo => ({}));
+      let loginInfo: NapcatRawLoginInfo;
+      try {
+        loginInfo = await this.request<NapcatRawLoginInfo>("/QQLogin/GetQQLoginInfo");
+      } catch (error) {
+        return { isLogin: true, manualLogin, loginError, error: error instanceof Error ? error.message : "QQ 在线状态读取失败。" };
+      }
       const userId = normalizeQq(loginInfo.uin);
-      const canFinalize = !manualLogin || this.manualLoginObservedOffline;
+      const canFinalize = loginInfo.online === true && !loginError && (!manualLogin || this.manualLoginObservedOffline);
       if (userId && canFinalize) await this.finalizeLogin(userId);
       return {
         isLogin: true,
+        online: loginInfo.online,
+        ...(loginError ? { loginError } : {}),
+        ...(typeof loginInfo.online !== "boolean" ? { error: "QQ 在线状态未返回。" } : {}),
         manualLogin: userId && canFinalize ? false : manualLogin,
         data: {
           user_id: userId,
@@ -190,7 +199,7 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
     if (this.closed || Date.now() - this.watchStartedAt > LOGIN_WATCH_LIMIT_MS) return;
     try {
       const snapshot = await this.status();
-      if (snapshot.isLogin && snapshot.data?.user_id) return;
+      if (snapshot.online === true && !snapshot.manualLogin && !snapshot.loginError && snapshot.data?.user_id) return;
     } catch {
       // NapCat restarts briefly after bot_exit; polling resumes until WebUI is ready.
     }

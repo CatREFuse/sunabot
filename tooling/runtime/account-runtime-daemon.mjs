@@ -11,6 +11,7 @@ import { validateMultiAgentWorkspacePath } from "../../packages/platform/multiAg
 import { ensureSafeAbsoluteDirectory } from "../shared/safe-absolute-path.mjs";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
 import { processSignatureMatches, workspaceIdentity } from "./launcher-core.mjs";
+import { readProcessSignature } from "./process-signature.mjs";
 
 const execFileAsync = promisify(execFile);
 const root = resolveProjectRoot(import.meta.url);
@@ -649,9 +650,9 @@ export async function observeAccountRuntimeProcess(pid, options = {}) {
   const numericPid = Number(pid);
   if (!Number.isInteger(numericPid) || numericPid <= 1 || !await processAlive(numericPid)) return null;
   try {
-    const [{ stdout: signature }, { stdout: command }, { stdout: processGroup }, environmentMatchesWorkspace] = await Promise.all([
-      execFileAsync("ps", ["-p", String(numericPid), "-o", "lstart="], { maxBuffer: PROCESS_OUTPUT_BYTES }),
-      execFileAsync("ps", ["-p", String(numericPid), "-o", "command="], { maxBuffer: PROCESS_OUTPUT_BYTES }),
+    const [signature, { stdout: command }, { stdout: processGroup }, environmentMatchesWorkspace] = await Promise.all([
+      readProcessSignature(numericPid),
+      execFileAsync("ps", ["-ww", "-p", String(numericPid), "-o", "command="], { maxBuffer: PROCESS_OUTPUT_BYTES }),
       execFileAsync("ps", ["-p", String(numericPid), "-o", "pgid="], { maxBuffer: PROCESS_OUTPUT_BYTES }),
       options.workspace
         ? processEnvironmentMatchesWorkspace(numericPid, path.resolve(options.workspace))

@@ -21,6 +21,23 @@ afterEach(() => {
 });
 
 describe("OneBot security boundaries", () => {
+  it("keeps received event and message times isolated per live account", async () => {
+    const gateway = createGateway();
+    const sockets = (gateway as unknown as { sockets: Map<object, Record<string, unknown>> }).sockets;
+    sockets.set({}, { accountId: "arona", connectedAt: "2026-10-14T00:00:00.000Z" });
+    sockets.set({}, { accountId: "plana", connectedAt: "2026-10-14T00:00:00.000Z" });
+    await gateway.ingestEvent({ post_type: "meta_event" }, { accountId: "arona" });
+    const aronaEventAt = gateway.getStatus().accounts.find((account) => account.accountId === "arona")?.lastEventAt;
+    expect(aronaEventAt).toBeTruthy();
+    expect(gateway.getStatus().accounts.find((account) => account.accountId === "plana")?.lastEventAt).toBeUndefined();
+    await gateway.ingestEvent({ post_type: "message", message_type: "private", user_id: 123456, message_id: 1, message: [{ type: "text", data: { text: "test" } }] }, { accountId: "plana" });
+    expect(gateway.getStatus().accounts.find((account) => account.accountId === "arona")?.lastEventAt).toBe(aronaEventAt);
+    expect(gateway.getStatus().accounts.find((account) => account.accountId === "arona")?.lastMessageEventAt).toBeUndefined();
+    expect(gateway.getStatus().accounts.find((account) => account.accountId === "plana")?.lastMessageEventAt).toBeTruthy();
+    sockets.clear();
+    await gateway.close();
+  });
+
   it("redacts temporary file URLs and tokens from recent event traces", () => {
     const gateway = createGateway();
     const event: OneBotEvent = {

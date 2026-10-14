@@ -21,6 +21,32 @@ afterEach(() => {
 });
 
 describe("useQqLogin", () => {
+  it("offers explicit recovery if a retained session becomes invalid during polling", async () => {
+    apiRequest.mockResolvedValueOnce({ connected: true, online: false, authenticated: true, available: true, phase: "reconnecting" })
+      .mockResolvedValueOnce({ connected: true, online: false, authenticated: false, available: true, phase: "restarting", action: "recover_login" })
+      .mockResolvedValueOnce(qrSnapshot("2026-10-14T00:00:00.000Z", "RECOVERED"));
+    const control = mountControl();
+    await control.openDialog();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(control.snapshot.value?.action).toBe("recover_login");
+    expect(apiRequest.mock.calls.every(([route]) => route.endsWith("/status"))).toBe(true);
+    await control.refreshQrCode();
+    expect(apiRequest).toHaveBeenLastCalledWith("/api/onebot/qq-login", expect.objectContaining({ method: "POST" }));
+    expect(control.snapshot.value?.phase).toBe("waiting_scan");
+  });
+
+  it("waits for an authenticated offline session to recover without requesting a new login", async () => {
+    apiRequest.mockResolvedValueOnce({ connected: true, online: false, authenticated: true, available: true, phase: "reconnecting" })
+      .mockResolvedValueOnce({ connected: true, online: true, authenticated: true, available: true, phase: "online" });
+    const control = mountControl();
+    await control.openDialog();
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    expect(control.snapshot.value?.phase).toBe("reconnecting");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(control.online.value).toBe(true);
+    expect(apiRequest.mock.calls.every(([route]) => route.endsWith("/status"))).toBe(true);
+  });
+
   it("refreshes once on open and pulls replacement QR images while polling", async () => {
     let statusReads = 0;
     apiRequest.mockImplementation((route: string, init?: RequestInit) => {

@@ -44,7 +44,8 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
       const current = await apiRequest<OneBotQrLogin>(activePaths.status);
       if (!isCurrent(currentSession)) return;
       await applySnapshot(current);
-      refreshAfterStatus = !current.online;
+      refreshAfterStatus = !current.online && !current.authenticated;
+      if (current.authenticated && !current.online) startPolling();
     } catch (cause) {
       if (!isCurrent(currentSession)) return;
       error.value = errorMessage(cause, "QQ 登录状态读取失败");

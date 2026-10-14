@@ -2,6 +2,8 @@
 
 [返回当前系统规范索引](./index.md)
 
+2026-10-14 NapCat 4.18.30、WSL 稳定进程身份、Windows 对时及 QQ 状态修复的部署、备份和验收证据见 `../audits/2026-10-14-napcat-wsl-reliability-repair.md`。对应用户用例为 `../user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md`、`../user-tests/cases/admin-console/qq-runtime-status-recovery.md` 和 `../user-tests/cases/runtime/wsl-process-identity-clock-change.md`。真实消息接收、账号定向断线重连与腾讯登录失效必须分别报告，不能用容器或 Core 健康状态替代。
+
 2026-10-12 Windows 主机的 WSL 文件、表情、工具与权限审计见 `../audits/2026-10-12-file-tool-permission-audit.md` 与 `../audits/2026-10-12-built-in-tool-validation.md`。真实 Bubblewrap 进程冒烟与隔离存储断言、mock 端口测试、真实外部 Provider 验收必须分别报告；MCP 未配置与 `run_skill_script` 默认关闭不能计作执行成功。表情 Bash 往返用例为 `../user-tests/cases/workbench-resources/emoji-bash-roundtrip.md`。
 
 会话图片恢复验收使用真实本地 HTTP 图片服务与生产默认 Undici 传输，覆盖 IPv4 与混合地址族固定 DNS；`AuthenticatedImage` 组件测试覆盖头像、远程图片和显式占位，`conversation-images.visual.spec.ts` 检查 light/dark 的移动端和桌面图片加载及无无效头像缩略请求。

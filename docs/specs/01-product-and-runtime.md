@@ -67,6 +67,8 @@ Linux/WSL Native 工具的 `prlimit` 在 Bubblewrap 完成 user/PID namespace �
 
 启动器读取 `ps` 进程身份时只解析成功命令的 stdout，WSL 终端尺寸等 stderr 警告不能进入启动时间签名；捕获输出必须等待 stdio close，不能在 exit 时丢失尾部数据。命令失败时保留 stderr 诊断，命令行使用宽输出以避免身份参数被截断。
 
+Linux/WSL 的 Core、账号调和器和 Renderer 使用内核 boot ID 与 `/proc/<pid>/stat` 的 start ticks 作为进程启动身份，墙钟调整不改变该身份；命令、workspace、进程组与 owner token 校验继续保留。非 Linux 平台继续读取 `ps lstart`。升级前保存的旧墙钟签名不放宽匹配，停止流程通过现有实时进程扫描、workspace 与命令复核清理本部署进程，再由新启动写入稳定签名。
+
 ## 5. WebFetch
 
 静态 WebFetch 在 Core 内使用 Node 抓取和 Defuddle 提取正文。正文不足时，Linux/WSL 调用由 launcher 监管的 Lightpanda 0.3.3 Renderer；该引擎不依赖 Chrome、Chromium、Blink、WebKit 或 Playwright。Renderer 只监听回环、使用每次启动生成的 bearer token、禁用遥测，并在独立临时 HOME/cache/run 中运行。
@@ -97,6 +99,6 @@ GitHub `v<version>` tag 发布必须经过完整 `verify` 与 light/dark visual 
 
 导入必须经过严格 schema、UTF-8、大小、文件映射和摘要校验。预览绑定上传包 SHA-256 与目标全部人格文件的聚合 revision；确认时任一摘要或 revision 变化返回冲突且零写入。有效导入在同一管理写事务中预校验、暂存、备份和替换全部人格文件，并只执行一次 runtime reload；提交或 reload 失败时全量恢复。来源 metadata 不修改目标 Agent ID、名称、manifest、账号或业务数据。
 
-### 本地 QQ 兼容更新（2026-10-01）
+### 本地 QQ 兼容更新（2026-10-14）
 
-NapCat 镜像锁定为 4.18.28，摘要为 `sha256:2cc70b45244ae3fabc657ffc3aaa4de8fb893518171e519659ab83d80e6d36b5`；amd64 镜像内 QQ 为 3.2.30-50969。旧 QQ 3.2.21-42086 在本机扫码时被服务器以错误码 45 拒绝。镜像清单包含 linux/amd64 和 linux/arm64，实际启动验证限于 WSL amd64；2026-10-01 已完成阿罗娜扫码、OneBot 在线、目标群上线问候外发及真实入站 ping/Pong 回复验证。arm64 与双 QQ 同时在线尚未验收。更新仍保留摘要锁定和启动零下载合同。
+NapCat 镜像锁定为 4.18.30，摘要为 `sha256:335f9310198504d8d07aba91cc91d89215269891919c26eb4e46052ff8bb176d`；amd64 镜像内 QQ 为 3.2.32-52194。OCI 清单包含 linux/amd64 和 linux/arm64，实际宿主验收为 WSL amd64。升级保留账号配置、QQ 登录目录及独立账号挂载，普通启动继续使用 `pull never`。4.18.30 上游提供静默离线持续 60 秒后的 Worker 重启与快速登录；腾讯拒绝快速登录时仍需扫码，不能把容器存活视为 QQ 可收信。具体部署与恢复验收见 `../user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md`。

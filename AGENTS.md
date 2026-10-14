@@ -22,6 +22,7 @@
 | `docs/audits/2026-07-24-memory-system-topology-and-logs-audit.md` | 工作记忆、长期记忆、用户画像、召回、Dream、调度器与操作日志的运行证据和高问题节点 | 排查记忆不更新、积压、模型门禁、Dream 失败或记忆操作历史前读取 |
 | `docs/audits/2026-10-12-file-tool-permission-audit.md` | Windows 主机 WSL 的文件权限、表情资源、真实 Bash 冒烟及审核失败证据 | 排查当前 Windows 环境文件、表情或 Bash 操作失败时读取 |
 | `docs/audits/2026-10-12-built-in-tool-validation.md` | 26 个内置工具的权限、执行证据、500 项本地测试与外部验收边界 | 全面检查工具可用性、MCP 或 Skill 脚本限制时读取 |
+| `docs/audits/2026-10-14-napcat-wsl-reliability-repair.md` | NapCat 4.18.30、WSL 进程身份、Windows 对时、登录缓存备份及真实收信验收边界 | 排查 QQ 掉线、状态冲突或执行本机升级回滚时读取 |
 | `docs/design/settings-information-architecture.md` | 管理台设置的信息层级、Provider 类型、字段归属与交互约束 | 调整设置页、Provider 配置或账号操作前读取 |
 | `docs/design/multi-agent-information-architecture.md` | 多 Agent、多 QQ、管理台导航、Agent 工作区与统计口径 | 新增 Agent、调整 Agent 切换、多 QQ 接入或按 Agent 隔离数据前读取 |
 | `docs/design/conversation-artifact-capabilities.md` | 会话文件、图片、单一 canonical Workbench 与 Codex 输入输出的统一产物句柄和能力上下文 | 调整附件获取、聊天媒体、Workbench 路由、Codex 产物或文件外发前读取 |
@@ -38,6 +39,9 @@
 | `docs/migrations/agent-workbenches.md` | 0.1.2 历史双 Workbench 迁移、验证与回滚 | 处理 0.1.0/0.1.1 历史实例时读取；当前运行合同以 0.3.0 单 Workbench 为准 |
 | `docs/migrations/upgrade-0.1.0-to-0.1.2.md` | 0.1.0 / 0.1.1 到 0.1.2 的双工作区迁移、恢复点、升级脚本、验收与回滚 | 现有 0.1.0 或 0.1.1 实例升级到 0.1.2 前必读 |
 | `docs/setup-napcat.md` | sunabot、NapCat、WebUI 和 OneBot 反向 WebSocket 的本机启动配置 | 部署、重启或排查 OneBot 连接时读取 |
+| `docs/user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md` | NapCat 摘要锁升级、离线恢复点、WSL 对时、真实收信与重连验收 | 升级 NapCat 或修复 Windows/WSL 对时与掉线时读取 |
+| `docs/user-tests/cases/runtime/wsl-process-identity-clock-change.md` | Linux 稳定进程身份、时钟跳变与旧部署安全停止 | 修改启动器、调和器或进程身份时读取 |
+| `docs/user-tests/cases/admin-console/qq-runtime-status-recovery.md` | QQ 实际在线、逐账号心跳与管理台慢查询恢复 | 修改连接状态、登录探测或状态轮询时读取 |
 | `docs/security/admin-access.md` | 管理员账号密码、会话、CSRF、限流、熔断与公网代理边界 | 修改鉴权、WebUI 外网访问或紧急处置时读取 |
 | `docs/deployment/distributed-workspace.md` | Git pull、新终端、workspace 分离、主实例切换、离线备份与 Agent 配置文件夹复制边界 | 多终端开发、更新、接管 workspace 或迁移单个 Agent 时读取 |
 | `docs/deployment/online-voice-synthesis.md` | 在线语音协议、Provider 配置、音色 ID、安全边界与真实 QQ 外发流程 | 配置、迁移或验收在线语音合成前读取 |

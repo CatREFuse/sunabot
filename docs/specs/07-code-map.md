@@ -2,6 +2,10 @@
 
 [返回当前系统规范索引](./index.md)
 
+进程启动身份由 `tooling/runtime/process-signature.mjs` 统一采集，供 launcher、账号调和器、Native Core 与 Renderer 的进程管理使用；Linux 使用 boot ID 与 start ticks。时钟变化回归位于 `tests/unit/runtime-process-identity.test.ts`，部署验收见 `../user-tests/cases/runtime/wsl-process-identity-clock-change.md`。
+
+`adapters/onebot/connectionStatus.ts` 汇总账号连接及最近事件时间，Gateway 与管理 API 按 Agent 过滤后共用；`useRuntimeStatus.ts` 管理串行状态轮询，QQ 登录状态与恢复界面用例见 `../user-tests/cases/admin-console/qq-runtime-status-recovery.md`。
+
 ## 10. 功能—代码文件索引
 
 | 功能                                                                                                         | 主要代码                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |

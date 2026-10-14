@@ -33,6 +33,40 @@ function fixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ServiceMonitor", () => {
+  it("detects one account's stale heartbeat while another account keeps receiving events", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { monitor, setStatus } = fixture();
+    const old = new Date(Date.now() - 180_000).toISOString();
+    const now = new Date().toISOString();
+    setStatus({ connected: true, lastEventAt: now, accounts: [
+      { accountId: "arona", connectedAt: old, lastEventAt: old },
+      { accountId: "plana", connectedAt: old, lastEventAt: now }
+    ] });
+    monitor.start();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(decodeURIComponent(String(fetchMock.mock.calls[0]?.[0]))).toContain("arona 已连接，但事件心跳超时");
+    expect(decodeURIComponent(String(fetchMock.mock.calls[0]?.[0]))).not.toContain("plana");
+    monitor.close();
+  });
+
+  it("reports an individual account disconnect and recovery while another stays connected", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { monitor, gateway, setStatus } = fixture();
+    setStatus({ connected: true, accounts: [{ accountId: "plana", connectedAt: new Date().toISOString() }] });
+    monitor.start();
+    gateway.emit("accountDisconnected", { accountId: "arona" });
+    await vi.advanceTimersByTimeAsync(75);
+    expect(decodeURIComponent(String(fetchMock.mock.calls[0]?.[0]))).toContain("arona 反向 WebSocket 已断开");
+    gateway.emit("accountConnected", { accountId: "arona" });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(decodeURIComponent(String(fetchMock.mock.calls[1]?.[0]))).toContain("arona 已恢复连接");
+    monitor.close();
+  });
+
   it("can suppress QQ-wide online announcements for a controlled restart", async () => {
     process.env.SUNABOT_SUPPRESS_QQ_ONLINE_ANNOUNCEMENT = "1";
     const { monitor, announceServiceOnline } = fixture();

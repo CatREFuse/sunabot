@@ -301,6 +301,34 @@ describe("account runtime daemon singleton", () => {
     expect(isAlive(unrelated.pid!)).toBe(true);
   }, 20_000);
 
+  it("stops a verified legacy owner with a drifted wall-clock signature before cleaning its stale record", async () => {
+    const workspace = await createWorkspace("sunabot-account-daemon-legacy-signature-");
+    const ownerPath = path.join(workspace, ACCOUNT_RUNTIME_OWNER_RELATIVE_PATH);
+    await fs.mkdir(path.dirname(ownerPath), { recursive: true, mode: 0o700 });
+    const ownerToken = token("legacy-signature");
+    const child = startDaemon({ workspace, token: ownerToken });
+    const owner = await waitForOwner(workspace, productionEntry);
+    process.kill(-child.pid!, "SIGSTOP");
+    await fs.writeFile(ownerPath, `${JSON.stringify({
+      ...owner.record, signature: "Mon Oct 12 17:55:59 2026"
+    })}\n`);
+    await expect(inspectAccountRuntimeOwner({
+      workspace, workspaceId: workspaceIdentity(workspace), entry: productionEntry
+    })).resolves.toMatchObject({ status: "invalid" });
+
+    const foreign = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true, stdio: "ignore"
+    });
+    childProcesses.push(foreign);
+    await waitFor(() => Boolean(foreign.pid && isAlive(foreign.pid)));
+    const docker = await createDockerFixture(workspaceIdentity(workspace));
+    const down = await runLauncherDown(workspace, docker);
+    expect(down, down.stderr).toMatchObject({ code: 0 });
+    expect(isAlive(child.pid!)).toBe(false);
+    expect(isAlive(foreign.pid!)).toBe(true);
+    await expect(fs.access(ownerPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }, 15_000);
+
   it("ignores pre-publish evidence, quarantines corrupt owners, and never signals a PID-reused process", async () => {
     const workspace = await createWorkspace("sunabot-account-daemon-invalid-");
     const ownerPath = path.join(workspace, ACCOUNT_RUNTIME_OWNER_RELATIVE_PATH);
@@ -490,6 +518,7 @@ async function createDaemonFixture(options: {
   const copies = [
     "tooling/runtime/account-runtime-daemon.mjs",
     "tooling/runtime/launcher-core.mjs",
+    "tooling/runtime/process-signature.mjs",
     "tooling/shared/paths.mjs",
     "tooling/shared/safe-absolute-path.mjs",
     "packages/platform/multiAgentMigrationGate.mjs"

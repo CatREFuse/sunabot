@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { processSignatureMatches } from "../../tooling/runtime/launcher-core.mjs";
 import {
   classifyNativeCoreGroup,
   isNativeCoreCommand,
@@ -35,7 +36,7 @@ describe("native Core workspace process cleanup", () => {
     expect(isNativeCoreCommand("node /srv/other/dist/apps/api/main.js", root)).toBe(false);
   });
 
-  it("stops only the matching workspace process group", async () => {
+  it("stops only the matching workspace process group even when its persisted wall-clock signature has drifted", async () => {
     const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-native-core-process-"));
     const workspace = path.join(fixture, "workspace");
     const entry = path.join(fixture, "dist/apps/api/main.js");
@@ -60,9 +61,16 @@ describe("native Core workspace process cleanup", () => {
       await waitForProcess(owned);
       await waitForProcess(foreign);
 
+      const legacyRecord = {
+        pid: owned.pid, entry, signature: "Mon Oct 12 17:55:59 2026"
+      };
+      await fs.mkdir(path.join(workspace, "runtime"), { recursive: true });
+      await fs.writeFile(path.join(workspace, "runtime/launcher-state.json"), JSON.stringify({ core: legacyRecord }));
       const groups = await waitForGroups(fixture, workspace, 1);
       expect(groups).toHaveLength(1);
       expect(groups[0]).toMatchObject({ processGroup: owned.pid, safeToSignal: true });
+      expect(processSignatureMatches(legacyRecord, groups[0].members[0])).toBe(false);
+      if (process.platform === "linux") expect(groups[0].members[0].signature).toMatch(/^linux:/u);
       await stopNativeCoreProcessGroups({ root: fixture, workspace, groups, timeoutMs: 2_000 });
 
       await expectProcessStopped(owned.pid);

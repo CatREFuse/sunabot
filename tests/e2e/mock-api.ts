@@ -1316,6 +1316,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       });
     }
 
+    if (pathname === "/api/overview/summary") return json(route, { conversations: 2, images: 1 });
     if (pathname === "/api/conversations") {
       return json(route, {
         conversations: [

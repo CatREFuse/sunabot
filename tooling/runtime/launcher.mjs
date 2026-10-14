@@ -29,6 +29,7 @@ import {
 } from "./native-webfetch-renderer-process.mjs";
 import { buildRuntimeProbe, collectWorkspaceProbeFacts } from "./probe.mjs";
 import { accountRuntimeState, planAccountReconciliation } from "./account-reconciler.mjs";
+import { readProcessSignature } from "./process-signature.mjs";
 import {
   inspectAccountRuntimeOwner,
   listAccountRuntimeProcesses,
@@ -422,6 +423,11 @@ async function down(context) {
       timeoutMs: Math.min(context.contract.shutdownTimeoutSeconds * 1_000, 5_000)
     });
   }
+  runtime.reconciler.owner = await inspectAccountRuntimeOwner({
+    workspace: context.workspace,
+    workspaceId: context.identity,
+    entry: accountRuntimeDaemonEntry(context)
+  });
   if (runtime.reconciler.owner.status !== "missing" && runtime.reconciler.owner.status !== "invalid") {
     await removeStaleAccountRuntimeOwner({
       workspace: context.workspace,
@@ -1897,7 +1903,7 @@ async function observeProcess(pid) {
   if (!Number.isInteger(Number(pid)) || !await processAlive(Number(pid))) return null;
   try {
     const [signature, commandLine] = await Promise.all([
-      command("ps", ["-p", String(pid), "-o", "lstart="], { capture: "stdout" }),
+      readProcessSignature(pid),
       command("ps", ["-ww", "-p", String(pid), "-o", "command="], { capture: "stdout" })
     ]);
     return { signature: signature.trim(), command: commandLine.trim() };
