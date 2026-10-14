@@ -570,6 +570,7 @@ describe("Native Core runtime launcher", () => {
     { args: ["up"], invocation: "up" },
     { args: ["start"], invocation: "start" },
     { args: ["restart"], invocation: "restart" },
+    { args: ["restart-core"], invocation: "restart-core" },
     { args: ["bootstrap"], invocation: "bootstrap" },
     { args: ["--dev"], invocation: "--dev" }
   ])("installs dependencies before starting with $invocation in a clean checkout", async ({ args, invocation }) => {
@@ -837,6 +838,7 @@ describe("Native Core runtime launcher", () => {
     expect(() => parseLauncherArguments(["up"], { SUNABOT_CORE_MODE: "native" }))
       .toThrow("SUNABOT_CORE_MODE 已移除");
     expect(parseLauncherArguments(["start"], {}).command).toBe("start");
+    expect(parseLauncherArguments(["restart-core"], {}).command).toBe("restart-core");
     expect(parseLauncherArguments(["doctor"], { SUNABOT_DEV: "1" }).dev).toBe(true);
     expect(parseLauncherArguments(["--help"], {}).command).toBe("help");
     expect(parseLauncherArguments(["reconcile-account", "--account=qq_arona"], {})).toMatchObject({

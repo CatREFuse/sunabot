@@ -17,6 +17,7 @@ usage() {
   start       与 up 相同：清理当前 workspace 后完整启动
   down        停止当前 workspace 的运行组件
   restart     重启当前 workspace
+  restart-core  重启 Core，保留 NapCat 与 QQ 登录
   status      读取运行状态
   doctor      读取环境与运行诊断
   logs        跟随当前运行日志
@@ -55,7 +56,7 @@ ensure_macos_homebrew_path() {
 }
 
 allows_install() {
-  [ "$COMMAND" = "up" ] || [ "$COMMAND" = "start" ] || [ "$COMMAND" = "restart" ] || [ "$COMMAND" = "bootstrap" ]
+  [ "$COMMAND" = "up" ] || [ "$COMMAND" = "start" ] || [ "$COMMAND" = "restart" ] || [ "$COMMAND" = "restart-core" ] || [ "$COMMAND" = "bootstrap" ]
 }
 
 missing_dependencies() {

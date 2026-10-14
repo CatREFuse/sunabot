@@ -47,11 +47,13 @@ Core、Bash、MCP、Skill Script 与 WebFetch 只以 Native 形态运行。NapCa
 
 `up`、`start` 与 `restart` 进入同一清空后启动流程，只停止能通过命令签名、workspace 身份、进程启动身份或 Docker labels 证明属于当前部署的对象。随后启动 Native Core、Linux/WSL Lightpanda Renderer、注册表中全部已启用 NapCat 和 account runtime daemon。未知身份对象、端口占用、迁移未完成或运行依赖缺失时失败关闭。
 
+`restart-core` 使用既有 launcher state 的 OneBot 地址及当前 workspace 的 Docker 网络，仅重启 Native Core、账号调和器和 WebFetch Renderer，保留 NapCat 容器、QQ 进程、账号配置、二维码和登录缓存。依赖、构建及 Renderer 能力检查在停止旧 Core 前完成；新 Native 服务启动失败时只清理 Native 进程，保留连接配置供修复后重试，不自动执行完整重启。缺少既有连接状态或对应网络时明确报错。OneBot 会在 Core 重启期间断开并由 NapCat 重连，此期间的事件补发取决于 NapCat，不能保证零消息丢失。QQ 已失效的凭据仍需单独处理。
+
 `status`、`doctor`、管理 API 和平台入口共用只读运行探针，分别报告 API、OneBot、每个 QQ、Provider、Codex、Native Bash、MCP、Skill Script、Bubblewrap、WebFetch Renderer、workspace 和迁移状态。QQ 临时离线只降低 readiness，不把 Core 判为死亡。macOS 的动态 WebFetch capability 固定为 unavailable；静态 WebFetch 保持可用。
 
 首次 `up` 使用带 HMAC 的持久 journal，并在当前终端进入 Landing：设置管理员名称、管理员密码和密码确认。密码输入不回显，长度至少 12 个字符；凭据通过同目录临时文件写入，完成文件 `fsync`、原子替换和父目录 `fsync` 后才返回。Core 构建阶段只复验持久边界与凭据可读性，不能提交完成状态；launcher 必须等待 AdminAuth 成功读取凭据、管理 API 与 OneBot 已监听、account runtime daemon 和全部应运行 NapCat 通过完整探针并连续稳定后，再次读取并校验凭据，把完成提交作为启动流程最后一个可失败步骤。此前任一步失败都保留 journal，可继续启动或通过 `rollback-first-run` 受控回滚，未知文件保留。workspace 完整父目录链在 marker、配置、凭据、SQLite、注册表或运行目录写入前逐级拒绝用户符号链接。
 
-发行包的 `help|status|doctor|logs|down|up|start|restart` 不安装应用依赖。`bootstrap` 只验证随包运行时、生产依赖、构建产物和组件完整性。发行包内供进程管理器使用的 Core 入口同样只接受包内 Node 与绝对 Bubblewrap，拒绝宿主可执行文件覆盖与 `/usr/bin/bwrap` 回退，并在执行 Core 前验证完整 release manifest。源码形态可以按锁文件显式准备依赖。
+发行包的 `help|status|doctor|logs|down|up|start|restart|restart-core` 不安装应用依赖。`bootstrap` 只验证随包运行时、生产依赖、构建产物和组件完整性。发行包内供进程管理器使用的 Core 入口同样只接受包内 Node 与绝对 Bubblewrap，拒绝宿主可执行文件覆盖与 `/usr/bin/bwrap` 回退，并在执行 Core 前验证完整 release manifest。源码形态可以按锁文件显式准备依赖。
 
 ## 4. Native 工具边界
 

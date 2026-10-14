@@ -41,6 +41,7 @@
 | `docs/setup-napcat.md` | sunabot、NapCat、WebUI 和 OneBot 反向 WebSocket 的本机启动配置 | 部署、重启或排查 OneBot 连接时读取 |
 | `docs/user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md` | NapCat 摘要锁升级、离线恢复点、WSL 对时、真实收信与重连验收 | 升级 NapCat 或修复 Windows/WSL 对时与掉线时读取 |
 | `docs/user-tests/cases/runtime/wsl-process-identity-clock-change.md` | Linux 稳定进程身份、时钟跳变与旧部署安全停止 | 修改启动器、调和器或进程身份时读取 |
+| `docs/user-tests/cases/runtime/core-only-restart.md` | 单独重启 Core、Native 失败清理与 NapCat 登录会话保留 | 修改 restart-core 或 Native 生命周期时读取 |
 | `docs/user-tests/cases/admin-console/qq-runtime-status-recovery.md` | QQ 实际在线、逐账号心跳与管理台慢查询恢复 | 修改连接状态、登录探测或状态轮询时读取 |
 | `docs/security/admin-access.md` | 管理员账号密码、会话、CSRF、限流、熔断与公网代理边界 | 修改鉴权、WebUI 外网访问或紧急处置时读取 |
 | `docs/deployment/distributed-workspace.md` | Git pull、新终端、workspace 分离、主实例切换、离线备份与 Agent 配置文件夹复制边界 | 多终端开发、更新、接管 workspace 或迁移单个 Agent 时读取 |
@@ -153,7 +154,7 @@
 ## 跨运行环境
 
 - Sunabot Core、Bash、MCP、Skill Script 与 WebFetch 在当前版本只以 Native 形态运行；NapCat 是唯一 Docker 运行组件，每个 QQ 使用独立容器。禁止重新引入 Core、Bash、MCP、Skill Script 或 WebFetch Docker 运行路径。
-- 根目录 `./sunabot.sh` 是唯一人工运行入口，支持 `up|start|down|restart|status|logs|doctor|soul`；`up`、`start` 与 `restart` 使用同一套清空后启动流程。`SUNABOT_CORE_MODE` 与 `--core` 已退役，传入时必须明确拒绝。
+- 根目录 `./sunabot.sh` 是唯一人工运行入口，支持 `up|start|down|restart|restart-core|status|logs|doctor|soul`；`up`、`start` 与 `restart` 使用同一套清空后启动流程。`restart-core` 只替换 Native Core、账号调和器与 WebFetch Renderer，保留 NapCat 容器、网络和登录缓存。`SUNABOT_CORE_MODE` 与 `--core` 已退役，传入时必须明确拒绝。
 - 启动与迁移必须由拥有仓库和 workspace 的非 root 用户执行；不得通过 UID 0 绕过 Core、NapCat、Bubblewrap 或 workspace 权限边界。
 - 管理台只监听宿主回环 `127.0.0.1:8787`。OneBot v11 使用专用 `8788` 端口和强制 access token；Native Core 通过启动器配置的容器可达宿主网关接收 NapCat 连接，不得把 OneBot 端口直接发布到局域网或公网。
 - 跨组件媒体默认使用 OneBot `base64://` 内联数据。业务代码、Core 与 NapCat 不能依赖共享绝对路径、相同挂载点或容器内文件路径；大文件能力必须新增明确、鉴权、可限流的传输契约。

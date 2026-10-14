@@ -7,6 +7,7 @@ export const LAUNCHER_COMMANDS = new Set([
   "start",
   "down",
   "restart",
+  "restart-core",
   "status",
   "logs",
   "doctor",

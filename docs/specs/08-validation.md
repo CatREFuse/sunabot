@@ -2,6 +2,8 @@
 
 [返回当前系统规范索引](./index.md)
 
+Core 单独重启用例见 `../user-tests/cases/runtime/core-only-restart.md`。`runtime-core-restart.test.ts` 在 Linux 隔离 workspace 使用真实 Native 进程、账号 daemon、进程身份和 HTTP 健康检查，Docker、Renderer 引擎及 Provider/workspace 探针使用夹具；验证连续重启替换 Native 进程、无关进程保留、预检失败不停止旧 Core、启动失败仅清理 Native 并可重试，以及缺失状态/网络时不修改部署。夹具通过不能替代真实 NapCat 登录、OneBot 重连和新消息接收验收。
+
 2026-10-14 NapCat 4.18.30、WSL 稳定进程身份、Windows 对时及 QQ 状态修复的部署、备份和验收证据见 `../audits/2026-10-14-napcat-wsl-reliability-repair.md`。对应用户用例为 `../user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md`、`../user-tests/cases/admin-console/qq-runtime-status-recovery.md` 和 `../user-tests/cases/runtime/wsl-process-identity-clock-change.md`。生产 Gateway 半开连接 11.285 秒回收、同账号重接，以及真实 NapCat 连接重建后保留登录态并继续收信均已核验；腾讯登录失效仍需单独处理，长期稳定与 arm64 实机尚未验收。真实消息接收、账号定向断线重连与腾讯登录失效必须分别报告，不能用容器或 Core 健康状态替代。
 
 2026-10-12 Windows 主机的 WSL 文件、表情、工具与权限审计见 `../audits/2026-10-12-file-tool-permission-audit.md` 与 `../audits/2026-10-12-built-in-tool-validation.md`。真实 Bubblewrap 进程冒烟与隔离存储断言、mock 端口测试、真实外部 Provider 验收必须分别报告；MCP 未配置与 `run_skill_script` 默认关闭不能计作执行成功。表情 Bash 往返用例为 `../user-tests/cases/workbench-resources/emoji-bash-roundtrip.md`。
@@ -339,6 +341,8 @@ Native 文件闭环专项必须覆盖 macOS Host Bash 与 Linux/WSL Bubblewrap�
 Codex 输出目录专项还必须证明：默认单聊与群聊提示词以及既有管理员模板的一次性迁移都包含 `<codex_output_contract version="1">`，管理员自定义说明保持不变；CLI worker 的 OS cwd 与 `-C` 精确等于当前 attempt 输出目录，analysis/research 无其他 writable root，local 项目目录只通过独立 `--add-dir` 授权；本机 app-server 的 thread cwd 保持项目归属，turn cwd 精确等于当前 attempt 输出目录，稳定和实验协议的 writable roots 均同时覆盖输出与项目；CLI 和本机 app-server 都只接受相对 cwd 的产物声明并进入同一 finalizer。SSH 控制必须保持固定命令和远端项目 cwd，非空远端产物声明明确失败，不能伪装成本地会话产物。
 
 ## 12. 已知验收限制
+
+2026-10-14 Core 单独重启验收：隔离 WSL 完整 `npm run verify` 退出 0，unit 3,165 项通过、1 项既有跳过，harness 40、integration 43、Skill sandbox 13、backup 45、migration 153、runtime smoke 84、E2E 53 项通过，runtime contract、architecture、check、benchmark 和 build 通过。新增 6 项生命周期回归及独立 fixture 质量评审通过。17:23 在生产 WSL 执行 `./sunabot.sh restart-core`，Core、账号调和进程与 Renderer 的 PID 均更换，liveness=live、readiness=ready；两个 NapCat 容器 ID、StartedAt、RestartCount、Docker network ID 及账号/运行配置摘要均保持不变。阿罗娜在部署前与重启后均为 waiting_scan，尚未完成在线登录保持和真实 QQ 收信验收；不能据容器存活宣称 QQ 在线。macOS 与真实 arm64 宿主仍未验收。原启动器备份保存在生产 workspace 的 `backups/core-restart-20261014/launcher-before.tar`。
 
 2026-10-12 Windows/WSL工具验收已在隔离合成workspace取得真实Provider、原始OneBot ingress、Session/tool/outbox、独立质量及seal/gate证据：文件23/23、普通用户修复17/17、Bash表情23/23、记忆22/22、画像22/22、静默18/18、设置与cron20/20、知识库19/19、资源导入27/27、原件导出26/26、静态WebFetch28/28、导演27/27、合成自拍26/26＋28/28、新版Codex22/22。Codex依赖固定为0.162.1，worker保留gpt-5.6-sol；原0.139.0失败保留。导出真实空末轮已触发收尾修复并避免重复投递。全部QQ出站为mock，真实QQ发送、Windows原生、真实arm64及动态WebFetch端到端仍需分别验收；Tavily、voice profile与MCP配置缺失不能算成功。明确正方形全白构图生图复测20/20与独立质量通过，原透明留边失败保留。最终冻结版本完整verify退出0，unit3,094、harness39、迁移153、runtime smoke84、E2E53通过，1项既有unit跳过；包括受管CLI凭据刷新及明确失败/空incomplete响应回归。完整证据和图像质量边界见[工具验收](../audits/2026-10-12-built-in-tool-validation.md)。
 

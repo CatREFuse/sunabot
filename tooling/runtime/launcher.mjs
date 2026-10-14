@@ -129,6 +129,9 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
     case "restart":
       await restartRuntime(context);
       break;
+    case "restart-core":
+      await restartCoreRuntime(context);
+      break;
     case "down":
       await down(context);
       break;
@@ -209,7 +212,42 @@ async function restartRuntime(context) {
   }
 }
 
-async function upNative(context, before, secrets) {
+export async function restartCoreRuntime(context) {
+  if (databasePathOverrideConfigured(context.environment, context.runtimeEnvironment)) {
+    throw new Error("SUNABOT_DATABASE_PATH 已停止支持；主库固定为 workspace/business/data/sunabot.sqlite。");
+  }
+  assertNonRootRuntimeUser();
+  await assertDockerAvailable(context);
+  const before = await inspectRuntime(context);
+  assertExpectedProject(context, before);
+  if (!before.state?.reverseWebSocket || !before.state?.onebotListenHost) {
+    throw runtimeError("CORE_RESTART_STATE_MISSING", "缺少既有 OneBot 连接配置；请使用 ./sunabot.sh up 完整启动。");
+  }
+  if (await runtimeNetworkWorkspaceId(context) !== context.identity) {
+    throw runtimeError("DOCKER_NETWORK_IDENTITY_INVALID", "当前 workspace 的运行网络缺失或身份不匹配，无法单独重启 Core。");
+  }
+  await validatePackagedRelease(context);
+  await assertLinuxBubblewrapNamespace(context);
+  await assertNativeWebfetchRendererCapability(context);
+  await ensureNativeDependencies(context);
+  if (!context.dev) await ensureNativeBuild(context);
+  await down(context, { preserveNapcat: true });
+  try {
+    await upNative(context, await inspectRuntime(context), undefined, { preserveNapcat: true });
+    await startAccountRuntimeDaemon(context);
+    const startup = await waitForStableStartup(context);
+    printRuntimeReport(context, startup.report);
+  } catch (error) {
+    try {
+      await down(context, { preserveNapcat: true });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], `Core 重启失败：${message(error)}；清理失败：${message(cleanupError)}`);
+    }
+    throw error;
+  }
+}
+
+async function upNative(context, before, secrets, { preserveNapcat = false } = {}) {
   let native = before.native;
   if (native.alive && !native.running) {
     throw new Error(`记录中的 Native PID ${native.pid} 已被其他进程复用；拒绝覆盖或终止该进程。`);
@@ -223,7 +261,9 @@ async function upNative(context, before, secrets) {
   await ensureNativeDependencies(context);
   if (!context.dev) await ensureNativeBuild(context);
   const renderer = await prepareNativeWebfetchRenderer(context);
-  const onebotListenHost = await resolveNativeOnebotListenHost(context);
+  const onebotListenHost = preserveNapcat
+    ? before.state.onebotListenHost
+    : await resolveNativeOnebotListenHost(context);
   if (!await canBindPort(onebotListenHost, context.contract.onebotPort)) {
     throw new Error(`${onebotListenHost}:${context.contract.onebotPort} 已被非当前 launcher 管理的进程占用。`);
   }
@@ -241,9 +281,11 @@ async function upNative(context, before, secrets) {
       await waitForHttp("http://127.0.0.1:5173/", context.contract.coreReadyTimeoutSeconds * 1_000);
     }
 
-    const reverseWebSocket = await probeNativeOneBot(context);
-    const accounts = await loadNapcatAccounts(context);
-    await startNapcatAccounts(context, accounts, reverseWebSocket, secrets);
+    const reverseWebSocket = preserveNapcat
+      ? before.state.reverseWebSocket
+      : await probeNativeOneBot(context);
+    const accounts = preserveNapcat ? before.state.accounts : await loadNapcatAccounts(context);
+    if (!preserveNapcat) await startNapcatAccounts(context, accounts, reverseWebSocket, secrets);
     await writeState(context, {
       ...withoutUpdatedAt(await readState(context.statePath)),
       mode: "native",
@@ -254,6 +296,7 @@ async function upNative(context, before, secrets) {
       core: native.record
     });
   } catch (error) {
+    if (preserveNapcat) throw error;
     await stopNapcatContainers(context).catch(() => {});
     await stopNativeCore(context, native.record, { removeState: true }).catch(() => {});
     const rendererGroups = await listNativeWebfetchRendererProcessGroups({
@@ -407,7 +450,7 @@ export function nativeWebfetchRendererDeployment(platform = process.platform) {
   return platform === "linux" ? "native" : "unavailable";
 }
 
-async function down(context) {
+async function down(context, { preserveNapcat = false } = {}) {
   await assertDockerAvailable(context);
   const runtime = await inspectRuntime(context);
   if (runtime.reconciler.owner.status === "running"
@@ -453,12 +496,14 @@ async function down(context) {
   if (runtime.state?.webfetchRenderer?.runRoot) {
     await fs.rm(runtime.state.webfetchRenderer.runRoot, { recursive: true, force: true });
   }
-  await stopNapcatContainers(context);
-  await removeRuntimeNetwork(context);
+  if (!preserveNapcat) {
+    await stopNapcatContainers(context);
+    await removeRuntimeNetwork(context);
+  }
   if (runtime.state || runtime.nativeProcessGroups.length > 0) {
     await waitForRuntimePortsClosed(context, runtime.state);
   }
-  await cleanupRemovedNapcatAccounts(context);
+  if (!preserveNapcat) await cleanupRemovedNapcatAccounts(context);
   if (runtime.reconciler.owner.status === "invalid") {
     const quarantinePath = await quarantineInvalidAccountRuntimeOwner({
       workspace: context.workspace,
@@ -467,8 +512,14 @@ async function down(context) {
     });
     if (quarantinePath) console.log(`无效账号调和 owner 已隔离保留：${quarantinePath}`);
   }
-  await fs.rm(context.statePath, { force: true });
-  console.log("Sunabot Core 与 NapCat 已停止。");
+  if (preserveNapcat) {
+    const { core, reconciler, webfetchRenderer, ...retained } = withoutUpdatedAt(runtime.state);
+    await writeState(context, retained);
+    console.log("Sunabot Core 已停止，NapCat 保持运行。");
+  } else {
+    await fs.rm(context.statePath, { force: true });
+    console.log("Sunabot Core 与 NapCat 已停止。");
+  }
 }
 
 async function assertRuntimeEmpty(context) {
@@ -770,7 +821,7 @@ async function loadRegisteredAccounts(context) {
 }
 
 function printHelp() {
-  console.log("用法：./sunabot.sh <up|start|down|restart|status|doctor|logs|bootstrap|help> [--dev]");
+  console.log("用法：./sunabot.sh <up|start|down|restart|restart-core|status|doctor|logs|bootstrap|help> [--dev]");
 }
 
 async function logs(context) {
