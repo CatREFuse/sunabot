@@ -2,7 +2,7 @@
 
 [返回当前系统规范索引](./index.md)
 
-2026-10-14 工作记忆容量宽门禁回归：已复现旧实现跨越 64 KiB 时追加失败及已有超限文件读取失败。修复后容量检查记录 `WORKING_MEMORY_TOO_LARGE` 错误和 `blocking=false`，完整读写继续执行，工具成功结果携带容量告警；原记忆、来源 ID、幂等重放、revision 冲突及取消回滚保持。受影响单测 34 项通过，原始管理员私聊 OneBot ingress 的受控 Provider 夹具 2/2 与独立质量评审通过；不将受控输出计作真实模型自主选择。隔离 WSL 完整 `npm run verify` 退出 0：unit 3,168 项通过、1 项既有跳过，harness 41、integration 43、Skill sandbox 13、backup 45、migration 153、runtime smoke 84、E2E 53 项通过，runtime contract、architecture、check、benchmark、build 通过。部署包限定三个后端模块及其构建文件，未修改生产记忆；生产生效等待用户确认单独重启 Core。
+2026-10-14 工作记忆容量宽门禁回归：已复现旧实现跨越 64 KiB 时追加失败及已有超限文件读取失败。修复后容量检查记录 `WORKING_MEMORY_TOO_LARGE` 错误和 `blocking=false`，完整读写继续执行，工具成功结果携带容量告警；原记忆、来源 ID、幂等重放、revision 冲突及取消回滚保持。受影响单测 34 项通过，原始管理员私聊 OneBot ingress 的受控 Provider 夹具 2/2 与独立质量评审通过；不将受控输出计作真实模型自主选择。隔离 WSL 完整 `npm run verify` 退出 0：unit 3,168 项通过、1 项既有跳过，harness 41、integration 43、Skill sandbox 13、backup 45、migration 153、runtime smoke 84、E2E 53 项通过，runtime contract、architecture、check、benchmark、build 通过。部署包限定三个后端模块及其构建文件，未修改生产记忆；同日 23:34（Asia/Shanghai）经用户确认完成生产部署和 Core 单独重启，Core 为 live/ready，6 个源码/构建文件摘要全部匹配，两个 NapCat 容器身份及启动时间不变，原有 65,304 字节工作记忆及账号配置摘要保持。已部署构建在全新临时 workspace 完成 71,508 字节工作记忆冒烟：旧内容和新增事项完整保留、工具 ok=true、非阻断错误及 SQLite 审计均存在；未写入生产记忆。阿罗娜在本次重启前已经 waiting_scan，重启后的真实 QQ 收信仍需登录验证。生产代码回滚包位于 workspace/backups/workmemory-soft-limit-20261014/code-before.tar。
 
 Core 单独重启用例见 `../user-tests/cases/runtime/core-only-restart.md`。`runtime-core-restart.test.ts` 在 Linux 隔离 workspace 使用真实 Native 进程、账号 daemon、进程身份和 HTTP 健康检查，Docker、Renderer 引擎及 Provider/workspace 探针使用夹具；验证连续重启替换 Native 进程、无关进程保留、预检失败不停止旧 Core、启动失败仅清理 Native 并可重试，以及缺失状态/网络时不修改部署。夹具通过不能替代真实 NapCat 登录、OneBot 重连和新消息接收验收。
 
