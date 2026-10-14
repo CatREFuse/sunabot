@@ -38,7 +38,7 @@ import {
 } from "./onebotEventIngress.js";
 import type { OneBotEvent } from "./protocol.js";
 import { normalizeMentionUserIds } from "./outboundMentions.js";
-import { summarizeOneBotConnections } from "./connectionStatus.js";
+import { summarizeOneBotConnections, startOneBotHeartbeat } from "./connectionStatus.js";
 import {
   loadOneBotConversationDirectory,
   resolveOneBotAttachment,
@@ -103,6 +103,7 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     if (this.mounted) return;
     this.mounted = true;
     this.server.on("upgrade", this.handleUpgrade);
+    startOneBotHeartbeat(this.wss);
 
     this.wss.on("connection", (ws, _request, connection?: MessagingConnectionContextV1) => {
       const wasDisconnected = this.sockets.size === 0;

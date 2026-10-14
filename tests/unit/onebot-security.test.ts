@@ -18,6 +18,7 @@ afterEach(() => {
   if (originalAccessToken === undefined) delete process.env.ONEBOT_ACCESS_TOKEN;
   else process.env.ONEBOT_ACCESS_TOKEN = originalAccessToken;
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("OneBot security boundaries", () => {
@@ -138,6 +139,57 @@ describe("OneBot security boundaries", () => {
     await new Promise<void>((resolve) => first.once("close", resolve));
     await gateway.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("reclaims a half-open account without disconnecting a healthy account", async () => {
+    process.env.ONEBOT_ACCESS_TOKEN = "unit-onebot-token";
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const config = defaultConfig();
+    const server = http.createServer();
+    const gateway = new OneBotGateway(server, config, {
+      handleInboundMessage: vi.fn(async () => undefined)
+    });
+    gateway.mount();
+    gateway.mount();
+    const clients: WebSocket[] = [];
+    try {
+      expect(vi.getTimerCount()).toBe(1);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Test server has no TCP address.");
+      const url = `ws://127.0.0.1:${address.port}${config.onebot.reverseWsPath}?access_token=unit-onebot-token`;
+      const stale = new WebSocket(`${url}&account_id=arona`, { autoPong: false });
+      const healthy = new WebSocket(`${url}&account_id=plana`);
+      clients.push(stale, healthy);
+      await Promise.all(clients.map((client) => new Promise<void>((resolve, reject) => {
+        client.once("open", resolve);
+        client.once("error", reject);
+      })));
+      const serverSockets = (gateway as unknown as { sockets: Map<WebSocket, { accountId: string }> }).sockets;
+      const healthySocket = [...serverSockets].find(([, info]) => info.accountId === "plana")?.[0];
+      if (!healthySocket) throw new Error("Healthy account socket not found.");
+      const pong = new Promise<void>((resolve) => healthySocket.once("pong", resolve));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await pong;
+      expect(gateway.getStatus().connections).toBe(2);
+      const disconnected = new Promise<{ accountId: string }>((resolve) => gateway.once("accountDisconnected", resolve));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await disconnected).toMatchObject({ accountId: "arona" });
+      expect(gateway.getStatus().accounts.map((account) => account.accountId)).toEqual(["plana"]);
+      const reconnected = new WebSocket(`${url}&account_id=arona`);
+      clients.push(reconnected);
+      await new Promise<void>((resolve, reject) => {
+        reconnected.once("open", resolve);
+        reconnected.once("error", reject);
+      });
+      expect(gateway.getStatus().connections).toBe(2);
+      expect(healthy.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      for (const client of clients) client.terminate();
+      await gateway.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("keeps two registered QQ connections and targeted actions isolated", async () => {

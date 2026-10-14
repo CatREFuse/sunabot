@@ -2,7 +2,7 @@
 
 [返回当前系统规范索引](./index.md)
 
-2026-10-14 NapCat 4.18.30、WSL 稳定进程身份、Windows 对时及 QQ 状态修复的部署、备份和验收证据见 `../audits/2026-10-14-napcat-wsl-reliability-repair.md`。对应用户用例为 `../user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md`、`../user-tests/cases/admin-console/qq-runtime-status-recovery.md` 和 `../user-tests/cases/runtime/wsl-process-identity-clock-change.md`。真实消息接收、账号定向断线重连与腾讯登录失效必须分别报告，不能用容器或 Core 健康状态替代。
+2026-10-14 NapCat 4.18.30、WSL 稳定进程身份、Windows 对时及 QQ 状态修复的部署、备份和验收证据见 `../audits/2026-10-14-napcat-wsl-reliability-repair.md`。对应用户用例为 `../user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md`、`../user-tests/cases/admin-console/qq-runtime-status-recovery.md` 和 `../user-tests/cases/runtime/wsl-process-identity-clock-change.md`。生产 Gateway 半开连接 11.285 秒回收、同账号重接，以及真实 NapCat 连接重建后保留登录态并继续收信均已核验；腾讯登录失效仍需单独处理，长期稳定与 arm64 实机尚未验收。真实消息接收、账号定向断线重连与腾讯登录失效必须分别报告，不能用容器或 Core 健康状态替代。
 
 2026-10-12 Windows 主机的 WSL 文件、表情、工具与权限审计见 `../audits/2026-10-12-file-tool-permission-audit.md` 与 `../audits/2026-10-12-built-in-tool-validation.md`。真实 Bubblewrap 进程冒烟与隔离存储断言、mock 端口测试、真实外部 Provider 验收必须分别报告；MCP 未配置与 `run_skill_script` 默认关闭不能计作执行成功。表情 Bash 往返用例为 `../user-tests/cases/workbench-resources/emoji-bash-roundtrip.md`。
 
