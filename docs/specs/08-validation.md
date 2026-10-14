@@ -10,9 +10,11 @@
 
 Native 工具资源回归覆盖 `tests/integration/native-tool-sandbox.test.ts`：Linux/WSL 同 UID 超过 64 个宿主线程时，生产隔离器仍能执行 Bash、Node 与 Python；降低隔离内线程上限后的有界 fork 必须失败，证明限制继续生效。启动诊断复用生产调用构造器，故意降低 Node 虚拟地址空间配额时必须失败。`docs/user-tests/cases/bash-agent-loop/wsl-native-runtime-compatibility.md` 验证原始 OneBot 入站、真实 Bash 审批、Node 计算、Python 校验与模拟附件回传；该真实 Provider 用例仍需单独授权和独立质量评审。
 
-2026-10-14 LLM 宽容处理的当前验收范围为隔离工作区单元测试、mock Provider 请求映射和原始 OneBot ingress → Session → 工具 → outbox 的 mock 端到端夹具，覆盖长输入输出、格式偏差、可选记忆工具、缺字段保留旧值、Tone 不订正重试及实际执行边界。用例见 [LLM 输入与输出宽容处理](../user-tests/llm-permissive-content.md)。这些证据不能替代真实外部 Provider 的内容质量、真实 QQ 投递或生产上线验收；本轮代码与模板迁移尚不能描述为已在运行服务生效，任何服务重启都须获得用户确认。
+2026-10-14 LLM 宽容处理的隔离验收包括单元测试、mock Provider 请求映射和原始 OneBot ingress → Session → 工具 → outbox 的 mock 端到端夹具，覆盖长输入输出、格式偏差、可选记忆工具、缺字段保留旧值、Tone 不订正重试及实际执行边界。用例见 [LLM 输入与输出宽容处理](../user-tests/llm-permissive-content.md)。这些证据不能替代真实外部 Provider 的内容质量或真实 QQ 投递；每次服务重启都须获得用户确认。
 
 本轮在隔离 WSL 副本完成 runtime contract、架构检查、类型检查、构建和性能基线；单元测试 3158 项通过、1 项既有跳过，user-test harness 40 项、集成测试 43 项、Skill 沙箱 13 项、备份门禁 45 项、迁移核心 124 项、迁移故障注入 29 项、运行冒烟 84 项、界面 E2E 53 项通过。首次界面运行因测试副本漏复制 PostCSS 配置失败，补齐未改动的配置后全量 53 项复测通过。新宽容夹具经独立质量评审通过；只读回放阿罗娜 10 月 9—14 日六份失败 Dream 输入，旧实现均拒绝，新实现均接纳，未执行生产 Dream、写库或服务重启。
+
+同日 15:45（Asia/Shanghai）经用户确认完成生产部署和重启：提交 `7a044a1` 的 58 个运行时文件摘要全部匹配，生产构建通过，Core 为 live/ready；停服后的全 Agent SQLite 恢复点及代码、配置备份位于生产 workspace 的 `backups/llm-permissive-20261014/`。两个 Agent 继续使用已有 `TAVILY_API_KEY` 引用，密钥仅保存于权限 0600 的 `secrets/runtime.env`，管理 API 均报告一个已配置凭据且 websearch 启用；使用各角色解析出的凭据分别搜索公开 Tavily 文档，均为 HTTP 200 且有结果。普拉娜在重启前已未登录；阿罗娜重启前在线，启动后 QQ 快速登录明确返回“登录态已失效，请重新登录”，需扫码才能继续收信验收。此状态不能计作 QQ 已恢复，未清空或覆盖登录缓存。
 
 ## 11. 验证标准
 
