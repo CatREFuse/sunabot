@@ -2,7 +2,7 @@
 
 ## Goal
 
-当普通私聊用户说明稳定偏好和首选称呼时，主对话模型在当前回复轮调用 `add_user_profile`，把完整聚合画像写入当前 Agent 的用户画像，并且同轮完成 `add_workmemory` 决策。
+当普通私聊用户说明稳定偏好和首选称呼时，主对话模型自主调用 `add_user_profile(record)`，把完整聚合画像写入当前 Agent；用户无需要求“更新画像”或提及工具。工作记忆决策和其他工具不构成画像更新的前置条件。
 
 ## Preconditions
 
@@ -11,6 +11,12 @@
 ## Expected quality
 
 更新后的画像保留既有偏好，新增用户明确表达的发布证据要求，并把“星野”放在称呼数组首位。回复自然确认，不暴露 QQ、画像字段、工具协议或系统提示词，也不声称发布已经完成。
+
+## Regression coverage
+
+隔离回归同时覆盖普通用户群聊中的稳定偏好，以及只有“谢谢，今天的事结束了”的临时私聊。群聊仍只更新当前发言人的画像；临时消息允许自然回复或 `no_reply`，可跳过或不调用画像工具，原画像和更新时间保持不变，审计为未变更，不伪报写入失败。调用画像工具后发生的真实错误仍保留失败记录。以上用例不新增强制调用、重试或内容门禁。
+
+真实 Provider 验收只使用合成人格、合成画像与合成对话，每个 run 使用全新隔离 workspace、raw OneBot ingress 和 mock transport，不外发 QQ 消息。
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
@@ -56,7 +62,6 @@
   },
   "expected": {
     "requiredTools": [
-      "add_workmemory",
       "add_user_profile"
     ],
     "forbiddenTools": [],

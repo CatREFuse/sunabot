@@ -24,7 +24,7 @@ describe("add_user_profile tool", () => {
     if (root) await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("requires one complete aggregate-profile decision for the current speaker", () => {
+  it("offers optional profile updates without a tool-order prerequisite", () => {
     expect(addUserProfileTool).toMatchObject({
       strict: false,
       parameters: {
@@ -35,6 +35,9 @@ describe("add_user_profile tool", () => {
     expect(addUserProfileTool.description).toContain("current speaker");
     expect(addUserProfileTool.description).toContain("complete updated profile");
     expect(addUserProfileTool.description).toContain("complete ordered list");
+    expect(addUserProfileTool.description).toContain("first mention");
+    expect(addUserProfileTool.description).toContain("no required tool order");
+    expect(addUserProfileTool.description).not.toContain("exactly one");
   });
 
   it("trims and deduplicates a record decision before calling the host port", async () => {
@@ -101,6 +104,33 @@ describe("add_user_profile tool", () => {
         response: expect.objectContaining({ outcome: "recorded" })
       })
     ]));
+  });
+
+  it("records an omitted decision as unchanged while preserving unresolved tool failures", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-profile-audit-"));
+    const config = createAdminTestConfig(path.join(root, "agent-a"));
+    await fs.mkdir(config.persona.agentWorkspace, { recursive: true });
+    const runtime = new RuntimeUserProfile({ config });
+    runtime.recordToolDecision(incoming(), []);
+    runtime.recordToolDecision(incoming(), ["add_user_profile"]);
+    const logs = applicationDataStore(config).readRequestLogs({ query: "user_profile.tool_decision", limit: 10 });
+    expect(logs.map((log) => log.response)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ outcome: "unchanged", reasonCode: "model_not_invoked", changedCount: 0 }),
+      expect.objectContaining({ outcome: "rejected", reasonCode: "decision_unresolved", changedCount: 0 })
+    ]));
+  });
+
+  it("updates only names and leaves the saved profile unchanged on skip", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-profile-names-"));
+    const config = createAdminTestConfig(path.join(root, "agent-a"));
+    await fs.mkdir(config.persona.agentWorkspace, { recursive: true });
+    const runtime = new RuntimeUserProfile({ config });
+    await runAddUserProfile({ action: "record", profile: "偏好简洁回复。", addressNames: ["小星"] }, runtime.toolPort(incoming()));
+    await runAddUserProfile({ action: "record", addressNames: ["星野", "小星"] }, runtime.toolPort(incoming()));
+    const saved = await readUserProfileForUser(config, "171419991");
+    expect(saved).toMatchObject({ text: "偏好简洁回复。", addressNames: ["星野", "小星"] });
+    await runAddUserProfile({ action: "skip" }, runtime.toolPort(incoming()));
+    expect(await readUserProfileForUser(config, "171419991")).toEqual(saved);
   });
 });
 

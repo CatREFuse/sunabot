@@ -123,11 +123,11 @@ export class RuntimeUserProfile {
       source: "user_profile",
       operation: "tool_decision",
       actor: "model_tool",
-      outcome: invoked ? "rejected" : "failed",
+      outcome: invoked ? "rejected" : "unchanged",
       conversationId: conversationRecordId(incoming),
       conversationScope: incoming.scope,
       changedCount: 0,
-      reasonCode: invoked ? "decision_unresolved" : "decision_missing"
+      reasonCode: invoked ? "decision_unresolved" : "model_not_invoked"
     });
   }
 }

@@ -33,10 +33,10 @@ export const addUserProfileTool = {
   type: "function",
   name: ADD_USER_PROFILE_TOOL_NAME,
   description: [
-    "Make exactly one user-profile decision for the current ordinary reply after the working-memory decision and before using other tools or returning visible text.",
-    "Use action=record when the current speaker has provided stable information that should remain useful across conversations, including identity, abilities, resources, preferences, habits, boundaries, long-term goals, or preferred forms of address. Use action=skip when this turn adds no supported stable profile information.",
-    "When recording, profile must be the complete updated profile for the current speaker, preserving every still-valid fact already present in the supplied user profile while adding, correcting, or removing only what the conversation supports.",
-    "addressNames must be the complete ordered list of still-valid forms of address. Put the preferred form first and preserve the relative order of other still-valid names.",
+    "Update the current speaker's profile when the conversation adds or corrects information useful in future conversations: identity, abilities, resources, preferences, habits, boundaries, long-term goals, or preferred forms of address.",
+    "A clear statement such as 'call me Hoshino from now on', 'I prefer concise replies', or 'I use Windows' can support action=record on its first mention; the user does not need to ask you to remember it or name this tool. Compare with the supplied current-speaker profile and preserve still-valid facts while adding supported changes.",
+    "When updating profile, provide the complete updated profile for the current speaker. When updating addressNames, provide the complete ordered list of still-valid forms of address, with the preferred form first. Omitted or null fields preserve their existing values; a name-only update does not require rewriting profile text.",
+    "When this turn adds no supported profile change, use action=skip or omit the tool. This tool is independent of add_workmemory and read_air, with no required tool order. Working memory and AIR do not update the user profile.",
     "Do not store one-time events, temporary arrangements, current tasks, conversation summaries, guesses, sensitive inferences, or facts about another person.",
     "The host binds the current speaker's user ID, display name, Agent, and conversation source. Do not include identifiers or labeled schema fields in profile text."
   ].join(" "),
@@ -51,14 +51,14 @@ export const addUserProfileTool = {
       },
       profile: {
         type: ["string", "null"],
-        description: "The complete updated aggregate profile when action=record, or null when action=skip."
+        description: "The complete updated aggregate profile. Omit or use null to preserve the existing profile."
       },
       addressNames: {
         type: ["array", "null"],
         items: {
           type: "string"
         },
-        description: "The complete ordered forms of address when action=record, or null when action=skip."
+        description: "The complete ordered forms of address. Omit or use null to preserve existing names."
       }
     },
     required: ["action"]

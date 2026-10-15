@@ -20,6 +20,8 @@
 
 工作记忆正文使用自然叙述，避免列表、五要素表格、字段标签、分类标题、来源说明或压缩说明。用户画像由宿主绑定 `userId`、当前消息显示名、Agent 和会话来源，以 `addressNames` 保存去重后的有序称呼数组；第一个称呼优先。旧 `addressName`、`address_name` 与 `salutation` 在读取时继续归一化为 `addressNames`，新记录只持久化数组。模型不能提交或改绑用户 ID、显示名、Agent、会话来源、记录时间与时区。
 
+画像工具说明与既有 `runtime.tool_rules` 变量提示模型识别当前发言人明确表达的稳定偏好、习惯、身份、设备、长期目标和称呼变化；一次明确表达即可作为依据，无需用户请求“记住”，也无需重复提及。画像更新保留仍有效的旧事实；只有称呼变化时允许仅更新 `addressNames`。工作记忆和 AIR 不代替画像持久化，没有新增或修正时允许 `skip` 或不调用。未调用画像工具的审计为 `unchanged / model_not_invoked`，已调用但未完成仍保留 `rejected / decision_unresolved`，实际执行异常继续记录失败；不增加后台补写、强制调用或内容门禁。
+
 两个工具由模型自主选择，不构成正文或其他工具的前置条件，Provider-facing 参数允许额外描述字段。宿主仍区分 `record` 与 `skip`，只消费可识别的内容字段，未知 action 返回实际参数错误；缺失画像或称呼字段保留对应旧值。单工具的一次决定状态与并发占用继续防止同轮重复写入，失败可以纠正。生产 Session 使用 durable incoming event ID 作为 `sourceDecisionKey`：工作记忆在文件原子替换后恢复时返回原事项，用户画像在 SQLite 重放时返回原记录，不能重复新增。`memory.compress-out` 只保留为长期记忆维护兼容提示词，不触发主对话工作记忆或用户画像写入。
 
 `WORKING_MEMORY.md` 的普通记忆可见正文只保存模型返回的自然语言原文，不由宿主插入标题、事项 ID、记录时间、会话来源、来源类型或其他字段。Dream 记忆是唯一可见标记例外：只有 `memoryKind=dream` 的条目在 Dream 原文前显示 `【梦境｜做梦时间：YYYY-MM-DD HH:mm】`，`sourceKind=dream` 和 `dreamReviewedAt` 都不能单独触发该标记；时间取本次 Dream 实际生成整理时间，旧记录缺少该时间时回落到梦境事件时间或宿主记录时间。该标记只用于工作记忆文档展示，解析后的 Dream 原文不包含标记。宿主记录时间、IANA 时区、完整会话来源 ID、scope、可用的会话标题和来源类型保存在同一文件的隐藏 metadata 与 SQLite 操作日志中；记录时间由宿主以系统 IANA 时区生成并包含当时 UTC offset。正文表达的事件时间可以保留为 `occurredAt`/`occurredEndAt`，不能替代记录时间。模型返回和 `add_workmemory` 参数都不能指定持久化记录时间、时区、Agent 或会话来源。直接编辑 Markdown 正文会保留原事项的宿主元数据，损坏的机器 metadata 使整份文档拒绝读取。

@@ -334,6 +334,8 @@ API 与管理台专项必须覆盖系统提示词“记忆”分组列出并可�
 
 记忆页可用性回归还必须断言短 revision 具有完整标题属性，390px 下五个页签完整可见且页头操作不拥挤，窄屏命令栏稳定为两层，长期记忆与用户画像摘要分别限制为三行和两行，窄屏列表不重复显示完整内部 ID，并且打开详情前首条记录不显示选中态；桌面详情正文不会因列宽过窄逐词换行。用户画像编辑器必须明确第一个称呼优先且保存顺序不变，Provider-facing system message 必须包含多称呼时优先使用 `addressNames[0]` 的规则。详情容器还必须在各目标视口断言 `scrollWidth <= clientWidth`，并使用起止时间、长正文与长记录 ID 覆盖换行边界。上述检查必须使用真实构建后的计算样式与截图，不能只断言模板类名存在。
 
+画像工具回归须覆盖普通私聊和普通群聊的一次明确稳定偏好/称呼表达，验证真实 `record` 结果、旧事实保留、称呼顺序、当前发言人绑定与其他用户记录不变；调用成功但 action 为 `skip` 不算更新通过。临时结束语允许自然回复或 `no_reply`，画像及更新时间保持不变，未调用审计为 `unchanged / model_not_invoked`。保留只改称呼、缺失字段、超旧内容限额和失败审计的本地测试。真实 Provider 验收仅在授权后使用全合成数据、全新隔离 workspace、raw OneBot ingress 和 mock transport，不以本地写库测试代替模型自主选择证据。
+
 Dream 交付至少执行三字段合同、add-only 整理、SQLite、运行时管线、记忆 API 与管理台组件单测，运行 `dream-minimal-memory-cycle` user test、`npm run runtime:contract`、`npm run architecture`、`npm run check`、`npm run build`，并完成记忆页 light/dark 视觉检查。受控 fixture 只能证明调度和事务合同；真实长期运行仍需在目标宿主时区跨过一次 04:00，并复核工作记忆压缩、长期记忆新增、Dream 历史、请求日志与下次计划时间。
 
 macOS host Native 冒烟必须证明 `pwd` 返回真实 Agent Workbench 绝对路径；Linux/WSL Bubblewrap 的 `pwd` 返回 `/workbench`，审批票据跨 Agent、会话或平台隔离上下文消费必须失败。
