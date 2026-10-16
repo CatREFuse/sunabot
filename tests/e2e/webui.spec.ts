@@ -861,13 +861,13 @@ test("版本页面展示当前版本与更新日志", async ({ page }) => {
   expect((await initialRequest).method()).toBe("GET");
 
   await expect(page.getByRole("heading", { name: "版本更新", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "v0.3.0", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "v0.3.1", exact: true })).toBeVisible();
   await expect(page.getByText("当前发行", { exact: true })).toBeVisible();
-  await expect(page.getByText("2026年8月12日", { exact: true })).toBeVisible();
+  await expect(page.getByText("2026年10月17日", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "更新日志", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "原生运行", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "网页与灵魂", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "安装与启动", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "QQ 与管理台", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "记忆与工具", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运行与安装", exact: true })).toBeVisible();
 
   const refreshRequest = page.waitForRequest((request) => request.url().endsWith("/api/releases"));
   await page.getByRole("button", { name: "刷新", exact: true }).click();
