@@ -2402,9 +2402,11 @@ describe("user test harness", () => {
     }).verdict).toBe("blocked");
   });
 
-  it("binds the v0.3.0 release gate to the complete canonical case set, revision, run, and reviewer", async () => {
+  it("binds the current release gate to the complete canonical case set, revision, run, and reviewer", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-release-"));
     const manifestPath = path.join(root, "manifest.json");
+    const { version } = JSON.parse(await fs.readFile(path.join(process.cwd(), "package.json"), "utf8"));
+    const suiteId = `release-${version}`;
     const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: process.cwd(),
       encoding: "utf8"
@@ -2439,11 +2441,11 @@ describe("user test harness", () => {
       }
       manifestCases.push({ ...requiredCase, reports });
     }
-    const manifest = { schemaVersion: 1, suiteId: "release-0.3.0", sourceRevision, cases: manifestCases };
+    const manifest = { schemaVersion: 1, suiteId, sourceRevision, cases: manifestCases };
     await fs.writeFile(manifestPath, JSON.stringify(manifest));
     try {
       await expect(gateUserTestReleaseManifest(manifestPath)).resolves.toMatchObject({
-        suiteId: "release-0.3.0",
+        suiteId,
         sourceRevision,
         cases: [
           { caseId: "workbench-resources.single-addressing", runs: 1, reviewers: 1 },

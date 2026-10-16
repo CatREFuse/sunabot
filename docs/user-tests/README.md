@@ -258,7 +258,7 @@ An authorized live Provider review can list the required executable harness case
 }
 ```
 
-The optional v0.3.0 live-review contract is exact:
+The optional v0.3.0 and v0.3.1 live-review contracts use the same exact Native baseline coverage. Set `suiteId` to `release-<current package version>`:
 
 | Capability | Canonical case ID | Canonical case document | Minimum independent runs |
 | --- | --- | --- | ---: |

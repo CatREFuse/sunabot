@@ -11,24 +11,26 @@ import { readUserTestCaseDocument } from "./caseDocument.js";
 import { validateSealedUserTestReport } from "./review.js";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+const NATIVE_RELEASE_CASE_COVERAGE = Object.freeze([
+  Object.freeze({
+    caseId: "workbench-resources.single-addressing",
+    caseDocument: "docs/user-tests/single-workbench-resource-addressing.md",
+    minimumIndependentRuns: 1
+  }),
+  Object.freeze({
+    caseId: "bash-agent-loop.admin-private-native-download",
+    caseDocument: "docs/user-tests/cases/bash-agent-loop/admin-private-native-download.md",
+    minimumIndependentRuns: 2
+  }),
+  Object.freeze({
+    caseId: "webfetch.admin-private-lightpanda-dynamic",
+    caseDocument: "docs/user-tests/webfetch-lightpanda-dynamic.md",
+    minimumIndependentRuns: 2
+  })
+]);
 const RELEASE_CASE_COVERAGE = Object.freeze({
-  "0.3.0": Object.freeze([
-    Object.freeze({
-      caseId: "workbench-resources.single-addressing",
-      caseDocument: "docs/user-tests/single-workbench-resource-addressing.md",
-      minimumIndependentRuns: 1
-    }),
-    Object.freeze({
-      caseId: "bash-agent-loop.admin-private-native-download",
-      caseDocument: "docs/user-tests/cases/bash-agent-loop/admin-private-native-download.md",
-      minimumIndependentRuns: 2
-    }),
-    Object.freeze({
-      caseId: "webfetch.admin-private-lightpanda-dynamic",
-      caseDocument: "docs/user-tests/webfetch-lightpanda-dynamic.md",
-      minimumIndependentRuns: 2
-    })
-  ])
+  "0.3.0": NATIVE_RELEASE_CASE_COVERAGE,
+  "0.3.1": NATIVE_RELEASE_CASE_COVERAGE
 });
 
 export async function gateUserTestReleaseManifest(
