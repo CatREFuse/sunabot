@@ -2,7 +2,7 @@
 
 sunabot 是面向个人自托管场景的多 Agent QQ 服务。每个 Agent 可以绑定多个 QQ 账号，并拥有独立的人格、记忆、会话、图片、工具配置和唯一 Workbench；Provider、系统提示词与管理安全由同一个 Sunabot Core 统一管理。
 
-当前版本：`0.3.0` · [更新日志](CHANGELOG.md) · [GitHub Releases](https://github.com/CatREFuse/sunabot/releases)
+当前版本：`0.3.1` · [更新日志](CHANGELOG.md) · [GitHub Releases](https://github.com/CatREFuse/sunabot/releases)
 
 ## 功能
 
@@ -61,7 +61,7 @@ bash "$HOME/.local/share/sunabot/current/sunabot.sh" up
 默认安装位置为 `$XDG_DATA_HOME/sunabot`，未设置 `XDG_DATA_HOME` 时使用 `$HOME/.local/share/sunabot`。可以指定版本和绝对安装目录：
 
 ```bash
-bash install.sh --version 0.3.0 --prefix /opt/sunabot
+bash install.sh --version 0.3.1 --prefix /opt/sunabot
 ```
 
 ## 环境要求

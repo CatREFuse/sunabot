@@ -17,12 +17,44 @@ export interface ReleaseCatalog {
   releases: readonly ReleaseRecord[];
 }
 
-export const CURRENT_RELEASE_VERSION = "0.3.0";
+export const CURRENT_RELEASE_VERSION = "0.3.1";
 
 export const RELEASE_CATALOG: ReleaseCatalog = {
   schemaVersion: 1,
   currentVersion: CURRENT_RELEASE_VERSION,
   releases: [
+    {
+      version: "0.3.1",
+      releasedAt: "2026-10-17",
+      title: "WSL 稳定性与 QQ 登录修复",
+      summary: "改善 QQ 重连与登录二维码体验，修复 WSL 工具、工作记忆和用户画像更新。",
+      groups: [
+        {
+          title: "QQ 与管理台",
+          items: [
+            "打开登录弹窗时刷新二维码，过期后隐藏旧码并提示刷新。",
+            "修复连接状态显示、历史会话路由和会话图片加载。",
+            "支持单独重启 Core，保持 NapCat 运行。"
+          ]
+        },
+        {
+          title: "记忆与工具",
+          items: [
+            "工作记忆超限后继续处理，同时明确报告容量错误。",
+            "修复用户画像更新，并改善模型输入输出的宽容处理。",
+            "修复 WSL 中的 Bash、表情文件操作和 Codex 兼容问题。"
+          ]
+        },
+        {
+          title: "运行与安装",
+          items: [
+            "升级 NapCat 至 4.18.30，改善断线连接回收与 WSL 进程识别。",
+            "修复冷启动网络、网页渲染进程和首次安装的 Codex 版本检查。",
+            "新增 GPT-6.1 Sol 与 GPT-6 Luna 模型选项。"
+          ]
+        }
+      ]
+    },
     {
       version: "0.3.0",
       releasedAt: "2026-08-12",

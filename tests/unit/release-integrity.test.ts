@@ -217,7 +217,13 @@ describe("Native release integrity", () => {
     expect(workflow).toContain("npm run test:visual");
     expect(workflow).toContain("workflow_dispatch:");
     expect(workflow).toContain("tag_name:");
-    expect(workflow.match(/ref: refs\/tags\/\$\{\{ env\.RELEASE_TAG \}\}/g)).toHaveLength(2);
+    expect(workflow).toContain("inputs.draft && (inputs.source_ref || github.sha)");
+    expect(workflow).toContain("format('refs/tags/{0}', env.RELEASE_TAG)");
+    expect(workflow.match(/if: \$\{\{ !inputs\.draft \}\}/g)).toHaveLength(2);
+    expect(workflow).toContain("ref: ${{ needs.gate.outputs.source_sha }}");
+    expect(workflow).toContain("target_commitish: ${{ needs.gate.outputs.source_sha }}");
+    expect(workflow).toContain("draft: ${{ inputs.draft || false }}");
+    expect(workflow).toContain("needs: [gate, build]");
     expect(workflow).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
     expect(workflow).toContain("kernel.unprivileged_userns_clone=1");
     expect(workflow).toContain("runner: ubuntu-24.04");

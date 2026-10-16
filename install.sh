@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPOSITORY=${SUNABOT_GITHUB_REPOSITORY:-CatREFuse/sunabot}
-VERSION=${SUNABOT_VERSION:-0.3.0}
+VERSION=${SUNABOT_VERSION:-0.3.1}
 PREFIX=${SUNABOT_INSTALL_PREFIX:-${XDG_DATA_HOME:-$HOME/.local/share}/sunabot}
 
 usage() {

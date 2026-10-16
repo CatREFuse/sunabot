@@ -32,8 +32,8 @@ describe("0.1.4 to 0.2.0 release upgrade", () => {
       dockerfile: "0.2.0",
       compose: "0.2.0"
     });
-    expect(CURRENT_RELEASE_VERSION).toBe("0.3.0");
-    expect(RELEASE_CATALOG.currentVersion).toBe("0.3.0");
+    expect(CURRENT_RELEASE_VERSION).toBe("0.3.1");
+    expect(RELEASE_CATALOG.currentVersion).toBe("0.3.1");
     expect(RELEASE_CATALOG.releases.filter((release) => release.version === "0.2.0"))
       .toHaveLength(1);
     expect(await fs.readFile(path.join(root, "CHANGELOG.md"), "utf8"))

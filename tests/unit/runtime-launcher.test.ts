@@ -905,7 +905,7 @@ describe("Native Core runtime launcher", () => {
     });
 
     expect(contract.schemaVersion).toBe(3);
-    expect(resolved.releaseVersion).toBe("0.3.0");
+    expect(resolved.releaseVersion).toBe("0.3.1");
     expect(resolved.adminPort).toBe(8787);
     expect(resolved.onebotHost).toBe("127.0.0.1");
     expect(resolved.onebotPort).toBe(8788);
