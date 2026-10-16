@@ -85,6 +85,8 @@ Provider、Codex CLI 与联网工具的出站 HTTP(S) 可独立使用代理。�
 
 ## 7. 版本、发行与迁移
 
+首次安装的 Codex CLI 版本探针只解析成功进程的 stdout；空工作区缺少 `secrets/codex` 时产生的 stderr 提示不得进入版本比较。错误版本与非零退出仍须报错，Codex 登录状态与 CLI 可执行状态分别报告，探针不得为通过检查创建登录目录或凭据。
+
 当前公开版本为 `0.3.0`。`package.json`、`package-lock.json`、`deploy/runtime-contract.json`、组件锁、版本目录与 `packages/platform/releaseCatalog.ts` 必须一致。`GET /api/releases` 返回当前版本和按时间倒序排列的更新日志；根 `CHANGELOG.md` 与 GitHub `v<version>` Release 使用同一版本内容。
 
 Linux amd64/arm64 发行包内置 Node.js `24.18.0`、生产 `node_modules`、Codex CLI `0.162.1`、Lightpanda `0.3.3`、对应源码与许可证、Bubblewrap `0.8.0-2+deb12u1`、Bubblewrap 的 Debian ELF loader 与完整动态库闭包、对应源码与许可、Core、管理台和迁移工具。发行构建要求干净且构建期间 revision 不变，manifest 绑定平台、版本、source commit、组件版本与受保护文件 SHA-256；构建用 loader `--list` 验证全部 Bubblewrap `NEEDED` 库解析到归档内部，再执行真实 namespace probe。受保护集合覆盖根 `sunabot.sh`、Node 版本合同、完整 Core/WebFetch 构建、管理台 `dist`、生产依赖、全部 runtime/tooling、`deploy/` 下的 NapCat Compose 与 entrypoint、`packages/platform/` 运行模块、workspace 初始化配置、bundled Workbench Skill、组件来源和许可；受保护树增加、删除、替换或符号链接化都必须失败关闭。

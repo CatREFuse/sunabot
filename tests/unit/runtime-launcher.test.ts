@@ -26,6 +26,7 @@ import {
   command,
   commandTimeoutMs,
   firstRunCompletionReadiness,
+  inspectNativeCodex,
   nativeCoreEnvironment,
   napcatAccountUpArguments,
   selectNativeOnebotListenHost,
@@ -36,6 +37,38 @@ import {
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("Native Core runtime launcher", () => {
+  it.skipIf(process.platform === "win32")("recognizes the real bundled Codex version before its workspace home exists", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-codex-first-run-"));
+    const context = {
+      root,
+      workspace,
+      environment: process.env,
+      runtimeEnvironment: {},
+      contract: { codexCli: {
+        executable: "node_modules/@openai/codex/bin/codex.js",
+        version: "0.162.1",
+        authFile: "secrets/codex/auth.json"
+      } }
+    };
+    try {
+      const result = await inspectNativeCodex(context);
+      expect(result.cli.ok).toBe(true);
+      expect(result.auth.ok).toBe(false);
+      await expect(fs.stat(path.join(workspace, "secrets/codex"))).rejects.toMatchObject({ code: "ENOENT" });
+      const mismatch = await inspectNativeCodex({ ...context, contract: {
+        codexCli: { ...context.contract.codexCli, version: "0.0.0" }
+      } });
+      expect(mismatch.cli.ok).toBe(false);
+      const unavailable = await inspectNativeCodex({ ...context, runtimeEnvironment: {
+        SUNABOT_CODEX_EXECUTABLE: path.join(workspace, "missing-codex")
+      } });
+      expect(unavailable.cli.ok).toBe(false);
+      expect(unavailable.cli.detail).toContain("ENOENT");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("probes bundled bubblewrap isolation for Linux Native Core", async () => {
     const source = await fs.readFile(path.join(root, "tooling/runtime/launcher.mjs"), "utf8");
     const nativeCapabilities = source.slice(

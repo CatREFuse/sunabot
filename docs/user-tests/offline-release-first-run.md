@@ -18,6 +18,7 @@
 4. 分别输入非法名称、过短密码和两次不一致的密码，再输入有效值。
 5. 完成首次启动后执行 `restart`、`status`、`doctor` 和灵魂包 CLI 导入导出。
 6. 记录所有进程的文件访问与网络连接，确认使用发行目录内的 Node、生产依赖、WebUI、Codex CLI、Lightpanda 与 Bubblewrap；在发行 `.env` 写入伪造 `SUNABOT_BWRAP_EXECUTABLE=/usr/bin/bwrap`，确认启动器仍向 Native Bash、stdio MCP、Skill Script 与 WebFetch Renderer 注入包内绝对入口。
+7. 使用不存在 `secrets/codex` 的空工作区执行发行包 `bootstrap`；Codex 在 stderr 提示目录不存在时，正确的 stdout 版本仍须通过 CLI 检查，未登录状态独立报告。错误版本和进程执行失败仍须拒绝。
 
 ## 预期结果
 

@@ -1840,13 +1840,13 @@ async function inspectNativeCapabilities(context) {
   };
 }
 
-async function inspectNativeCodex(context) {
+export async function inspectNativeCodex(context) {
   const codexHome = path.join(context.workspace, path.dirname(context.contract.codexCli.authFile));
   const environment = { ...nativeProcessEnvironment(context), CODEX_HOME: codexHome };
   const executable = environment.SUNABOT_CODEX_EXECUTABLE;
   let version;
   try {
-    version = (await command(executable, ["--version"], { capture: true, env: environment })).trim();
+    version = (await command(executable, ["--version"], { capture: "stdout", env: environment })).trim();
   } catch (error) {
     const detail = message(error);
     return { cli: { ok: false, detail }, auth: { ok: false, detail: "Codex CLI 不可用。" } };
