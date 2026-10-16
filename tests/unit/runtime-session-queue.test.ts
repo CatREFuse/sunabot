@@ -669,6 +669,7 @@ describe("SunaRuntime Session queue bridge", () => {
     const harness = createRuntimeHarness(completeRequestTurn);
 
     await handleOneBotEvent(harness.runtime, groupEvent(101, 100, "first"), harness.gateway);
+    await waitUntil(() => starts.includes("first"));
     await handleOneBotEvent(harness.runtime, groupEvent(102, 100, "second"), harness.gateway);
     await handleOneBotEvent(harness.runtime, groupEvent(103, 100, "third"), harness.gateway);
     await handleOneBotEvent(harness.runtime, groupEvent(201, 200, "parallel"), harness.gateway);
