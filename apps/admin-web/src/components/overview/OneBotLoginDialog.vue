@@ -15,6 +15,8 @@ const props = defineProps<{
   snapshot: OneBotQrLogin | null;
   error: string;
   confirmingLogout: boolean;
+  remainingSeconds: number;
+  qrBlocked: boolean;
 }>();
 const emit = defineEmits<{
   close: [];
@@ -25,6 +27,7 @@ const emit = defineEmits<{
   logout: [];
 }>();
 const qrSource = computed(() => {
+  if (props.busy || props.qrBlocked || props.remainingSeconds <= 0) return "";
   const direct = props.snapshot?.imageDataUrl?.trim() || props.snapshot?.imageUrl?.trim();
   if (direct) return direct;
   const qrcode = props.snapshot?.qrcode?.trim();
@@ -34,7 +37,7 @@ const qrSource = computed(() => {
   return /^[A-Za-z0-9+/=]+$/.test(compact) ? `data:image/png;base64,${compact}` : "";
 });
 const recoveringLogin = computed(() => props.snapshot?.action === "recover_login");
-const phaseLabel = computed(() => recoveringLogin.value ? props.busy ? "正在恢复登录" : "登录已失效" : ({
+const phaseLabel = computed(() => recoveringLogin.value ? props.busy ? "正在恢复登录" : "登录已失效" : props.busy && !props.snapshot?.authenticated && !props.snapshot?.online ? "正在获取二维码" : props.qrBlocked && props.snapshot?.imageUpdatedAt && !props.snapshot?.authenticated && !props.snapshot?.online ? "二维码已过期" : ({
   online: "已登录",
   connecting: "正在连接 OneBot",
   reconnecting: "正在恢复连接",
@@ -69,15 +72,20 @@ const avatar = computed(() => /^\d{5,12}$/.test(String(qq.value)) ? `/api/media/
           <div><strong class="block text-xl font-medium text-display">{{ nickname }}</strong><span class="mt-1 block font-mono text-xs text-mute">QQ {{ qq }}</span></div>
           <p class="max-w-xs text-sm text-mute">{{ !snapshot.online ? "QQ 连接暂时中断，正在恢复。" : snapshot.connected ? "QQ 与 OneBot 已连接。" : "QQ 已登录，正在连接 OneBot。" }}</p>
         </div>
-        <div v-else class="grid min-h-72 place-items-center rounded border border-line bg-page p-4">
+        <div v-else class="relative grid min-h-72 place-items-center rounded border border-line bg-page p-4">
           <AuthenticatedImage v-if="qrSource" :src="qrSource" alt="QQ 登录二维码" class-name="w-full max-w-56 bg-white p-3 [image-rendering:pixelated]" />
+          <div v-else-if="!busy && (qrBlocked || effectiveError)" class="absolute inset-0 grid content-center justify-items-center gap-4 rounded bg-panel p-4 text-center" data-testid="qr-mask">
+            <i class="bx bx-qr-scan text-4xl text-mute" aria-hidden="true"></i>
+            <p class="text-sm text-display">{{ effectiveError ? "二维码暂不可用" : "二维码已过期" }}</p>
+            <button class="btn btn-primary" type="button" @click="emit('refresh')">点击刷新</button>
+          </div>
           <div v-else class="grid justify-items-center gap-3 text-mute"><i class="bx bx-loader-alt bx-spin text-4xl" aria-hidden="true"></i><p class="font-mono text-xs">{{ busy ? "加载中" : "等待二维码" }}</p></div>
         </div>
         <p v-if="effectiveError" class="inline-state" data-kind="error">{{ effectiveError }}</p>
         <p v-else-if="recoveringLogin" class="text-sm text-mute">{{ busy ? "正在准备新的登录二维码。" : "重新登录以恢复消息接收。" }}</p>
         <p v-else-if="snapshot?.authenticated && !snapshot.online" class="text-sm text-mute">登录状态已保留。</p>
         <p v-else-if="snapshot?.online" class="text-sm text-mute">可以退出当前 QQ，再扫描新的账号。</p>
-        <p v-else class="text-sm text-mute">使用手机 QQ 扫码并确认，二维码会自动更新。</p>
+        <p v-else-if="qrSource" class="text-sm text-mute">使用手机 QQ 扫码并确认，{{ remainingSeconds }} 秒后过期。</p>
         <span v-if="snapshot?.imageUpdatedAt && !snapshot.online" class="font-mono text-[10px] text-mute">更新于 {{ formatFullDateTime(snapshot.imageUpdatedAt) }}</span>
         <button v-if="snapshot?.webuiUrl" class="btn justify-self-start" type="button" @click="emit('webui', snapshot.webuiUrl)">打开 NapCat<i class="bx bx-link-external" aria-hidden="true"></i></button>
       </div>

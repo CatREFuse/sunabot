@@ -134,6 +134,8 @@ function removingAccount(account: AgentAccount) {
     :account-label="activeAccount?.label ?? ''"
     :busy="qqLogin.busy.value"
     :checking="qqLogin.checking.value"
+    :remaining-seconds="qqLogin.remainingSeconds.value"
+    :qr-blocked="qqLogin.qrBlocked.value"
     :snapshot="qqLogin.snapshot.value"
     :error="qqLogin.error.value"
     :confirming-logout="qqLogin.confirmingLogout.value"

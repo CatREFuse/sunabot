@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const DEFAULT_WATCH_INTERVAL_MS = 2_000;
 const LOGIN_WATCH_LIMIT_MS = 10 * 60_000;
 const MAX_QR_BYTES = 1024 * 1024;
+const QR_DISPLAY_WINDOW_MS = 60_000;
 
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -50,6 +52,7 @@ export interface NapcatLoginSnapshot {
   };
   imageDataUrl?: string;
   imageUpdatedAt?: string;
+  imageExpiresAt?: string;
 }
 
 export interface NapcatLoginControlPort {
@@ -74,6 +77,7 @@ export interface NapcatLoginControlOptions {
 
 export class NapcatLoginControl implements NapcatLoginControlPort {
   private credential = "";
+  private refreshRequest?: Promise<NapcatLoginSnapshot>;
   private watchTimer?: NodeJS.Timeout;
   private watchStartedAt = 0;
   private manualLoginObservedOffline = false;
@@ -104,8 +108,7 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
       return {
         isLogin: false,
         manualLogin,
-        error: error instanceof Error ? error.message : "NapCat WebUI 暂不可用。",
-        ...qr
+        error: error instanceof Error ? error.message : "NapCat WebUI 暂不可用。"
       };
     }
     const isLogin = source.isLogin === true;
@@ -142,18 +145,31 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
       manualLogin,
       qrcodeUrl: cleanText(source.qrcodeurl),
       loginError: cleanText(source.loginError),
-      ...qr
+      ...qr,
+      ...(loginError ? { loginError, imageDataUrl: undefined } : {})
     };
   }
 
-  async refreshQrCode(): Promise<NapcatLoginSnapshot> {
+  refreshQrCode(): Promise<NapcatLoginSnapshot> {
+    this.refreshRequest ??= this.refresh().finally(() => { this.refreshRequest = undefined; });
+    return this.refreshRequest;
+  }
+
+  private async refresh(): Promise<NapcatLoginSnapshot> {
     const current = await this.status();
     if (current.isLogin) return current;
 
-    const previousMtime = await this.qrMtime();
+    const previousImage = await fs.readFile(this.options.qrCodePath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
     await this.request("/QQLogin/RefreshQRcode");
-    await this.waitForQrChange(previousMtime);
-    return this.status();
+    await this.waitForQrChange(previousImage);
+    const refreshed = await this.status();
+    if (!refreshed.isLogin && !refreshed.imageDataUrl) {
+      throw new ServiceError(502, "QQ_QR_REFRESH_FAILED", "未获取到有效二维码，请点击刷新重试。");
+    }
+    return refreshed;
   }
 
   async beginManualLogin() {
@@ -249,11 +265,16 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
       throw error;
     });
     if (!stats?.isFile() || stats.size <= 0 || stats.size > MAX_QR_BYTES) return {};
+    const imageExpiresAt = new Date(stats.mtimeMs + QR_DISPLAY_WINDOW_MS).toISOString();
+    if (Date.now() >= stats.mtimeMs + QR_DISPLAY_WINDOW_MS || stats.mtimeMs > Date.now()) {
+      return { imageUpdatedAt: stats.mtime.toISOString(), imageExpiresAt, loginError: "二维码已过期，请点击刷新。" };
+    }
     const image = await fs.readFile(this.options.qrCodePath);
     if (!isPng(image)) return {};
     return {
       imageDataUrl: `data:image/png;base64,${image.toString("base64")}`,
-      imageUpdatedAt: stats.mtime.toISOString()
+      imageUpdatedAt: stats.mtime.toISOString(),
+      imageExpiresAt
     };
   }
 
@@ -291,16 +312,13 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
     await fs.rename(temporary, this.options.manualLoginMarkerPath);
   }
 
-  private async qrMtime() {
-    return (await fs.stat(this.options.qrCodePath).catch(() => undefined))?.mtimeMs ?? 0;
-  }
-
-  private async waitForQrChange(previousMtime: number) {
-    for (let attempt = 0; attempt < 30; attempt += 1) {
+  private async waitForQrChange(previousImage?: Buffer) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
       await delay(100);
-      const nextMtime = await this.qrMtime();
-      if (nextMtime > previousMtime) return;
+      const next = await this.readQrImage();
+      if (next.imageDataUrl && next.imageDataUrl !== (previousImage ? `data:image/png;base64,${previousImage.toString("base64")}` : undefined)) return;
     }
+    throw new ServiceError(504, "QQ_QR_REFRESH_TIMEOUT", "二维码刷新失败：NapCat 未生成新二维码，请点击刷新重试。");
   }
 
   private async request<T = unknown>(pathname: string, body: unknown = {}): Promise<T> {

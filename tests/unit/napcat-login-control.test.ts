@@ -16,6 +16,42 @@ afterEach(async () => {
 });
 
 describe("NapcatLoginControl", () => {
+  it("never returns an expired QR as scannable", async () => {
+    const fixture = await createFixture();
+    await fs.writeFile(fixture.qrCodePath, pngHeader);
+    const old = new Date(Date.now() - 61_000);
+    await fs.utimes(fixture.qrCodePath, old, old);
+    const control = new NapcatLoginControl({ ...fixture, fetchImpl: async (input) =>
+      json(new URL(input).pathname === "/api/auth/login"
+        ? { code: 0, data: { Credential: "credential" } }
+        : { code: 0, data: { isLogin: false } }) });
+    const snapshot = await control.status();
+    expect(snapshot.imageDataUrl).toBeUndefined();
+    expect(snapshot.loginError).toContain("过期");
+    control.close();
+  });
+
+  it("rejects an acknowledged refresh that only touches the old image and coalesces requests", async () => {
+    const fixture = await createFixture();
+    await fs.writeFile(fixture.qrCodePath, pngHeader);
+    let refreshes = 0;
+    const control = new NapcatLoginControl({ ...fixture, fetchImpl: async (input) => {
+      const pathname = new URL(input).pathname;
+      if (pathname === "/api/auth/login") return json({ code: 0, data: { Credential: "credential" } });
+      if (pathname === "/api/QQLogin/RefreshQRcode") {
+        refreshes += 1;
+        await fs.utimes(fixture.qrCodePath, new Date(), new Date());
+      }
+      return json({ code: 0, data: { isLogin: false } });
+    } });
+    const first = control.refreshQrCode();
+    const second = control.refreshQrCode();
+    expect(second).toBe(first);
+    await expect(first).rejects.toMatchObject({ statusCode: 504, code: "QQ_QR_REFRESH_TIMEOUT", message: expect.stringContaining("未生成新二维码") });
+    expect(refreshes).toBe(1);
+    control.close();
+  }, 15_000);
+
   it("keeps watching a scanned but offline identity until login completion is persisted", async () => {
     const fixture = await createFixture();
     await fs.writeFile(fixture.manualLoginMarkerPath, JSON.stringify({ offlineObservedAt: "2026-10-14T00:00:00.000Z" }));

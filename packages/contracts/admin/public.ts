@@ -258,6 +258,7 @@ export interface OneBotQrLogin extends OneBotLoginCheck {
   imageDataUrl?: string;
   imageUrl?: string;
   imageUpdatedAt?: string;
+  imageExpiresAt?: string;
   qrcode?: string;
   webuiUrl?: string;
 }

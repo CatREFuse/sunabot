@@ -21,6 +21,91 @@ afterEach(() => {
 });
 
 describe("useQqLogin", () => {
+  it("still requests a refresh when the opening status read fails", async () => {
+    apiRequest.mockRejectedValueOnce(new Error("状态读取失败"))
+      .mockResolvedValueOnce(qrSnapshot(new Date().toISOString(), "FRESH"));
+    const control = mountControl();
+    await control.openDialog();
+    expect(apiRequest).toHaveBeenLastCalledWith("/api/onebot/qq-login", expect.objectContaining({ method: "POST" }));
+    expect(control.qrBlocked.value).toBe(false);
+  });
+
+  it("hides the opening status image until refresh completes and refreshes on reopen", async () => {
+    let resolveRefresh!: (value: OneBotQrLogin) => void;
+    apiRequest.mockResolvedValueOnce(qrSnapshot(new Date().toISOString(), "OLD"))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve; }));
+    const control = mountControl();
+    const opening = control.openDialog();
+    await flushPromises();
+    expect(control.snapshot.value?.imageDataUrl).toBeUndefined();
+    expect(control.qrBlocked.value).toBe(true);
+    resolveRefresh(qrSnapshot(new Date().toISOString(), "NEW"));
+    await opening;
+    expect(control.qrBlocked.value).toBe(false);
+    control.closeDialog();
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "NEWER"));
+    await control.openDialog();
+    expect(apiRequest.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(2);
+  });
+
+  it("expires by absolute deadline after tab suspension and polling cannot remove the mask", async () => {
+    const qr = qrSnapshot(new Date().toISOString(), "FIRST");
+    apiRequest.mockResolvedValue(qr);
+    const control = mountControl();
+    await control.openDialog();
+    expect(control.remainingSeconds.value).toBe(60);
+    vi.setSystemTime(Date.now() + 61_000);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(control.qrBlocked.value).toBe(true);
+    expect(control.remainingSeconds.value).toBe(0);
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "AUTO"));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(control.qrBlocked.value).toBe(true);
+    expect(apiRequest.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    await control.refreshQrCode();
+    expect(control.qrBlocked.value).toBe(false);
+  });
+
+  it("keeps failed refresh masked even if polling returns an image", async () => {
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "OLD"));
+    const control = mountControl();
+    await control.openDialog();
+    apiRequest.mockRejectedValueOnce(new Error("NapCat 未生成新二维码"));
+    await control.refreshQrCode();
+    expect(control.qrBlocked.value).toBe(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(control.qrBlocked.value).toBe(true);
+    expect(control.error.value).toContain("未生成");
+  });
+
+  it("does not extend an expired display window when a delayed poll supplies another QR", async () => {
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "OLD"));
+    const control = mountControl();
+    await control.openDialog();
+    let release!: (value: OneBotQrLogin) => void;
+    apiRequest.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    vi.setSystemTime(Date.now() + 61_000);
+    release(qrSnapshot(new Date().toISOString(), "AUTO"));
+    await flushPromises();
+    expect(control.qrBlocked.value).toBe(true);
+  });
+
+  it("ignores a status response started before manual refresh", async () => {
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "OLD"));
+    const control = mountControl();
+    await control.openDialog();
+    let release!: (value: OneBotQrLogin) => void;
+    apiRequest.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "NEW"));
+    await control.refreshQrCode();
+    release({ ...qrSnapshot(new Date().toISOString(), "OLD"), phase: "expired" });
+    await flushPromises();
+    expect(control.snapshot.value?.imageDataUrl).toContain("NEW");
+    expect(control.qrBlocked.value).toBe(false);
+  });
+
   it("offers explicit recovery if a retained session becomes invalid during polling", async () => {
     apiRequest.mockResolvedValueOnce({ connected: true, online: false, authenticated: true, available: true, phase: "reconnecting" })
       .mockResolvedValueOnce({ connected: true, online: false, authenticated: false, available: true, phase: "restarting", action: "recover_login" })
@@ -126,7 +211,7 @@ describe("useQqLogin", () => {
     expect(control.snapshot.value?.imageDataUrl).toBe("data:image/png;base64,RECOVERED");
   });
 
-  it("automatically replaces an expired QR image", async () => {
+  it("blocks expired QR images until an explicit refresh", async () => {
     let statusReads = 0;
     apiRequest.mockImplementation((route: string, init?: RequestInit) => {
       if (route === "/api/onebot/qq-login/status") {
@@ -146,9 +231,11 @@ describe("useQqLogin", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     await flushPromises();
 
-    expect(control.snapshot.value?.phase).toBe("waiting_scan");
+    expect(control.qrBlocked.value).toBe(true);
+    expect(apiRequest.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    await control.refreshQrCode();
+    expect(control.qrBlocked.value).toBe(false);
     expect(control.snapshot.value?.imageDataUrl).toBe("data:image/png;base64,FRESH");
-    expect(apiRequest).toHaveBeenCalledWith("/api/onebot/qq-login", expect.objectContaining({ method: "POST" }));
   });
 
   it("freezes status, login, and logout routes to the account that opened the dialog", async () => {
@@ -210,6 +297,7 @@ function qrSnapshot(imageUpdatedAt: string, base64: string): OneBotQrLogin {
     available: true,
     phase: "waiting_scan",
     imageDataUrl: `data:image/png;base64,${base64}`,
-    imageUpdatedAt
+    imageUpdatedAt,
+    imageExpiresAt: new Date(Date.now() + 60_000).toISOString()
   };
 }

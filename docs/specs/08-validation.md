@@ -2,6 +2,8 @@
 
 [返回当前系统规范索引](./index.md)
 
+2026-10-16 QQ 二维码时效修复：用户用例见 `../user-tests/cases/admin-console/qq-login-qr-freshness.md`。已复现 NapCat 接受刷新但未生成新码、管理台仍展示前日二维码的问题。修复覆盖打开时刷新、生成时间起 60 秒展示窗口、过期移除图片与手动刷新遮罩、失败不回退旧图、后台恢复与迟到轮询竞态，以及内容未变的刷新超时。隔离 WSL 完整 `npm run verify` 退出 0（unit 3,179 通过、1 跳过，E2E 53 通过）；最后补充的状态读取失败仍刷新与明确错误码经过额外类型检查及最终专项 29 项复测。独立 user harness 自检 41 项通过；light/dark 视觉 4 项通过，24 张截图覆盖移动端与桌面、倒计时和过期遮罩。测试不调用外部模型或 QQ 外发。初轮隔离验证遇到归档 CRLF、Git 无 HEAD 和中文字体缺失，修正测试环境后复测通过，不计初次失败为通过。真实环境经授权仅重启阿罗娜 NapCat，09:41 后持续生成新二维码，Core 与普拉娜原进程保留；扫码登录与真实收信仍需手机确认。二维码代码部署及 Core 单独重启待用户确认，未宣称已上线或腾讯不会提前撤销二维码。
+
 2026-10-14 工作记忆容量宽门禁回归：已复现旧实现跨越 64 KiB 时追加失败及已有超限文件读取失败。修复后容量检查记录 `WORKING_MEMORY_TOO_LARGE` 错误和 `blocking=false`，完整读写继续执行，工具成功结果携带容量告警；原记忆、来源 ID、幂等重放、revision 冲突及取消回滚保持。受影响单测 34 项通过，原始管理员私聊 OneBot ingress 的受控 Provider 夹具 2/2 与独立质量评审通过；不将受控输出计作真实模型自主选择。隔离 WSL 完整 `npm run verify` 退出 0：unit 3,168 项通过、1 项既有跳过，harness 41、integration 43、Skill sandbox 13、backup 45、migration 153、runtime smoke 84、E2E 53 项通过，runtime contract、architecture、check、benchmark、build 通过。部署包限定三个后端模块及其构建文件，未修改生产记忆；同日 23:34（Asia/Shanghai）经用户确认完成生产部署和 Core 单独重启，Core 为 live/ready，6 个源码/构建文件摘要全部匹配，两个 NapCat 容器身份及启动时间不变，原有 65,304 字节工作记忆及账号配置摘要保持。已部署构建在全新临时 workspace 完成 71,508 字节工作记忆冒烟：旧内容和新增事项完整保留、工具 ok=true、非阻断错误及 SQLite 审计均存在；未写入生产记忆。阿罗娜在本次重启前已经 waiting_scan，重启后的真实 QQ 收信仍需登录验证。生产代码回滚包位于 workspace/backups/workmemory-soft-limit-20261014/code-before.tar。
 
 Core 单独重启用例见 `../user-tests/cases/runtime/core-only-restart.md`。`runtime-core-restart.test.ts` 在 Linux 隔离 workspace 使用真实 Native 进程、账号 daemon、进程身份和 HTTP 健康检查，Docker、Renderer 引擎及 Provider/workspace 探针使用夹具；验证连续重启替换 Native 进程、无关进程保留、预检失败不停止旧 Core、启动失败仅清理 Native 并可重试，以及缺失状态/网络时不修改部署。夹具通过不能替代真实 NapCat 登录、OneBot 重连和新消息接收验收。

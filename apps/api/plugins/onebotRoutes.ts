@@ -250,6 +250,7 @@ async function getQqLoginSnapshot(
     error: napcat.manualLogin || recoverLogin || online ? undefined : napcat.error ?? (napcat.online === undefined ? onebot.error : undefined),
     imageDataUrl: online ? undefined : napcat.imageDataUrl,
     imageUpdatedAt: online ? undefined : napcat.imageUpdatedAt,
+    imageExpiresAt: online ? undefined : napcat.imageExpiresAt,
     webuiUrl
   };
 }
@@ -257,8 +258,8 @@ async function getQqLoginSnapshot(
 function loginPhase(online: boolean, connected: boolean, napcat: NapcatLoginSnapshot): OneBotQrLogin["phase"] {
   if (online) return connected ? "online" : "connecting";
   if (napcat.isLogin) return "reconnecting";
-  if (napcat.manualLogin && !napcat.imageDataUrl) return "restarting";
   if (napcat.loginError && /二维码.*(?:过期|失效)|(?:过期|失效).*二维码/i.test(napcat.loginError)) return "expired";
+  if (napcat.manualLogin && !napcat.imageDataUrl) return "restarting";
   if (napcat.imageDataUrl || napcat.qrcodeUrl) return "waiting_scan";
   return "starting";
 }

@@ -19,6 +19,10 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
   const confirmingLogout = shallowRef(false);
   const snapshot = shallowRef<OneBotQrLogin | null>(null);
   const error = shallowRef("");
+  const remainingSeconds = shallowRef(0);
+  const qrBlocked = shallowRef(true);
+  let expiryTimer: number | undefined;
+  let refreshVersion = 0;
   let pollTimer: number | undefined;
   let session = 0;
   let activePaths: QqLoginPaths | undefined;
@@ -33,8 +37,11 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
   async function openDialog() {
     open.value = true;
     snapshot.value = null;
+    checking.value = false;
     confirmingLogout.value = false;
     error.value = "";
+    blockQr();
+    document.addEventListener("visibilitychange", updateExpiry);
     stopPolling();
     busy.value = true;
     const currentSession = ++session;
@@ -43,13 +50,13 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
       activePaths = resolvePaths();
       const current = await apiRequest<OneBotQrLogin>(activePaths.status);
       if (!isCurrent(currentSession)) return;
-      await applySnapshot(current);
+      await applySnapshot({ ...current, imageDataUrl: undefined, imageUrl: undefined, qrcode: undefined });
       refreshAfterStatus = !current.online && !current.authenticated;
       if (current.authenticated && !current.online) startPolling();
     } catch (cause) {
       if (!isCurrent(currentSession)) return;
       error.value = errorMessage(cause, "QQ 登录状态读取失败");
-      startPolling();
+      refreshAfterStatus = true;
     } finally {
       if (isCurrent(currentSession)) busy.value = false;
     }
@@ -60,6 +67,9 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
     if (!open.value || busy.value) return;
     const currentSession = session;
     const requestPaths = activePaths ?? resolvePaths();
+    refreshVersion += 1;
+    stopPolling();
+    blockQr();
     busy.value = true;
     error.value = "";
     try {
@@ -68,6 +78,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
         body: JSON.stringify({})
       });
       if (!isCurrent(currentSession)) return;
+      qrBlocked.value = false;
       await applySnapshot(next);
       if (!next.online) startPolling();
     } catch (cause) {
@@ -100,6 +111,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
       });
       if (!isCurrent(currentSession)) return;
       confirmingLogout.value = false;
+      qrBlocked.value = false;
       await applySnapshot(next);
       startPolling(1_000);
     } catch (cause) {
@@ -117,6 +129,8 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
     checking.value = false;
     confirmingLogout.value = false;
     activePaths = undefined;
+    blockQr();
+    document.removeEventListener("visibilitychange", updateExpiry);
     stopPolling();
   }
 
@@ -128,27 +142,27 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
 
   async function pollStatus() {
     pollTimer = undefined;
-    if (!open.value || checking.value || snapshot.value?.online) return;
+    if (!open.value || busy.value || checking.value || snapshot.value?.online) return;
     const currentSession = session;
+    const currentRefresh = refreshVersion;
     const requestPaths = activePaths ?? resolvePaths();
     checking.value = true;
-    let refreshExpired = false;
     try {
       const next = await apiRequest<OneBotQrLogin>(requestPaths.status);
-      if (!isCurrent(currentSession)) return;
+      if (!isCurrent(currentSession) || currentRefresh !== refreshVersion) return;
+      updateExpiry();
       await applySnapshot(next);
-      error.value = next.error ?? "";
-      refreshExpired = next.phase === "expired";
+      if (!qrBlocked.value || next.online) error.value = next.error ?? "";
     } catch (cause) {
-      if (!isCurrent(currentSession)) return;
+      if (!isCurrent(currentSession) || currentRefresh !== refreshVersion) return;
+      blockQr();
       if (snapshot.value?.phase !== "restarting") {
         error.value = errorMessage(cause, "登录状态读取失败");
       }
     } finally {
       if (isCurrent(currentSession)) checking.value = false;
       if (isCurrent(currentSession) && !snapshot.value?.online) {
-        if (refreshExpired) void refreshQrCode();
-        else startPolling();
+        startPolling();
       }
     }
   }
@@ -156,11 +170,41 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
   async function applySnapshot(next: OneBotQrLogin) {
     const becameOnline = snapshot.value?.online !== true && next.online;
     snapshot.value = next;
+    updateExpiry();
+    if (!qrBlocked.value && remainingSeconds.value > 0 && !expiryTimer) {
+      expiryTimer = window.setInterval(updateExpiry, 250);
+    }
     options.onStatus?.(next);
     if (next.online) {
       stopPolling();
+      blockQr();
       if (becameOnline) await options.onOnline?.(next);
     }
+  }
+
+  function blockQr() {
+    qrBlocked.value = true;
+    remainingSeconds.value = 0;
+    if (expiryTimer) window.clearInterval(expiryTimer);
+    expiryTimer = undefined;
+  }
+
+  function updateExpiry() {
+    if (qrBlocked.value) return;
+    const next = snapshot.value;
+    const expiresAt = Date.parse(next?.imageExpiresAt ?? "");
+    if (next?.phase === "expired" || next?.error || next?.loginError) {
+      blockQr();
+      return;
+    }
+    if (!Number.isFinite(expiresAt) || Date.now() >= expiresAt) {
+      remainingSeconds.value = 0;
+      // Restart recovery may still be waiting for its first QR image.
+      if (Number.isFinite(expiresAt) || (next?.phase !== "restarting" && next?.phase !== "starting")) blockQr();
+      return;
+    }
+    remainingSeconds.value = Math.max(0, Math.floor((expiresAt - Date.now()) / 1_000));
+    if (remainingSeconds.value === 0) blockQr();
   }
 
   function stopPolling() {
@@ -182,6 +226,8 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
     snapshot: readonly(snapshot),
     error: readonly(error),
     online,
+    remainingSeconds: readonly(remainingSeconds),
+    qrBlocked: readonly(qrBlocked),
     openDialog,
     closeDialog,
     refreshQrCode,

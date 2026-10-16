@@ -51,6 +51,7 @@
 | `docs/user-tests/README.md` | user test harness、用例文档、隔离 workspace、质量评审与上线门禁 | 开发任何功能、编写 user test case 或执行上线前验证时读取 |
 | `docs/user-tests/llm-permissive-content.md` | LLM 输入输出宽容处理、Dream 恢复、可选记忆工具与格式偏差回归 | 修改模型内容接纳、结构化结果解析或内容门禁时读取 |
 | `docs/user-tests/cases/admin-console/account-conversation-recovery.md` | 历史非 primary 会话账号恢复与后台消息查询 | 修改会话加载、后台历史查询或账号元数据时读取 |
+| `docs/user-tests/cases/admin-console/qq-login-qr-freshness.md` | QQ 二维码打开刷新、倒计时遮罩与旧图拒绝 | 修改 QQ 登录刷新、二维码时效或弹窗时读取 |
 | `docs/user-tests/cases/admin-console/conversation-image-recovery.md` | Node 24 固定 DNS 图片代理与头像占位请求 | 修改图片代理传输或管理台图片占位前读取 |
 | `docs/user-tests/current-system-tools.md` | 当前 Agent 工具目录的角色、平台与真实 Provider user test 计划 | 修改工具注册、会话权限、Native Bash 或工具验收矩阵时读取 |
 | `docs/user-tests/cases/workbench-resources/emoji-bash-roundtrip.md` | 管理员群聊在 WSL 中通过审核、Skill、Bash 创建表情并读回仓库 | 修改表情 Bash 管理或独立审核兼容配置时读取 |
