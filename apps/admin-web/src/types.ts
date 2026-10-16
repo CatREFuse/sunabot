@@ -244,6 +244,7 @@ export interface RuntimeStatus {
     connected: boolean;
     connections: number;
     selfIds: string[];
+    accounts?: Array<{ accountId: string; selfId?: string; connectedAt: string; lastEventAt?: string; lastMessageEventAt?: string }>;
     connectedAt?: string;
     lastEventAt?: string;
     lastMessageEventAt?: string;

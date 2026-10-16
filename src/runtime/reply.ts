@@ -634,13 +634,18 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       }
       const finalReply = {
         lifecycle: systemConfigLifecycle,
-        channelKey, incoming, gateway, text: appendReplySoftErrors(turn.text, replySoftErrors), isAdmin,
+        channelKey, incoming, gateway, text: appendReplySoftErrors(
+          turn.textAlreadyDelivered && !turn.voice && !systemConfigLifecycle?.toolPort.mutationStaged() ? "" : turn.text,
+          replySoftErrors
+        ), isAdmin,
         generatedImages, logRunId, isCurrent: options.isCurrent,
         delivery: options.delivery,
         signal: options.signal,
         messageOrigin: turn.messageOrigin ?? options.messageOrigin ?? "text",
         toolNames: turnToolNames, singleMessage: options.atomicImageReply
       };
+      if (turn.textAlreadyDelivered && !turn.voice && !generatedImages.length && !replySoftErrors.length
+        && !systemConfigLifecycle?.toolPort.mutationStaged()) return sent;
       sent = await (turn.voice ? sendRuntimeVoiceFinalReply(this, { ...finalReply, voice: turn.voice, textAlreadyDelivered: turn.textAlreadyDelivered })
         : systemConfigReply.sendSystemConfigAwareFinalReply(this, finalReply)) || sent;
       return sent;

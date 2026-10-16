@@ -339,7 +339,7 @@ async function createFixture() {
     lightpanda: "0.3.3",
     bubblewrap: "0.8.0-2+deb12u1",
     napcat: "4.15.0",
-    codexCli: "0.139.0"
+    codexCli: "0.162.1"
   };
   await write(root, "components/component.lock.json", `${JSON.stringify({
     schemaVersion: 1,

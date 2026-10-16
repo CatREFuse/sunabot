@@ -12,6 +12,12 @@
 
 回复确认已经记住明天下午三点前发送评审稿，工作记忆保留时间、动作和完成条件，不出现后台队列、压缩模型、提示词或内部字段。
 
+## Existing large document regression
+
+管理员私聊的受控回归沿用下方原始 OneBot 事件、权限与输出要求。`tests/user-test-harness/llm-permissive-content.test.ts` 在全新隔离 workspace 的 `input.fixture.workingMemory` 中显式注入超过 64 KiB 的合成既有记忆，然后让受控 Provider 调用 `add_workmemory` 记录同一评审稿待办。机械断言必须证明工具成功、原事项正文和 ID 完整保留、新事项精确写入、磁盘文档超过旧上限且可再次读取，回复只能确认实际写入的待办。不得清空、裁剪、强制压缩既有记忆，也不得连接外部 Provider 或真实 QQ。受控回归与真实模型的自主工具选择分别报告。
+
+64 KiB 为宽门禁：超限仍完成读取、追加及 Dream 替换，同时输出 `WORKING_MEMORY_TOO_LARGE` 错误日志和 `working.capacity_check` 审计记录，工具成功结果携带非阻断告警及实际字节数、阈值；不得把已成功落盘的操作伪报为写入失败。文档单元回归另覆盖：追加时跨越 64 KiB 边界、外部已有超限文件读取、Dream 共用替换接口、超限文件上的 revision 冲突与取消后回滚。非法路径与损坏 metadata 的既有失败行为保持不变。
+
 <!-- sunabot-user-test-case:v1 -->
 ```json
 {

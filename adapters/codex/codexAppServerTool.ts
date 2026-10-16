@@ -24,7 +24,6 @@ import {
 } from "./codexProcess.js";
 import { CODEX_MAX_JSONL_LINE_BYTES, CODEX_MAX_STDOUT_BYTES } from "./codexProtocol.js";
 import {
-  CODEX_RESULT_SCHEMA,
   failureResult,
   normalizeModelResult,
   parseCodexResultText,
@@ -444,8 +443,7 @@ export class CodexAppServerRunner implements CodexControlRunner {
         runtimeWorkspaceRoots: prepared.outputDir
           ? [prepared.outputDir, input.workspacePath]
           : [input.workspacePath]
-      } : {}),
-      outputSchema: CODEX_RESULT_SCHEMA
+      } : {})
     });
     await completed;
     const modelResult = parseCodexResultText(finalText);

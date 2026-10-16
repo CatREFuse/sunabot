@@ -22,7 +22,6 @@ import {
 } from "../../services/emojis/emojiCatalog.js";
 import type { HookBus } from "../../services/messaging/hookBus.js";
 import {
-  MAX_SEGMENTED_REPLY_BUBBLES,
   parseSegmentedReplyXml,
   type SegmentedReplyNodeV1
 } from "../../services/messaging/segmentedReply.js";
@@ -46,7 +45,7 @@ import {
   type ParsedIncomingMessage
 } from "../types.js";
 import { rewritePlannedEmojiText } from "./emojiReply.js";
-import { errorMessage, formatErrorReply, isAbortError, saveConversationRecordsStrict } from "./infrastructure.js";
+import { formatErrorReply, isAbortError, saveConversationRecordsStrict } from "./infrastructure.js";
 import {
   conversationRecordId,
   normalizeOutgoingReplyText,
@@ -62,8 +61,6 @@ import { appendReplySoftError } from "./replyModuleIsolation.js";
 import {
   appendSegmentedDeliverySoftError,
   isEmojiToneContractError,
-  isSegmentedReplyHardGateError,
-  sameReplySequence,
   segmentedReplyContractError
 } from "./segmentedReplyIsolation.js";
 import type { ToneRewriteContext } from "./tone.js";
@@ -159,41 +156,14 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
         kind: "image",
         src: segmentedImageSource(index)
       }));
-      const maxRetries = this.config.bot.tone.followMainModel
-        ? this.config.normalReply.maxRetries
-        : this.config.bot.tone.maxRetries;
-      const hardGateErrors: string[] = [];
       try {
-        for (let retry = 0; ; retry += 1) {
-          signal?.throwIfAborted();
-          const rewritten = await this.rewriteToneDelivery(
-            beforeReply.text,
-            assets,
-            hardGateErrors.length
-              ? {
-                  ...toneContext,
-                  hardGateRetry: {
-                    attempt: retry + 1,
-                    maxAttempts: maxRetries + 1,
-                    errors: [...hardGateErrors]
-                  }
-                }
-              : toneContext,
-            currentEmojiPlan.expectedMarkers
-          );
-          try {
-            deliveryParts = await segmentedReplyDeliveryParts(
-              this.config,
-              rewritten.content,
-              currentEmojiPlan,
-              availableImages
-            );
-            break;
-          } catch (error) {
-            if (!isSegmentedReplyHardGateError(error) || retry >= maxRetries) throw error;
-            hardGateErrors.push(errorMessage(error));
-          }
-        }
+        signal?.throwIfAborted();
+        const rewritten = await this.rewriteToneDelivery(
+          beforeReply.text, assets, toneContext, currentEmojiPlan.expectedMarkers
+        );
+        deliveryParts = await segmentedReplyDeliveryParts(
+          this.config, rewritten.content, currentEmojiPlan, availableImages
+        );
       } catch (error) {
         if (
           signal?.aborted ||
@@ -677,10 +647,6 @@ async function segmentedReplyDeliveryParts(
   const nodes: SegmentedReplyNodeV1[] = xml.trim()
     ? parseSegmentedReplyXml(xml).nodes
     : images.map((_, index) => ({ type: "image" as const, src: segmentedImageSource(index) }));
-  const actualMarkers = nodes.flatMap((node) => node.type === "expression" ? [node.marker] : []);
-  if (!sameReplySequence(actualMarkers, emojiPlan.expectedMarkers)) {
-    throw segmentedReplyContractError("分段回复改变了原有表情标记。");
-  }
   const actualAssets = nodes.flatMap((node) => (
     node.type === "image" || node.type === "voice" || node.type === "file"
       ? [{ type: node.type, src: node.src }]
@@ -690,20 +656,14 @@ async function segmentedReplyDeliveryParts(
     type: "image" as const,
     src: segmentedImageSource(index)
   }));
-  const actualAssetsArePrefix = actualAssets.length <= expectedAssets.length
-    && actualAssets.every((asset, index) => (
-      asset.type === expectedAssets[index]?.type && asset.src === expectedAssets[index]?.src
-    ));
-  if (!actualAssetsArePrefix) {
-    throw segmentedReplyContractError("分段回复改变了本轮媒体资源。");
+  if (actualAssets.some((asset) => !expectedAssets.some((expected) => (
+    asset.type === expected.type && asset.src === expected.src
+  )))) {
+    throw segmentedReplyContractError("分段回复引用了未提供的资源。");
   }
-  const missingAssets = expectedAssets.slice(actualAssets.length);
-  if (nodes.length + missingAssets.length > MAX_SEGMENTED_REPLY_BUBBLES) {
-    throw segmentedReplyContractError(`分段回复最多包含 ${MAX_SEGMENTED_REPLY_BUBBLES} 个气泡。`);
-  }
+  const missingAssets = expectedAssets.filter((asset) => !actualAssets.some((actual) => actual.src === asset.src));
   nodes.push(...missingAssets);
   const emojiImages = await prepareEmojiDeliveryImages(config, emojiPlan);
-  let emojiIndex = 0;
   return nodes.map((node, index) => {
     if (node.type === "dialog") {
       const text = normalizeOutgoingReplyText(node.text).trim();
@@ -711,8 +671,8 @@ async function segmentedReplyDeliveryParts(
       return { text, images: [], primary: index === 0 };
     }
     if (node.type === "expression") {
-      const image = emojiImages[emojiIndex++];
-      if (!image) throw segmentedReplyContractError("分段回复表情资源缺失。");
+      const image = emojiImages[emojiPlan.expectedMarkers.indexOf(node.marker)];
+      if (!image) return { text: node.marker, images: [], primary: index === 0 };
       return {
         text: "",
         images: [image],

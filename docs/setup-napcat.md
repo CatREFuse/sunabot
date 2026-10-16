@@ -56,12 +56,15 @@ bash "$HOME/.local/share/sunabot/current/sunabot.sh" up
 ```bash
 ./sunabot.sh down
 ./sunabot.sh restart
+./sunabot.sh restart-core
 ./sunabot.sh status
 ./sunabot.sh logs
 ./sunabot.sh doctor
 ```
 
 `SUNABOT_CORE_MODE` 与 `--core` 已删除，传入时返回错误。不要运行旧 Core Compose、`npm run qq:*` 或 Native NapCat systemd 命令。
+
+更新 Core 后使用 `./sunabot.sh restart-core`：重启 Core、账号调和器及 WebFetch Renderer，保留 NapCat 容器和 QQ 进程。OneBot 会短暂断开后重连；此期间的消息补发取决于 NapCat。命令不会创建初始网络或重置账号，缺少既有启动状态时使用 `up` 完整启动。完整更新 NapCat 时继续使用 `restart`。
 
 macOS 源码开发模式可以使用：
 

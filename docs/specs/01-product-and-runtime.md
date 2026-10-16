@@ -41,17 +41,19 @@ workspace/business/agents/<agentId>/workbench/
 
 Core、Bash、MCP、Skill Script 与 WebFetch 只以 Native 形态运行。NapCat 是唯一 Docker 组件；每个账号使用独立容器，不能并入 Core 或与 Core 共享业务文件系统。根目录 `./sunabot.sh` 统一负责初始化、启动顺序、健康检查、停止、日志和灵魂文件 CLI。`SUNABOT_CORE_MODE` 与 `--core` 已退役，传入时明确拒绝。
 
-管理台只发布到宿主回环 `127.0.0.1:8787`。OneBot 使用专用 `8788` 端口并强制 access token：Linux 与 WSL 内置 Docker Engine 绑定当前运行网络在 Native 命名空间内的 bridge gateway；WSL Docker Desktop 的 bridge gateway 位于独立 `docker-desktop` 发行版时，Core 只绑定 `127.0.0.1`，NapCat 通过 Docker Desktop 的 `host.docker.internal` 主机转发连接。启动器必须从 NapCat 镜像执行 `/healthz` 探针并使用探针确认的地址写入配置；gateway 不属于本机且安全回环转发不可达时回滚启动，不能改绑 `0.0.0.0`、WSL `eth0` 或局域网地址。每个 NapCat WebUI 只发布到宿主回环，首个账号默认使用 `127.0.0.1:6099`。跨组件媒体使用 OneBot `base64://`，不传递宿主、Core 或 NapCat 的共享绝对路径。
+管理台只发布到宿主回环 `127.0.0.1:8787`。OneBot 使用专用 `8788` 端口并强制 access token：Linux 与 WSL 内置 Docker Engine 绑定当前运行网络在 Native 命名空间内的 bridge gateway；空闲网桥未出现在 Node 网络接口列表时，以该 gateway 的本机绑定探针确认归属。WSL Docker Desktop 的 bridge gateway 位于独立 `docker-desktop` 发行版时，Core 只绑定 `127.0.0.1`，NapCat 通过 Docker Desktop 的 `host.docker.internal` 主机转发连接。启动器必须从 NapCat 镜像执行 `/healthz` 探针并使用探针确认的地址写入配置；gateway 不属于本机且安全回环转发不可达时回滚启动，不能改绑 `0.0.0.0`、WSL `eth0` 或局域网地址。每个 NapCat WebUI 只发布到宿主回环，首个账号默认使用 `127.0.0.1:6099`。跨组件媒体使用 OneBot `base64://`，不传递宿主、Core 或 NapCat 的共享绝对路径。
 
 ## 3. 启动、状态与首次运行
 
 `up`、`start` 与 `restart` 进入同一清空后启动流程，只停止能通过命令签名、workspace 身份、进程启动身份或 Docker labels 证明属于当前部署的对象。随后启动 Native Core、Linux/WSL Lightpanda Renderer、注册表中全部已启用 NapCat 和 account runtime daemon。未知身份对象、端口占用、迁移未完成或运行依赖缺失时失败关闭。
 
+`restart-core` 使用既有 launcher state 的 OneBot 地址及当前 workspace 的 Docker 网络，仅重启 Native Core、账号调和器和 WebFetch Renderer，保留 NapCat 容器、QQ 进程、账号配置、二维码和登录缓存。依赖、构建及 Renderer 能力检查在停止旧 Core 前完成；新 Native 服务启动失败时只清理 Native 进程，保留连接配置供修复后重试，不自动执行完整重启。缺少既有连接状态或对应网络时明确报错。OneBot 会在 Core 重启期间断开并由 NapCat 重连，此期间的事件补发取决于 NapCat，不能保证零消息丢失。QQ 已失效的凭据仍需单独处理。
+
 `status`、`doctor`、管理 API 和平台入口共用只读运行探针，分别报告 API、OneBot、每个 QQ、Provider、Codex、Native Bash、MCP、Skill Script、Bubblewrap、WebFetch Renderer、workspace 和迁移状态。QQ 临时离线只降低 readiness，不把 Core 判为死亡。macOS 的动态 WebFetch capability 固定为 unavailable；静态 WebFetch 保持可用。
 
 首次 `up` 使用带 HMAC 的持久 journal，并在当前终端进入 Landing：设置管理员名称、管理员密码和密码确认。密码输入不回显，长度至少 12 个字符；凭据通过同目录临时文件写入，完成文件 `fsync`、原子替换和父目录 `fsync` 后才返回。Core 构建阶段只复验持久边界与凭据可读性，不能提交完成状态；launcher 必须等待 AdminAuth 成功读取凭据、管理 API 与 OneBot 已监听、account runtime daemon 和全部应运行 NapCat 通过完整探针并连续稳定后，再次读取并校验凭据，把完成提交作为启动流程最后一个可失败步骤。此前任一步失败都保留 journal，可继续启动或通过 `rollback-first-run` 受控回滚，未知文件保留。workspace 完整父目录链在 marker、配置、凭据、SQLite、注册表或运行目录写入前逐级拒绝用户符号链接。
 
-发行包的 `help|status|doctor|logs|down|up|start|restart` 不安装应用依赖。`bootstrap` 只验证随包运行时、生产依赖、构建产物和组件完整性。发行包内供进程管理器使用的 Core 入口同样只接受包内 Node 与绝对 Bubblewrap，拒绝宿主可执行文件覆盖与 `/usr/bin/bwrap` 回退，并在执行 Core 前验证完整 release manifest。源码形态可以按锁文件显式准备依赖。
+发行包的 `help|status|doctor|logs|down|up|start|restart|restart-core` 不安装应用依赖。`bootstrap` 只验证随包运行时、生产依赖、构建产物和组件完整性。发行包内供进程管理器使用的 Core 入口同样只接受包内 Node 与绝对 Bubblewrap，拒绝宿主可执行文件覆盖与 `/usr/bin/bwrap` 回退，并在执行 Core 前验证完整 release manifest。源码形态可以按锁文件显式准备依赖。
 
 ## 4. Native 工具边界
 
@@ -59,13 +61,21 @@ Native Bash 复用当前 Agent 的 canonical Workbench。macOS 只向管理员 Q
 
 MCP 与 Skill Script 由 Native Core 管理。Linux/WSL 的 stdio 进程和脚本执行使用 Bubblewrap、最小环境与受控 Workbench/扩展投影；秘密只从当前 Agent 的凭据边界按声明键注入。launcher 在检查真实 namespace 后固定 `SUNABOT_BWRAP_EXECUTABLE`：发行形态只允许包内 `runtime/bubblewrap/bwrap`，并向 Native Bash、stdio MCP、Skill Script 与 WebFetch Renderer 注入同一路径；`.env`、会话参数和工具参数不能覆盖，注入缺失时发行进程失败关闭。源码形态可明确使用 `/usr/bin/bwrap`。运行时下载依赖、Docker launcher 和 Docker socket 均不属于当前合同。扩展初始化失败只关闭对应可选能力，不能切换到 Docker 或其他后端。
 
-Codex CLI `0.139.0` 是固定生产依赖。发行包从生产 `node_modules` 提供 CLI；授权保存在当前 workspace 的 `secrets/codex/auth.json`。CLI 缺失或版本不匹配时 doctor 报告明确错误，授权缺失时 Core 保持可启动以完成设备登录，但 Codex 工具不可调用。
+Codex CLI `0.162.1` 是固定生产依赖。发行包从生产 `node_modules` 提供 CLI；授权保存在当前 workspace 的 `secrets/codex/auth.json`。CLI 缺失或版本不匹配时 doctor 报告明确错误，授权缺失时 Core 保持可启动以完成设备登录，但 Codex 工具不可调用。
+
+Linux/WSL Native 工具的 `prlimit` 在 Bubblewrap 完成 user/PID namespace 后启动，64 线程配额作用于本次隔离用户环境，不能在创建隔离环境前使用宿主 UID 的线程总数阻断执行。虚拟地址空间上限为 4 GiB，以支持锁定 Node 24 的地址预留；文件描述符 128、单文件 256 MiB、core dump 禁用及原有命令期限继续保留。当前 Node 位于系统挂载之外时，只读挂载该 Node 发行目录，并将其 bin 目录加入隔离 PATH，不能挂载整个宿主 HOME。`doctor`、启动预检与 Bash 使用同一隔离调用构造器，诊断必须实际执行 Node 和基础命令，不能只以无资源限制的 namespace probe 宣称 Bash 可用。
+
+系统 alternatives、字体、LibreOffice 与 ImageMagick 配置目录按需只读投影，使已安装的媒体和文档命令能够解析系统依赖；不投影宿主用户配置。源码部署中的 zip、unzip、ripgrep、FFmpeg、ImageMagick、Pandoc、Poppler 和 LibreOffice 由宿主显式安装，普通启动不下载软件。
+
+启动器读取 `ps` 进程身份时只解析成功命令的 stdout，WSL 终端尺寸等 stderr 警告不能进入启动时间签名；捕获输出必须等待 stdio close，不能在 exit 时丢失尾部数据。命令失败时保留 stderr 诊断，命令行使用宽输出以避免身份参数被截断。
+
+Linux/WSL 的 Core、账号调和器和 Renderer 使用内核 boot ID 与 `/proc/<pid>/stat` 的 start ticks 作为进程启动身份，墙钟调整不改变该身份；命令、workspace、进程组与 owner token 校验继续保留。非 Linux 平台继续读取 `ps lstart`。升级前保存的旧墙钟签名不放宽匹配，停止流程通过现有实时进程扫描、workspace 与命令复核清理本部署进程，再由新启动写入稳定签名。
 
 ## 5. WebFetch
 
 静态 WebFetch 在 Core 内使用 Node 抓取和 Defuddle 提取正文。正文不足时，Linux/WSL 调用由 launcher 监管的 Lightpanda 0.3.3 Renderer；该引擎不依赖 Chrome、Chromium、Blink、WebKit 或 Playwright。Renderer 只监听回环、使用每次启动生成的 bearer token、禁用遥测，并在独立临时 HOME/cache/run 中运行。
 
-Linux/WSL Renderer 由 Bubblewrap 遮蔽仓库、workspace、secrets、Provider、Codex、OneBot、NapCat 凭据和浏览器用户目录。安全代理对 HTTP(S)、重定向、CONNECT、请求数、并发、响应字节和总预算执行统一限制；下载、WebSocket、非 GET 与不受支持资源类型失败关闭。Renderer 不保存 Cookie 或原始 HTML。发行形态忽略宿主 Lightpanda 覆盖，只使用 manifest 保护的包内可执行文件；renderer token 由 launcher 生成并通过文件描述符交给 Linux Core 与 Renderer。Linux/WSL 把动态 Renderer 作为发行必需能力，Lightpanda、Bubblewrap 包内运行库、鉴权、真实 namespace probe 或健康值无法验证时，bootstrap 与启动失败；macOS Core 不接收 renderer URL 或 token，动态能力返回明确 unavailable，静态抓取继续可用。
+Linux/WSL Renderer 由 Bubblewrap 遮蔽仓库、workspace、secrets、Provider、Codex、OneBot、NapCat 凭据和浏览器用户目录。安全代理对 HTTP(S)、重定向、CONNECT、请求数、并发、响应字节和总预算执行统一限制；下载、WebSocket、非 GET 与不受支持资源类型失败关闭。Renderer 不保存 Cookie 或原始 HTML。发行形态忽略宿主 Lightpanda 覆盖，只使用 manifest 保护的包内可执行文件；renderer token 由 launcher 生成并通过文件描述符交给 Linux Core 与 Renderer。长期运行的 Renderer 在 launcher 退出后保持存活，停止流程通过已验证进程组回收；短时隔离探针仍随父进程退出。Linux/WSL 把动态 Renderer 作为发行必需能力，Lightpanda、Bubblewrap 包内运行库、鉴权、真实 namespace probe 或健康值无法验证时，bootstrap 与启动失败；macOS Core 不接收 renderer URL 或 token，动态能力返回明确 unavailable，静态抓取继续可用。
 
 ## 6. 代理与平台
 
@@ -77,7 +87,7 @@ Provider、Codex CLI 与联网工具的出站 HTTP(S) 可独立使用代理。�
 
 当前公开版本为 `0.3.0`。`package.json`、`package-lock.json`、`deploy/runtime-contract.json`、组件锁、版本目录与 `packages/platform/releaseCatalog.ts` 必须一致。`GET /api/releases` 返回当前版本和按时间倒序排列的更新日志；根 `CHANGELOG.md` 与 GitHub `v<version>` Release 使用同一版本内容。
 
-Linux amd64/arm64 发行包内置 Node.js `24.18.0`、生产 `node_modules`、Codex CLI `0.139.0`、Lightpanda `0.3.3`、对应源码与许可证、Bubblewrap `0.8.0-2+deb12u1`、Bubblewrap 的 Debian ELF loader 与完整动态库闭包、对应源码与许可、Core、管理台和迁移工具。发行构建要求干净且构建期间 revision 不变，manifest 绑定平台、版本、source commit、组件版本与受保护文件 SHA-256；构建用 loader `--list` 验证全部 Bubblewrap `NEEDED` 库解析到归档内部，再执行真实 namespace probe。受保护集合覆盖根 `sunabot.sh`、Node 版本合同、完整 Core/WebFetch 构建、管理台 `dist`、生产依赖、全部 runtime/tooling、`deploy/` 下的 NapCat Compose 与 entrypoint、`packages/platform/` 运行模块、workspace 初始化配置、bundled Workbench Skill、组件来源和许可；受保护树增加、删除、替换或符号链接化都必须失败关闭。
+Linux amd64/arm64 发行包内置 Node.js `24.18.0`、生产 `node_modules`、Codex CLI `0.162.1`、Lightpanda `0.3.3`、对应源码与许可证、Bubblewrap `0.8.0-2+deb12u1`、Bubblewrap 的 Debian ELF loader 与完整动态库闭包、对应源码与许可、Core、管理台和迁移工具。发行构建要求干净且构建期间 revision 不变，manifest 绑定平台、版本、source commit、组件版本与受保护文件 SHA-256；构建用 loader `--list` 验证全部 Bubblewrap `NEEDED` 库解析到归档内部，再执行真实 namespace probe。受保护集合覆盖根 `sunabot.sh`、Node 版本合同、完整 Core/WebFetch 构建、管理台 `dist`、生产依赖、全部 runtime/tooling、`deploy/` 下的 NapCat Compose 与 entrypoint、`packages/platform/` 运行模块、workspace 初始化配置、bundled Workbench Skill、组件来源和许可；受保护树增加、删除、替换或符号链接化都必须失败关闭。
 
 安装脚本下载发行归档与 SHA-256，每次从下载归档解压新的不可变版本目录，在读取组件锁和运行 bootstrap 前使用包内校验器验证完整 manifest。全部运行时 smoke、NapCat 镜像准备和离线 bootstrap 成功后才原子切换 `current` 软链接；同版本重装不执行或覆盖已有目录，当前目录损坏时由新目录完成原子修复，任一失败保留原 `current`。NapCat/QQ 的公开再分发授权尚未确认，不随 Sunabot 归档重分发。安装完成后的普通启动固定使用 `pull never`，不执行 npm、浏览器或系统包下载。
 
@@ -92,3 +102,7 @@ GitHub `v<version>` tag 发布必须经过完整 `verify` 与 light/dark visual 
 管理台与 `./sunabot.sh soul` 共用 `sunabot.soul` schema version 1。导出只包含当前 Agent Prompt Catalog 中全部 `scope=persona` 文件及来源 metadata；不包含 Agent manifest、管理员、Provider、密钥、QQ、NapCat、SQLite、记忆、头像或 Workbench。
 
 导入必须经过严格 schema、UTF-8、大小、文件映射和摘要校验。预览绑定上传包 SHA-256 与目标全部人格文件的聚合 revision；确认时任一摘要或 revision 变化返回冲突且零写入。有效导入在同一管理写事务中预校验、暂存、备份和替换全部人格文件，并只执行一次 runtime reload；提交或 reload 失败时全量恢复。来源 metadata 不修改目标 Agent ID、名称、manifest、账号或业务数据。
+
+### 本地 QQ 兼容更新（2026-10-14）
+
+NapCat 镜像锁定为 4.18.30，摘要为 `sha256:335f9310198504d8d07aba91cc91d89215269891919c26eb4e46052ff8bb176d`；amd64 镜像内 QQ 为 3.2.32-52194。OCI 清单包含 linux/amd64 和 linux/arm64，实际宿主验收为 WSL amd64。升级保留账号配置、QQ 登录目录及独立账号挂载，普通启动继续使用 `pull never`。4.18.30 上游提供静默离线持续 60 秒后的 Worker 重启与快速登录；腾讯拒绝快速登录时仍需扫码，不能把容器存活视为 QQ 可收信。具体部署与恢复验收见 `../user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md`。

@@ -1,3 +1,5 @@
+import { modelContentText } from "../../packages/contracts/model/modelContent.js";
+
 type JsonRecord = Record<string, unknown>;
 
 export const DREAM_CONTEXT_PROJECTION_LIMITS = {
@@ -36,9 +38,6 @@ export const DREAM_CONTEXT_PROJECTION_LIMITS = {
   }
 } as const;
 
-const MEMORY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
-const SEED_PATTERN = /^[a-f0-9]{64}$/u;
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const REDACTED_PATH = "[已隐藏路径]";
 const REDACTED_SECRET = "[已隐藏敏感信息]";
 const MEMORY_LANES = new Set([
@@ -117,7 +116,6 @@ export function projectDreamContext(value: unknown): DreamContextProjectionResul
     personaImpressions: projectPersonaImpressions(input.personaImpressions),
     persona: projectPersona(input.persona)
   };
-  enforceTotalPayloadLimit(payload);
   synchronizeMemoryReferences(payload);
   const projectedFieldKnowledge = typeof recordValue(payload.persona).air === "string"
     ? String(recordValue(payload.persona).air)
@@ -125,9 +123,6 @@ export function projectDreamContext(value: unknown): DreamContextProjectionResul
   payload.fieldKnowledgeWritable = sourceFieldKnowledge.length > 0
     && projectedFieldKnowledge === sourceFieldKnowledge;
   const byteLength = dreamContextPayloadByteLength(payload);
-  if (byteLength > DREAM_CONTEXT_PROJECTION_LIMITS.totalPayloadBytes) {
-    throw new Error("Projected Dream context exceeds its total payload limit.");
-  }
   return {
     payload,
     byteLength
@@ -136,7 +131,6 @@ export function projectDreamContext(value: unknown): DreamContextProjectionResul
 
 function projectPersonaImpressions(value: unknown) {
   return arrayValue(value)
-    .slice(-DREAM_CONTEXT_PROJECTION_LIMITS.arrays.personaImpressions)
     .flatMap((raw) => {
       const record = recordValue(raw);
       const kind = typeof record.kind === "string" && PERSONA_IMPRESSION_KINDS.has(record.kind)
@@ -174,8 +168,7 @@ function projectMemoryGroup(
   value: unknown,
   field: "longTermMemories"
 ) {
-  const limit = DREAM_CONTEXT_PROJECTION_LIMITS.arrays[field];
-  return arrayValue(value).slice(0, limit).map((raw, index) => {
+  return arrayValue(value).map((raw, index) => {
     const item = requiredRecord(raw, `${field}[${index}]`);
     const memory = requiredRecord(item.memory, `${field}[${index}].memory`);
     const id = requiredMemoryId(item.id ?? memory.id, `${field}[${index}].id`);
@@ -230,7 +223,7 @@ function projectSelection(value: unknown) {
     ? selection.lane : "seeded_mix";
   const reasons = arrayValue(selection.reasons)
     .filter((reason): reason is string => typeof reason === "string" && MEMORY_REASONS.has(reason))
-    .slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.selectionReasons);
+    ;
   const score = boundedNumber(selection.score, 0, 100) ?? 0;
   const rawComponents = recordValue(selection.scoreComponents);
   const scoreComponents: JsonRecord = {};
@@ -248,7 +241,7 @@ function projectSelection(value: unknown) {
 
 function projectRecallStats(value: unknown, retainedIds: ReadonlySet<string>) {
   return arrayValue(value)
-    .slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.recallStats)
+
     .flatMap((raw) => {
       const record = recordValue(raw);
       const id = optionalMemoryId(record.recordId);
@@ -276,7 +269,7 @@ function projectRecallStatsRecord(record: JsonRecord, id: string) {
 }
 
 function projectUserProfiles(value: unknown) {
-  return arrayValue(value).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.userProfiles).map((raw, index) => {
+  return arrayValue(value).map((raw, index) => {
     const profile = recordValue(raw);
     const rawId = optionalIdentityValue(profile.id) ?? `profile-${index}`;
     const facts = [profile.fact, ...arrayValue(profile.facts)]
@@ -284,7 +277,7 @@ function projectUserProfiles(value: unknown) {
         ? [boundedText(fact, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.profileFact)]
         : [])
       .filter(Boolean)
-      .slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.profileFacts);
+      ;
     return compactObject({
       id: rawId,
       ...projectIdentityFields(profile),
@@ -296,11 +289,11 @@ function projectUserProfiles(value: unknown) {
 }
 
 function projectConversations(value: unknown) {
-  return arrayValue(value).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.conversations).flatMap((raw, index) => {
+  return arrayValue(value).flatMap((raw, index) => {
     const conversation = recordValue(raw);
     const rawId = optionalIdentityValue(conversation.id) ?? `conversation-${index}`;
     const messages = arrayValue(conversation.messages)
-      .slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.messagesPerConversation)
+
       .map(projectConversationMessage);
     if (!messages.length && typeof conversation.text === "string") {
       messages.push({
@@ -332,7 +325,7 @@ function projectConversationMessage(value: unknown) {
 }
 
 function projectTasks(value: unknown) {
-  return arrayValue(value).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.activeTasks).map((raw, index) => {
+  return arrayValue(value).map((raw, index) => {
     const task = recordValue(raw);
     const rawId = optionalIdentityValue(task.id) ?? `task-${index}`;
     const status = typeof task.status === "string" && TASK_STATUSES.has(task.status) ? task.status : undefined;
@@ -372,11 +365,11 @@ function projectTaskSchedule(value: unknown) {
 }
 
 function projectTaskTargets(value: unknown) {
-  return arrayValue(value).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.taskTargets).map((raw) => {
+  return arrayValue(value).map((raw) => {
     const target = recordValue(raw);
     const conversation = optionalIdentityValue(target.conversationId);
     const mentionUserIds = arrayValue(target.mentionUserIds)
-      .slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.taskMentions)
+
       .flatMap((item) => {
         const identity = optionalIdentityValue(item);
         return identity ? [identity] : [];
@@ -400,7 +393,7 @@ function projectIdentityFields(value: JsonRecord) {
     const identities = uniqueStrings(arrayValue(value[field]).flatMap((item) => {
       const identity = optionalIdentityValue(item);
       return identity ? [identity] : [];
-    })).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.identityValues);
+    }));
     if (identities.length) projected[field] = identities;
   }
   return projected;
@@ -414,11 +407,11 @@ function projectDirectorSchedule(value: unknown) {
     timeZone: optionalBoundedText(schedule.timeZone, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timezone),
     theme: optionalBoundedText(schedule.theme, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText),
     summary: optionalBoundedText(schedule.summary, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText),
-    items: arrayValue(schedule.items).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.directorItems).map((raw, index) => {
+    items: arrayValue(schedule.items).map((raw, index) => {
       const item = recordValue(raw);
       const rawId = optionalIdentityValue(item.id) ?? `schedule-item-${index}`;
       const participants = arrayValue(item.participants)
-        .slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.directorParticipants)
+
         .flatMap((participant) => {
           const identity = optionalIdentityValue(participant);
           return identity ? [identity] : [];
@@ -465,22 +458,6 @@ function projectMemoryWindow(value: unknown) {
   };
 }
 
-function enforceTotalPayloadLimit(payload: JsonRecord) {
-  while (dreamContextPayloadByteLength(payload) > DREAM_CONTEXT_PROJECTION_LIMITS.totalPayloadBytes) {
-    const schedule = recordValue(payload.plannedDailySchedule);
-    if (popArray(schedule.items)) continue;
-    if (popArray(payload.activeTasks)) continue;
-    if (popArray(payload.userProfiles)) continue;
-    if (popConversation(payload.observedConversations)) continue;
-    if (shrinkPersona(recordValue(payload.persona))) continue;
-    if (popMemory(payload)) {
-      synchronizeMemoryReferences(payload);
-      continue;
-    }
-    throw new Error("Projected Dream context cannot fit within its total payload limit.");
-  }
-}
-
 function synchronizeMemoryReferences(payload: JsonRecord) {
   const longTerm = arrayValue(payload.longTermMemories);
   const ids = new Set(longTerm.map(memoryItemId));
@@ -495,49 +472,11 @@ function synchronizeMemoryReferences(payload: JsonRecord) {
   });
 }
 
-function popMemory(payload: JsonRecord) {
-  const longTerm = arrayValue(payload.longTermMemories);
-  if (!longTerm.length) return false;
-  longTerm.pop();
-  return true;
-}
-
-function popConversation(value: unknown) {
-  const conversations = arrayValue(value);
-  const last = recordValue(conversations.at(-1));
-  const messages = arrayValue(last.messages);
-  if (messages.length > 1) {
-    messages.pop();
-    return true;
-  }
-  if (conversations.length) {
-    conversations.pop();
-    return true;
-  }
-  return false;
-}
-
-function shrinkPersona(persona: JsonRecord) {
-  const fields = ["air", "user", "relation", "preference", "soul"];
-  const candidates = fields.flatMap((field) => typeof persona[field] === "string" ? [{ field, text: persona[field] }] : []);
-  const longest = candidates.sort((a, b) => b.text.length - a.text.length || a.field.localeCompare(b.field))[0];
-  if (!longest || [...longest.text].length <= 512) return false;
-  persona[longest.field] = [...longest.text].slice(0, Math.max(512, Math.floor([...longest.text].length * 0.75))).join("");
-  return true;
-}
-
-function popArray(value: unknown) {
-  if (!Array.isArray(value) || !value.length) return false;
-  value.pop();
-  return true;
-}
-
-function boundedText(value: unknown, maxChars: number) {
-  if (typeof value !== "string") return "";
-  const text = redactSensitiveText(value.normalize("NFC").trim())
+function boundedText(value: unknown, _maxChars: number) {
+  const text = redactSensitiveText(modelContentText(value).normalize("NFC").trim())
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, "")
     .replace(/\r\n?/gu, "\n");
-  return [...text].slice(0, maxChars).join("");
+  return text;
 }
 
 function normalizedProjectionSourceText(value: unknown) {
@@ -570,7 +509,7 @@ function projectMemoryIdList(value: unknown, allowed: ReadonlySet<string>) {
   return uniqueStrings(arrayValue(value).flatMap((item) => {
     const id = optionalMemoryId(item);
     return id && allowed.has(id) ? [id] : [];
-  })).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.sourceMemoryIds);
+  }));
 }
 
 function memoryItemId(value: unknown) {
@@ -582,45 +521,31 @@ function textLimitForMemoryField(field: typeof MEMORY_TEXT_FIELDS[number]) {
   return DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp;
 }
 
-function requiredMemoryId(value: unknown, field: string) {
-  const id = optionalMemoryId(value);
-  if (!id) throw new Error(`${field} must be a safe opaque memory id.`);
-  return id;
+function requiredMemoryId(value: unknown, _field: string) {
+  return optionalMemoryId(value) ?? "";
 }
 
 function optionalMemoryId(value: unknown) {
-  if (typeof value !== "string") return undefined;
-  const id = value.trim();
-  if (!MEMORY_ID_PATTERN.test(id) || containsSecretToken(id)) return undefined;
-  return id;
+  return optionalIdentityValue(value);
 }
 
 function requiredSeed(value: unknown) {
-  if (typeof value !== "string" || !SEED_PATTERN.test(value)) {
-    throw new Error("Dream context seed must be a SHA-256 digest.");
-  }
-  return value;
+  return optionalIdentityValue(value) ?? "";
 }
 
-function requiredDate(value: unknown, field: string) {
-  if (typeof value !== "string" || !DATE_PATTERN.test(value)) throw new Error(`${field} must be a local date.`);
-  return value;
-}
-
-function containsSecretToken(value: string) {
-  return /^(?:sk|rk|pk|ghp|github_pat|xox[baprs])[-_]/iu.test(value);
+function requiredDate(value: unknown, _field: string) {
+  return optionalIdentityValue(value) ?? "";
 }
 
 function optionalIdentityValue(value: unknown) {
   if (typeof value !== "string" && typeof value !== "number") return undefined;
   const text = redactSensitiveText(String(value).normalize("NFC").trim())
     .replace(/[\u0000-\u001F\u007F-\u009F]/gu, "");
-  return text ? [...text].slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.opaqueId).join("") : undefined;
+  return text || undefined;
 }
 
-function boundedRequiredText(value: unknown, field: string, maxChars: number) {
+function boundedRequiredText(value: unknown, _field: string, maxChars: number) {
   const text = boundedText(value, maxChars);
-  if (!text) throw new Error(`${field} must be a non-empty string.`);
   return text;
 }
 
@@ -655,12 +580,8 @@ function recordValue(value: unknown): JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
 }
 
-function requiredRecord(value: unknown, field: string): JsonRecord {
-  const record = recordValue(value);
-  if (!Object.keys(record).length && (value == null || typeof value !== "object" || Array.isArray(value))) {
-    throw new Error(`${field} must be an object.`);
-  }
-  return record;
+function requiredRecord(value: unknown, _field: string): JsonRecord {
+  return recordValue(value);
 }
 
 function arrayValue(value: unknown): unknown[] {

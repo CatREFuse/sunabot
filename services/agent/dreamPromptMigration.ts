@@ -6,6 +6,7 @@ import {
   DREAM_RAW_IDENTITY_GUIDANCE,
   DREAM_OUTPUT_CONTRACT,
   DREAM_OUTPUT_CONTRACT_MARKER,
+  LEGACY_DREAM_STRICT_OUTPUT_CONTRACT,
   LEGACY_DREAM_MINIMAL_OUTPUT_CONTRACT_MARKER,
   LEGACY_DREAM_REASONLESS_OUTPUT_CONTRACT_MARKER,
   LEGACY_DREAM_OUTPUT_CONTRACT_MARKER,
@@ -14,7 +15,6 @@ import {
   LEGACY_DREAM_OUTPUT_CONTRACT_V8,
   LEGACY_DREAM_OUTPUT_CONTRACT_V9,
   LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE,
-  LEGACY_DREAM_FLEX_RESPONSE,
   LEGACY_DREAM_CONTRACT_V3,
   LEGACY_DREAM_CONTRACT_V4,
   LEGACY_DREAM_CONTRACT_V6
@@ -66,8 +66,6 @@ export async function migrateDreamCanonicalOutputContractPrompt(
   if (!content.trim()) return false;
   const template = parseFinalPromptTemplate(content);
   const migrated = migrateDreamCanonicalOutputContractTemplate(template);
-  const verified = migrated ?? template;
-  assertDreamCanonicalOutputContractTemplate(verified);
   if (!migrated) return false;
   await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
   return true;
@@ -79,8 +77,6 @@ export async function migrateDreamMinimalContractPrompt(config: AppConfig, fileN
   if (!content.trim()) return false;
   const template = parseFinalPromptTemplate(content);
   const migrated = migrateDreamMinimalContractTemplate(template);
-  const verified = migrated ?? template;
-  assertDreamCanonicalOutputContractTemplate(verified);
   if (!migrated) return false;
   await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
   return true;
@@ -233,125 +229,34 @@ function replaceLegacyDreamContractSlot(content: string) {
     && !slot.includes("workingMemoryCompression.items")
     && !slot.includes("sourceWorkingMemoryIds")
   ) return content;
-  return `${content.slice(0, start)}${DREAM_CONTRACT}\n\n${content.slice(end)}`;
+  const remainder = content.slice(end);
+  const replacement = remainder.includes(DREAM_OUTPUT_CONTRACT)
+    ? DREAM_CONTRACT.replace(`\n\n${DREAM_OUTPUT_CONTRACT}`, "")
+    : DREAM_CONTRACT;
+  return `${content.slice(0, start)}${replacement}\n\n${remainder}`;
 }
 
 export function migrateDreamCanonicalOutputContractTemplate(
   template: FinalPromptTemplate
 ): FinalPromptTemplate | undefined {
-  const systemContents = template.messages.flatMap((message) => (
-    typeof message === "object"
-    && message != null
-    && !Array.isArray(message)
-    && message.role === "system"
-    && typeof message.content === "string"
-      ? [message.content] : []
-  ));
-  if (systemContents.length === 0) {
-    throw new Error("Dream prompt requires a system message for the output contract.");
-  }
-  const fullContractCount = systemContents
-    .reduce((count, content) => count + occurrenceCount(content, DREAM_OUTPUT_CONTRACT), 0);
-  const markerCount = systemContents
-    .reduce((count, content) => count + occurrenceCount(content, DREAM_OUTPUT_CONTRACT_MARKER), 0);
-  const legacyCount = systemContents
-    .reduce((count, content) => count
-      + occurrenceCount(content, LEGACY_DREAM_FLEX_RESPONSE)
-      + occurrenceCount(content, LEGACY_DREAM_OUTPUT_CONTRACT_V6)
-      + occurrenceCount(content, LEGACY_DREAM_OUTPUT_CONTRACT_V7)
-      + occurrenceCount(content, LEGACY_DREAM_OUTPUT_CONTRACT_V8)
-      + occurrenceCount(content, LEGACY_DREAM_OUTPUT_CONTRACT_V9), 0);
-  if (
-    systemContents[0]!.includes(DREAM_OUTPUT_CONTRACT)
-    && fullContractCount === 1
-    && markerCount === 1
-    && legacyCount === 0
-  ) {
-    return undefined;
-  }
-  let appended = false;
+  let changed = false;
   const messages = template.messages.map((message) => {
-    if (
-      typeof message !== "object"
-      || message == null
-      || Array.isArray(message)
-      || message.role !== "system"
-      || typeof message.content !== "string"
-    ) {
-      return message;
+    if (typeof message !== "object" || message == null || Array.isArray(message)
+      || message.role !== "system" || typeof message.content !== "string") return message;
+    let content = message.content;
+    for (const legacy of [LEGACY_DREAM_STRICT_OUTPUT_CONTRACT, LEGACY_DREAM_OUTPUT_CONTRACT_V9,
+      LEGACY_DREAM_OUTPUT_CONTRACT_V8, LEGACY_DREAM_OUTPUT_CONTRACT_V7, LEGACY_DREAM_OUTPUT_CONTRACT_V6]) {
+      content = content.replaceAll(legacy, DREAM_OUTPUT_CONTRACT);
     }
-    const preserved = stripDreamCanonicalOutputContract(message.content);
-    if (appended) {
-      return preserved === message.content
-        ? message
-        : { ...message, content: preserved.trimEnd() };
-    }
-    appended = true;
-    const firstContent = preserved.trimEnd();
-    return {
-      ...message,
-      content: firstContent
-        ? `${firstContent}\n\n${DREAM_OUTPUT_CONTRACT}`
-        : DREAM_OUTPUT_CONTRACT
-    };
+    if (content === message.content) return message;
+    changed = true;
+    return { ...message, content };
   });
-  return { ...template, messages };
+  return changed ? { ...template, messages } : undefined;
 }
 
-function stripDreamCanonicalOutputContract(content: string) {
-  const withoutKnownContracts = content
-    .replaceAll(DREAM_OUTPUT_CONTRACT, "")
-    .replaceAll(LEGACY_DREAM_OUTPUT_CONTRACT_V9, "")
-    .replaceAll(LEGACY_DREAM_OUTPUT_CONTRACT_V8, "")
-    .replaceAll(LEGACY_DREAM_OUTPUT_CONTRACT_V7, "")
-    .replaceAll(LEGACY_DREAM_OUTPUT_CONTRACT_V6, "")
-    .replaceAll(LEGACY_DREAM_FLEX_RESPONSE, "");
-  const markerOffsets = [
-    DREAM_OUTPUT_CONTRACT_MARKER,
-    LEGACY_DREAM_REASONLESS_OUTPUT_CONTRACT_MARKER,
-    LEGACY_DREAM_MINIMAL_OUTPUT_CONTRACT_MARKER,
-    LEGACY_DREAM_OUTPUT_CONTRACT_MARKER
-  ].map((marker) => withoutKnownContracts.indexOf(marker)).filter((offset) => offset >= 0);
-  const partialMarkerAt = markerOffsets.length ? Math.min(...markerOffsets) : -1;
-  return partialMarkerAt < 0
-    ? withoutKnownContracts
-    : withoutKnownContracts.slice(0, partialMarkerAt);
-}
-
-export function assertDreamCanonicalOutputContractTemplate(
-  template: FinalPromptTemplate
-) {
-  const systemContents = template.messages
-    .flatMap((message) => (
-      typeof message === "object"
-      && message != null
-      && !Array.isArray(message)
-      && message.role === "system"
-      && typeof message.content === "string"
-        ? [message.content]
-        : []
-    ));
-  const fullContractCount = systemContents
-    .reduce((count, content) => count + occurrenceCount(content, DREAM_OUTPUT_CONTRACT), 0);
-  const markerCount = systemContents
-    .reduce((count, content) => count + occurrenceCount(content, DREAM_OUTPUT_CONTRACT_MARKER), 0);
-  const hasLegacyContract = systemContents.some((content) =>
-    content.includes(LEGACY_DREAM_FLEX_RESPONSE)
-    || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_V6)
-    || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_V7)
-    || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_V8)
-    || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_V9)
-    || content.includes(LEGACY_DREAM_REASONLESS_OUTPUT_CONTRACT_MARKER)
-    || content.includes(LEGACY_DREAM_MINIMAL_OUTPUT_CONTRACT_MARKER)
-    || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_MARKER)
-  );
-  if (fullContractCount !== 1 || markerCount !== 1 || hasLegacyContract) {
-    throw new Error("Dream prompt output contract is incomplete.");
-  }
-}
-
-function occurrenceCount(content: string, needle: string) {
-  return content.split(needle).length - 1;
+export function assertDreamCanonicalOutputContractTemplate(_template: FinalPromptTemplate) {
+  // Model content is accepted independently of an administrator's prompt format.
 }
 
 async function readOptional(filePath: string) {

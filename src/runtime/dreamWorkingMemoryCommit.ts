@@ -14,14 +14,14 @@ export interface RuntimeDreamWorkingMemoryPort {
 export async function commitDreamWithWorkingMemory<T extends { status: string }>(input: {
   workingMemory?: RuntimeDreamWorkingMemoryPort;
   workingRevision?: string;
-  content: string;
+  content: string | null;
   runId: string;
   localDate: string;
   signal?: AbortSignal;
-  commit(externalWorkingMemory: boolean): T;
+  commit(externalWorkingMemory: boolean, workingMemoryApplied: boolean): T;
 }) {
   input.signal?.throwIfAborted();
-  const workingCommit = input.workingMemory && input.workingRevision
+  const workingCommit = input.workingMemory && input.workingRevision && input.content != null
     ? await input.workingMemory.compareAndSwap({
         expectedRevision: input.workingRevision,
         content: input.content,
@@ -37,7 +37,10 @@ export async function commitDreamWithWorkingMemory<T extends { status: string }>
   let committed: T;
   try {
     input.signal?.throwIfAborted();
-    committed = input.commit(input.workingMemory != null && input.workingRevision != null);
+    committed = input.commit(
+      input.workingMemory != null,
+      workingCommit?.status === "updated" || workingCommit?.status === "unchanged"
+    );
   } catch (error) {
     await rollbackExternalCommits([{ commit: workingCommit, source: "working" }]);
     throw error;

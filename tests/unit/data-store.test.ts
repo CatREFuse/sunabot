@@ -12,6 +12,7 @@ import {
 import { runWithAgentRuntimeContext } from "../../packages/platform/runtimeAgentContext.js";
 import { appendRequestLogStrict } from "../../adapters/observability/requestLog.js";
 import {
+  loadConversationRecords,
   saveConversationRecordStrict,
   saveConversationRecordsStrict
 } from "../../src/runtime/infrastructure.js";
@@ -93,6 +94,41 @@ describe("application SQLite data store", () => {
         orchestratorResponseTimeMs: 15_000
       }),
       expect.objectContaining({ id: "private:2", lastText: "" })
+    ]);
+  });
+
+  it("recovers a legacy account-prefixed conversation without mutating SQLite on read", () => {
+    const config = createAdminTestConfig(root);
+    const store = applicationDataStore(config);
+    const legacy = {
+      ...conversation("account:secondary:group:20002", "2026-07-10T01:00:00.000Z"),
+      scope: "user_group" as const,
+      userId: 0,
+      groupId: 20002,
+      replyEnabled: true,
+      messageCount: 1,
+      messages: [{ id: "90001", role: "user" as const, text: "stored message", at: "2026-07-10T01:00:00.000Z", userId: 10001 }]
+    };
+    store.replaceConversations([legacy]);
+    expect(loadConversationRecords(config)[0]).toMatchObject({
+      ...legacy,
+      accountId: "secondary"
+    });
+    expect(store.readConversations()[0]).not.toHaveProperty("accountId");
+    saveConversationRecordStrict(loadConversationRecords(config)[0]!, config);
+    expect(store.readConversations()[0]?.accountId).toBe("secondary");
+  });
+
+  it("preserves explicit accounts and leaves unprefixed and web conversations unchanged", () => {
+    const config = createAdminTestConfig(root);
+    const store = applicationDataStore(config);
+    store.replaceConversations([
+      { ...conversation("account:secondary:private:10001", "2026-07-10T01:00:00.000Z"), userId: 10001, accountId: "explicit" },
+      conversation("private:10002", "2026-07-10T02:00:00.000Z"),
+      { ...conversation("web:admin", "2026-07-10T03:00:00.000Z"), userId: 0 }
+    ]);
+    expect(loadConversationRecords(config).map((record) => record.accountId)).toEqual([
+      undefined, undefined, "explicit"
     ]);
   });
 

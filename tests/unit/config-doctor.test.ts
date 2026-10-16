@@ -355,17 +355,19 @@ describe("ConfigDoctorService", () => {
     expect(({} as { enabled?: boolean }).enabled).toBeUndefined();
   });
 
-  it("rejects oversized, duplicate and remove operations from AI", async () => {
+  it("accepts long model summaries while rejecting duplicate and remove operations", async () => {
     const document = structuredClone(defaultConfig());
     (document.bot as unknown as Record<string, unknown>).pokeOnNoReply = "invalid";
     await writeDocument(document);
 
     const oversized = createDoctor({
-      runModel: vi.fn(async () => JSON.stringify({ summary: "x".repeat(70_000), operations: [] }))
+      runModel: vi.fn(async () => `建议：\n\x60\x60\x60json\n${JSON.stringify({
+        summary: "x".repeat(70_000), operations: [], explanation: "extra"
+      })}\n\x60\x60\x60`)
     });
     const scan = await oversized.scan();
-    await expect(oversized.propose(scan.sourceRevision)).rejects.toMatchObject({
-      code: "CONFIG_DOCTOR_AI_OUTPUT_INVALID"
+    await expect(oversized.propose(scan.sourceRevision)).resolves.toMatchObject({
+      ai: { summary: "x".repeat(70_000) }
     });
 
     const duplicate = createDoctor({

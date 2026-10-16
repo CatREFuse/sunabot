@@ -10,6 +10,16 @@ import {
 import { defaultConfig } from "../../src/config.js";
 
 describe("conversation address rules", () => {
+  it("renders optional profile updates through the existing editable tool-rules variable", () => {
+    const request = renderFinalPromptTemplate({
+      messages: [{ role: "system", content: "<tool_rules>@{runtime.tool_rules}</tool_rules>" }],
+      response_format: { type: "text" }
+    }, buildConversationPromptVariables(defaultConfig()));
+    expect(request.messages[0]?.content).toContain("add_user_profile");
+    expect(request.messages[0]?.content).toContain("没有新增或修正时可 skip 或不调用");
+    expect(request.messages[0]?.content).toContain("工作记忆与 read_air 不会代替画像更新");
+  });
+
   it("puts first-address-name priority in the Provider-facing system message", () => {
     const variables = buildConversationPromptVariables(defaultConfig());
     const template: FinalPromptTemplate = {

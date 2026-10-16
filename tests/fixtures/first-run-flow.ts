@@ -162,6 +162,7 @@ try {
       echo: request.echo,
       data: request.action === "get_login_info"
         ? { user_id: 246801357, nickname: "first-run" }
+        : request.action === "get_status" ? { online: true, good: true }
         : { message_id: 9001 }
     }));
   });

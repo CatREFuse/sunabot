@@ -300,7 +300,7 @@ export class SqliteDreamStore {
     const runId = normalizeId(input.runId, "runId");
     const workerId = normalizeWorkerId(input.workerId);
     const outputJson = encodeJsonObject(input.output, "output");
-    const dreamText = boundedText(input.dreamText, "dreamText", 1, 4096);
+    const dreamText = [...input.dreamText.trim()].slice(0, 4096).join("") || null;
     const nowIso = this.inputDate(input.now).toISOString();
     const updated = this.database.prepare(`
       UPDATE dream_runs SET

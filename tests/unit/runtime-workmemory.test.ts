@@ -17,8 +17,53 @@ describe("runtime add_workmemory binding", () => {
   let root = "";
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     closeApplicationDataStores();
     if (root) await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("records over-capacity content successfully while reporting a nonblocking error and audit", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-workmemory-capacity-"));
+    const config = createAdminTestConfig(path.join(root, "agent-a"));
+    await fs.mkdir(config.persona.agentWorkspace, { recursive: true });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const runtime = new RuntimeWorkingMemory({ config, conversationRecords: new Map() } as never);
+    const content = "完整保存的超限事项😀".repeat(5_000);
+    const port = runtime.toolPort(incoming(), "large-memory-decision");
+    const result = await port.execute({ action: "record", content });
+    expect(result).toMatchObject({ ok: true, warnings: [{
+      code: "WORKING_MEMORY_TOO_LARGE", blocking: false, limitBytes: 65_536
+    }] });
+    expect(port.decisionResolved?.()).toBe(true);
+    const snapshot = await readWorkingMemoryDocument(config);
+    expect(snapshot.items.map((item) => item.content)).toEqual([content]);
+    expect(errorLog).toHaveBeenCalledWith("[working-memory] capacity exceeded", expect.objectContaining({
+      actualBytes: Buffer.byteLength(`${snapshot.content}\n`, "utf8")
+    }));
+    const audit = applicationDataStore(config).readRequestLogs({ query: "memory.operation", limit: 20 });
+    expect(audit).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "working.capacity_check", response: expect.objectContaining({
+        outcome: "failed", reasonCode: "WORKING_MEMORY_TOO_LARGE",
+        capacityError: expect.objectContaining({ blocking: false, limitBytes: 65_536 })
+      }) }),
+      expect.objectContaining({ action: "working.append", response: expect.objectContaining({ outcome: "applied" }) })
+    ]));
+    expect(JSON.stringify(audit)).not.toContain(content);
+    expect(JSON.stringify(audit)).not.toContain("完整保存的超限事项");
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain("完整保存的超限事项");
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain(config.persona.agentWorkspace);
+    const replay = await runtime.toolPort(incoming(), "large-memory-decision").execute({ action: "record", content });
+    expect(replay).toMatchObject({ ok: true, deduplicated: true, warnings: [{ blocking: false }] });
+    expect((await readWorkingMemoryDocument(config)).items).toHaveLength(1);
+  });
+
+  it("accepts an absent record body without adding an empty memory", async () => {
+    root=await fs.mkdtemp(path.join(os.tmpdir(),"sunabot-workmemory-empty-"));
+    const config=createAdminTestConfig(path.join(root,"agent-a"));
+    await fs.mkdir(config.persona.agentWorkspace,{recursive:true});
+    const runtime=new RuntimeWorkingMemory({config,conversationRecords:new Map()} as never);
+    await expect(runtime.toolPort(incoming()).execute({action:"record"})).resolves.toMatchObject({ok:true,recorded:false});
+    expect((await readWorkingMemoryDocument(config)).items).toHaveLength(0);
   });
 
   it("binds the current Agent workspace and complete conversation source", async () => {

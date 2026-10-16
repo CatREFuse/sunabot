@@ -1,6 +1,7 @@
 import type {
   ProviderAssistantTextSource,
   ProviderCompleteOptions,
+  ProviderCompletedTurn,
   TurnToolState
 } from "./contracts.js";
 
@@ -35,4 +36,22 @@ export function withTurnToolState(
 
 export function markAcceptedTool(state: TurnToolState, name: string) {
   state.acceptedToolNames.push(name);
+}
+
+export function completeProviderText(
+  text: string | undefined,
+  state: TurnToolState,
+  options: ProviderCompleteOptions
+): ProviderCompletedTurn {
+  if (text) return { kind: "completed", text };
+  const delivered = state.deliveredAssistantText;
+  if (delivered && !options.systemConfig?.mutationStaged()) {
+    return {
+      kind: "completed",
+      text: delivered.text,
+      messageOrigin: delivered.source,
+      textAlreadyDelivered: true
+    };
+  }
+  throw new Error("模型没有返回可发送内容。");
 }

@@ -11,7 +11,6 @@ export const assistantTextTool = {
       text: {
         type: "string",
         minLength: 1,
-        maxLength: 4_000,
         description: "The assistant message to send now."
       }
     },
@@ -21,5 +20,5 @@ export const assistantTextTool = {
 } as const;
 
 export function readAssistantText(input: Record<string, unknown>) {
-  return String(input.text ?? "").trim().slice(0, 4_000);
+  return String(input.text ?? "").trim();
 }

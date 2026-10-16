@@ -63,6 +63,85 @@ describe("OverviewView", () => {
     });
   });
 
+  it("shows the selected account's connection and event times instead of another account's activity", async () => {
+    setAccounts([account("primary", "主账号", 6099), account("secondary", "备用账号", 6100)]);
+    runtime.error.value = "";
+    runtime.status.value = {
+      startedAt: "2026-07-10T00:00:00.000Z", configPath: "/tmp/config.json",
+      onebot: { connected: true, connections: 1, selfIds: ["123456"], accounts: [
+        { accountId: "secondary", connectedAt: "2026-07-10T00:00:00.000Z", lastEventAt: "2026-07-10T01:00:00.000Z" }
+      ], lastEventAt: "2026-07-10T01:00:00.000Z" },
+      persona: { id: "plana", name: "普拉娜", memoryItems: 0 },
+      provider: { defaultProviderId: "codex", model: "gpt-5.6-sol", imageModel: "gpt-image-2", apiKeyConfigured: true }
+    };
+    const wrapper = mount(OverviewView);
+    await flushPromises();
+    const panel = wrapper.getComponent({ name: "OneBotStatusPanel" });
+    expect(panel.props("connected")).toBe(false);
+    expect(panel.props("connections")).toBe(0);
+    expect(panel.props("lastEventAt")).toBeUndefined();
+    expect(wrapper.text()).toContain("等待 OneBot 连接");
+    wrapper.unmount();
+  });
+
+  it("clears the previous online QQ when a refresh fails", async () => {
+    const original = apiRequest.getMockImplementation()!;
+    let failStatus = false;
+    apiRequest.mockImplementation((path: string) => path.endsWith("/login/status")
+      ? failStatus ? Promise.reject(new Error("QQ unavailable")) : Promise.resolve({ connected: true, online: true, data: { user_id: 111 } })
+      : original(path));
+    const wrapper = mount(OverviewView);
+    await flushPromises();
+    expect(wrapper.getComponent({ name: "OneBotStatusPanel" }).props("qqState")).toBe("online");
+    failStatus = true;
+    await wrapper.get('[aria-label="刷新 QQ 状态"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.getComponent({ name: "OneBotStatusPanel" }).props("qqState")).toBe("unknown");
+    wrapper.unmount();
+  });
+
+  it("does not let a delayed overview request overwrite a newer QQ status", async () => {
+    const original = apiRequest.getMockImplementation()!;
+    let statusReads = 0;
+    let tokenReads = 0;
+    let releaseTokens!: (value: unknown) => void;
+    apiRequest.mockImplementation((path: string) => {
+      if (path.endsWith("/login/status")) return Promise.resolve({ connected: true, online: ++statusReads === 1, data: { user_id: 111 } });
+      if (path.startsWith("/api/token-usage?") && ++tokenReads === 1) return new Promise((resolve) => { releaseTokens = resolve; });
+      return original(path);
+    });
+    const wrapper = mount(OverviewView);
+    await flushPromises();
+    expect(wrapper.getComponent({ name: "OneBotStatusPanel" }).props("qqState")).toBe("online");
+    await wrapper.get('[aria-label="刷新 QQ 状态"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.getComponent({ name: "OneBotStatusPanel" }).props("qqState")).toBe("offline");
+    releaseTokens(emptyTokenUsage());
+    await flushPromises();
+    expect(wrapper.getComponent({ name: "OneBotStatusPanel" }).props("qqState")).toBe("offline");
+    wrapper.unmount();
+  });
+
+  it("clears a recovered QQ error while retaining an independent overview error", async () => {
+    runtime.error.value = "";
+    const original = apiRequest.getMockImplementation()!;
+    let statusReads = 0;
+    apiRequest.mockImplementation((path: string) => {
+      if (path.endsWith("/login/status")) return ++statusReads === 1
+        ? Promise.reject(new Error("QQ unavailable")) : Promise.resolve({ connected: true, online: true, data: { user_id: 111 } });
+      if (path === "/api/overview/summary") return Promise.reject(new Error("summary unavailable"));
+      return original(path);
+    });
+    const wrapper = mount(OverviewView);
+    await flushPromises();
+    expect(wrapper.text()).toContain("QQ unavailable");
+    await wrapper.get('[aria-label="刷新 QQ 状态"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("QQ unavailable");
+    expect(wrapper.text()).toContain("summary unavailable");
+    wrapper.unmount();
+  });
+
   it("selects primary by identity, switches every QQ action to the chosen account, and labels the login session", async () => {
     setAccounts([
       account("secondary", "备用账号", 6100),

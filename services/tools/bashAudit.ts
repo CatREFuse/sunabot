@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { modelContentText, parseModelJson } from "../../packages/contracts/model/modelContent.js";
 
 export type BashAuditRisk = "low" | "medium" | "high";
 export type BashAuditDecision = "allow" | "confirm" | "deny";
@@ -180,7 +181,7 @@ export function buildBashAuditRequest(input: BashAuditInput): BashAuditModelRequ
           "On macOS, Native Bash runs as the Sunabot runtime OS user after approval and can reach host processes and network resources. Treat network access, process control, package installation, credentials, and system configuration as host-impacting operations. Any host path outside the workbench requires confirm. With strictMode enabled, outside writes or deletes must be denied.",
           "Phase A confirmation only supports an existing canonical regular file mounted read-only after path-chain identity validation.",
           "outsideAccesses must list only absolute paths outside every declared workbench. Do not list paths inside a workbench; when outsideWorkbench is false, outsideAccesses must be empty.",
-          "Return only the required JSON schema. Keep paths exact and summaries concise."
+          'Prefer a JSON object with decision (allow, confirm, or deny), risk (low, medium, or high), outsideWorkbench (boolean), outsideAccesses (an array of {path, access} with access read, write, or delete), violations (an array of descriptions), and summary (an explanation). Commentary and extra fields are accepted; execution requires an explicit decision and complete access declarations. Keep paths exact.'
         ].join(" ")
       },
       {
@@ -239,33 +240,25 @@ export function buildBashAuditRequest(input: BashAuditInput): BashAuditModelRequ
 }
 
 export function parseBashAuditResult(raw: string): BashAuditResult {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`BASH_AUDIT_INVALID: ${errorMessage(error)}`);
-  }
+  const parsed = parseModelJson(raw);
   if (!isRecord(parsed)) throw new Error("BASH_AUDIT_INVALID: response must be an object.");
   if (!isAuditDecision(parsed.decision) || !isAuditRisk(parsed.risk) || typeof parsed.outsideWorkbench !== "boolean") {
     throw new Error("BASH_AUDIT_INVALID: decision, risk, or outsideWorkbench is invalid.");
   }
-  if (!Array.isArray(parsed.outsideAccesses) || parsed.outsideAccesses.length > 32) {
+  if (!Array.isArray(parsed.outsideAccesses)) {
     throw new Error("BASH_AUDIT_INVALID: outsideAccesses is invalid.");
   }
   const outsideAccesses = parsed.outsideAccesses.map((value) => {
     if (!isRecord(value) || !isAccessKind(value.access)) {
       throw new Error("BASH_AUDIT_INVALID: outside access entry is invalid.");
     }
-    const path = boundedText(value.path, 2_048);
+    const path = typeof value.path === "string" ? value.path.trim() : "";
     if (!path) throw new Error("BASH_AUDIT_INVALID: outside access path is empty.");
     return { path, access: value.access };
   });
-  if (!Array.isArray(parsed.violations) || parsed.violations.length > 16) {
-    throw new Error("BASH_AUDIT_INVALID: violations is invalid.");
-  }
-  const violations = parsed.violations.map((value) => boundedText(value, 500)).filter(Boolean);
-  const summary = boundedText(parsed.summary, 1_000);
-  if (!summary) throw new Error("BASH_AUDIT_INVALID: summary is empty.");
+  const violations = (Array.isArray(parsed.violations) ? parsed.violations : [parsed.violations])
+    .map(modelContentText).filter(Boolean);
+  const summary = modelContentText(parsed.summary);
   if (parsed.outsideWorkbench && !outsideAccesses.length) {
     throw new Error("BASH_AUDIT_INVALID: outside paths are required.");
   }
@@ -305,10 +298,6 @@ export function isValidBashApprovalContext(context: BashApprovalContext) {
   return approvalContextKey(context) !== undefined;
 }
 
-function boundedText(value: unknown, maxLength: number) {
-  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -323,8 +312,4 @@ function isAuditRisk(value: unknown): value is BashAuditRisk {
 
 function isAccessKind(value: unknown): value is BashPathAccessKind {
   return value === "read" || value === "write" || value === "delete";
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error || "unknown error");
 }

@@ -324,7 +324,7 @@ describe("emoji durable delivery chain", () => {
     });
   });
 
-  it("rejects the fifth known marker before hooks, tone, asset reads, outbox, or OneBot", async () => {
+  it("accepts more than four known markers through the real delivery pipeline", async () => {
     const incoming = privateIncoming();
     const providerText = `正文${"[/开心]".repeat(5)}`;
     const rewriteToneText = vi.fn(async () => providerText);
@@ -350,12 +350,12 @@ describe("emoji durable delivery chain", () => {
         "buffered",
         undefined,
         undefined
-      )).rejects.toThrow("单条回复最多 4 个表情");
+      )).resolves.toBeUndefined();
 
-      expect(host.hooks.run).not.toHaveBeenCalled();
-      expect(rewriteToneText).not.toHaveBeenCalled();
-      expect(open).not.toHaveBeenCalled();
-      expect(delivery.outbox).toHaveLength(0);
+      expect(host.hooks.run).toHaveBeenCalled();
+      expect(rewriteToneText).toHaveBeenCalledOnce();
+      expect(open).toHaveBeenCalled();
+      expect(delivery.outbox.length).toBeGreaterThan(0);
       expect(gatewaySend).not.toHaveBeenCalled();
     } finally {
       open.mockRestore();
@@ -552,7 +552,7 @@ describe("emoji durable delivery chain", () => {
     ["deletes a marker", "甲乙丙丁"],
     ["rewrites a marker", "甲乙[/哭]丙丁"],
     ["moves a marker within non-empty text", "甲[/开心]乙丙丁"]
-  ])("fails closed when tone %s", async (_case, tonedText) => {
+  ])("accepts text when tone %s", async (_case, tonedText) => {
     const incoming = privateIncoming();
     const providerText = "甲乙[/开心]丙丁";
     const emojiPlan = emojiPlanFor(providerText);
@@ -576,13 +576,13 @@ describe("emoji durable delivery chain", () => {
       "buffered",
       undefined,
       emojiPlan
-    )).rejects.toThrow("语气改写改变了表情标记，请重试。");
+    )).resolves.toBeUndefined();
 
     expect(rewriteToneText).toHaveBeenCalledTimes(1);
-    expect(delivery.outbox).toHaveLength(0);
+    expect(delivery.outbox.length).toBeGreaterThan(0);
   });
 
-  it("fails closed when tone adds a marker inside an intact guarded text segment", async () => {
+  it("accepts a known marker added by tone without injecting guard tokens", async () => {
     const incoming = privateIncoming();
     const providerText = "甲乙[/开心]丙丁";
     const emojiPlan = emojiPlanFor(providerText);
@@ -608,10 +608,10 @@ describe("emoji durable delivery chain", () => {
       "buffered",
       undefined,
       emojiPlan
-    )).rejects.toThrow("语气改写改变了表情标记，请重试。");
+    )).resolves.toBeUndefined();
 
     expect(rewriteToneText).toHaveBeenCalledTimes(1);
-    expect(delivery.outbox).toHaveLength(0);
+    expect(delivery.outbox.length).toBeGreaterThan(0);
   });
 
   it("rejects a selected emoji whose bytes change after planning before any durable outbox write", async () => {
@@ -647,7 +647,9 @@ describe("emoji durable delivery chain", () => {
       expect(rewriteToneText).toHaveBeenCalledTimes(1);
       expect(delivery.outbox).toHaveLength(0);
     } finally {
-      await fs.writeFile(imagePath, imageBytes);
+      const restoredPath = path.join(path.dirname(imagePath), ".restore-emoji.png");
+      await fs.writeFile(restoredPath, imageBytes);
+      await fs.rename(restoredPath, imagePath);
     }
   });
 

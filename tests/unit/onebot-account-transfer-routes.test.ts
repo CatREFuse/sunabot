@@ -7,6 +7,39 @@ import { registerOneBotRoutes } from "../../apps/api/plugins/onebotRoutes.js";
 import type { AgentAccount, AgentRegistry } from "../../services/agents/agentRegistry.js";
 
 describe("OneBot account identity transfer routes", () => {
+  it("does not report cached identity as online or reset an authenticated offline session", async () => {
+    const control = {
+      status: vi.fn(async () => ({ isLogin: true, online: false, manualLogin: false, data: { user_id: 985436737 } })),
+      refreshQrCode: vi.fn(), beginManualLogin: vi.fn(), cancelManualLogin: vi.fn(),
+      startLoginCompletionWatch: vi.fn(), close: vi.fn()
+    } satisfies NapcatLoginControlPort;
+    const gateway = {
+      getStatus: () => ({ connected: true, accounts: [{ accountId: "primary" }] }),
+      sendAction: vi.fn(async (action: string) => ({ data: action === "get_status" ? { online: false } : { user_id: 985436737 } })),
+      dispatchAction: vi.fn(async () => undefined)
+    } as unknown as OneBotGateway;
+    const app = Fastify();
+    const restartAccount = vi.fn();
+    registerOneBotRoutes(app, gateway, { napcatLoginControl: control, restartAccount });
+    try {
+      const response = await app.inject({ method: "GET", url: "/api/onebot/qq-login/status" });
+      expect(response.json()).toMatchObject({ connected: true, online: false, authenticated: true, phase: "reconnecting" });
+      expect(gateway.sendAction).toHaveBeenCalledWith("get_status", {}, "primary");
+      const refresh = await app.inject({ method: "POST", url: "/api/onebot/qq-login" });
+      expect(refresh.json()).toMatchObject({ online: false, authenticated: true });
+      expect(control.refreshQrCode).not.toHaveBeenCalled();
+      expect(control.beginManualLogin).not.toHaveBeenCalled();
+      expect(restartAccount).not.toHaveBeenCalled();
+      expect(gateway.dispatchAction).not.toHaveBeenCalled();
+      const logout = await app.inject({ method: "POST", url: "/api/onebot/qq-logout" });
+      expect(logout.statusCode, logout.body).toBe(200);
+      expect(control.beginManualLogin).toHaveBeenCalledOnce();
+      expect(restartAccount).toHaveBeenCalledWith("primary");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("completes the current login after automatically releasing the previous account", async () => {
     const source = account("source", "agent-source", "123456789");
     const target = account("target", "agent-target");
@@ -16,8 +49,8 @@ describe("OneBot account identity transfer routes", () => {
       if (!control) {
         control = {
           status: vi.fn(async () => accountId === target.id
-            ? { isLogin: true, manualLogin: false, data: { user_id: 123456789 } }
-            : { isLogin: true, manualLogin: false, data: { user_id: 123456789 } }),
+            ? { isLogin: true, online: true, manualLogin: false, data: { user_id: 123456789 } }
+            : { isLogin: true, online: true, manualLogin: false, data: { user_id: 123456789 } }),
           refreshQrCode: vi.fn(),
           beginManualLogin: vi.fn(async () => undefined),
           cancelManualLogin: vi.fn(async () => undefined),

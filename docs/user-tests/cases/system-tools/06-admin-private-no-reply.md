@@ -4,6 +4,8 @@
 
 Use a benign administrator-private fixture that requests an explicitly silent outcome. This case exists separately because a successful `no_reply` call must result in no normal text or asset; when `pokeOnNoReply` is enabled, one durable poke is the expected terminal interaction.
 
+For this poke-enabled branch, set `bot.pokeOnNoReply=true` in the isolated shared and selected Agent configuration before the run, and record the setting in fixture evidence. A default configuration with the flag disabled tests the separate zero-outbound branch and cannot satisfy this case's poke assertion.
+
 The review confirms `no_reply` has a succeeded `tool.call`, the Session reaches completion, exactly one poke is placed on the mock transport, and no text, asset, or deferred completion is emitted. A queued or failed silent call is not success.
 
 <!-- sunabot-user-test-case:v1 -->

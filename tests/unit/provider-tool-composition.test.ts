@@ -35,7 +35,38 @@ afterEach(() => {
 });
 
 describe("Provider tool composition", () => {
-  it.each(PROVIDERS)("requires working memory before user profile on %s", async (
+  it.each(PROVIDERS)("accepts free text from a persisted schema template on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    const transport = installRounds(provider, kind, [{ text: "不符合旧 JSON 格式的正常正文。" }]);
+    const request = {
+      messages: [{ role: "user" as const, content: "给我正常回复" }],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "old_contract",
+          strict: true,
+          schema: { type: "object", additionalProperties: false, required: ["answer"], properties: { answer: { type: "string", maxLength: 1 } } }
+        }
+      },
+      text: { verbosity: "low", format: { type: "json_schema", strict: true, schema: { type: "object" } } }
+    };
+
+    await expect(provider.completeRequest(request)).resolves.toBe("不符合旧 JSON 格式的正常正文。");
+
+    const body = transport.requestBody();
+    expect(body.response_format).toBeUndefined();
+    expect(body.text?.format).toBeUndefined();
+    expect(body.generationConfig?.responseMimeType).toBeUndefined();
+    expect(request.response_format.json_schema.strict).toBe(true);
+    if (kind === "openai-official" || kind === "codex-responses") {
+      expect(body.text).toEqual({ verbosity: "low" });
+    }
+  });
+
+  it.each(PROVIDERS)("lets the model choose working memory and user profile tools on %s", async (
     _providerLabel,
     kind
   ) => {
@@ -53,7 +84,8 @@ describe("Provider tool composition", () => {
           name: ADD_USER_PROFILE_TOOL_NAME,
           args: { action: "skip", profile: null, addressNames: null }
         }]
-      }
+      },
+      { text: "最终回复。" }
     ]);
     const effects = sideEffects();
     let workmemoryResolved = false;
@@ -82,13 +114,13 @@ describe("Provider tool composition", () => {
       "system",
       [{ role: "user", content: "普通回复" }],
       options
-    )).resolves.toEqual({ kind: "completed", text: "这轮已经处理好了。" });
+    )).resolves.toEqual({ kind: "completed", text: "最终回复。" });
 
-    expectWorkingMemoryToolChoice(transport.requestBody(0), kind);
-    expectMemoryToolChoice(transport.requestBody(1), kind, ADD_USER_PROFILE_TOOL_NAME);
+    expectNoForcedToolChoice(transport.requestBody(0));
+    expectNoForcedToolChoice(transport.requestBody(1));
   });
 
-  it.each(PROVIDERS)("requires the main reply model to record or skip working memory on %s", async (
+  it.each(PROVIDERS)("delivers sibling text while an optional working-memory decision runs on %s", async (
     _providerLabel,
     kind
   ) => {
@@ -99,7 +131,7 @@ describe("Provider tool composition", () => {
         name: ADD_WORKMEMORY_TOOL_NAME,
         args: { action: "skip", content: null }
       }]
-    }]);
+    }, { text: "最终回复。" }]);
     const effects = sideEffects();
     let resolved = false;
     const execute = vi.fn(async () => {
@@ -119,14 +151,14 @@ describe("Provider tool composition", () => {
       "system",
       [{ role: "user", content: "普通回复" }],
       options
-    )).resolves.toEqual({ kind: "completed", text: "这轮已经处理好了。" });
+    )).resolves.toEqual({ kind: "completed", text: "最终回复。" });
 
     expect(execute).toHaveBeenCalledWith({ action: "skip" }, undefined);
-    expectWorkingMemoryToolChoice(transport.requestBody(), kind);
-    expect(effects.onAssistantText).not.toHaveBeenCalled();
+    expectNoForcedToolChoice(transport.requestBody());
+    expect(effects.onAssistantText).toHaveBeenCalledOnce();
   });
 
-  it.each(PROVIDERS)("rejects a visible reply that omits the required working-memory decision on %s", async (
+  it.each(PROVIDERS)("accepts a visible reply without a working-memory decision on %s", async (
     _providerLabel,
     kind
   ) => {
@@ -146,13 +178,11 @@ describe("Provider tool composition", () => {
       "system",
       [{ role: "user", content: "普通回复" }],
       options
-    )).rejects.toMatchObject({
-      code: "WORKING_MEMORY_DECISION_REQUIRED"
-    });
+    )).resolves.toEqual({ kind: "completed", text: "遗漏了记忆决策。" });
     expect(effects.onAssistantText).not.toHaveBeenCalled();
   });
 
-  it.each(PROVIDERS)("rejects terminal no_reply before the required working-memory decision on %s", async (
+  it.each(PROVIDERS)("accepts terminal no_reply without a working-memory decision on %s", async (
     _providerLabel,
     kind
   ) => {
@@ -174,9 +204,7 @@ describe("Provider tool composition", () => {
       "system",
       [{ role: "user", content: "保持静默" }],
       options
-    )).rejects.toMatchObject({
-      code: "WORKING_MEMORY_DECISION_REQUIRED"
-    });
+    )).resolves.toEqual({ kind: "no_reply" });
     expect(effects.onAssistantText).not.toHaveBeenCalled();
   });
 
@@ -184,7 +212,7 @@ describe("Provider tool composition", () => {
     "companion",
     "deferred",
     "no_reply"
-  ] as const)("asserts the decision before returning a %s terminal branch", async (branch) => {
+  ] as const)("returns a %s terminal branch without requiring a memory decision", async (branch) => {
     const terminalCall = {
       type: "function_call" as const,
       call_id: `call-${branch}`,
@@ -232,12 +260,12 @@ describe("Provider tool composition", () => {
       },
       executor,
       emitAssistantText: async () => undefined
-    })).rejects.toMatchObject({
-      code: "WORKING_MEMORY_DECISION_REQUIRED"
+    })).resolves.toMatchObject({
+      terminal: { kind: branch === "companion" ? "completed" : branch }
     });
   });
 
-  it.each(PROVIDERS)("keeps the mandatory memory decision outside maxCalls=1 on %s", async (
+  it.each(PROVIDERS)("keeps optional memory calls outside maxCalls=1 on %s", async (
     _providerLabel,
     kind
   ) => {
@@ -388,6 +416,103 @@ describe("Provider tool composition", () => {
     expect(runWebsearch).toHaveBeenCalledOnce();
     expect(effects.read).toHaveBeenCalledOnce();
     expect(effects.callMcp).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(PROVIDERS)("completes an empty final round after delivered text and a file on %s", async (
+    _providerLabel, kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "assistant_text", args: { text: "正在处理。" } }] },
+      { calls: [{ name: "send_file", args: { path: "result.txt", kind: "file", name: null } }] },
+      kind === "gemini-official" ? { text: " " } : {}
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送文件" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "正在处理。", messageOrigin: "assistant_text", textAlreadyDelivered: true });
+    expect(effects.send).toHaveBeenCalledOnce();
+    expect(effects.options.onAssistantText).toHaveBeenCalledOnce();
+  });
+
+  it.each(PROVIDERS)("rejects empty completion after read-only tools with no delivered text on %s", async (
+    _providerLabel, kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "read_file", args: { path: "safe.txt" } }] },
+      kind === "gemini-official" ? { text: " " } : {}
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "读文件" }], effects.options))
+      .rejects.toThrow("模型没有返回可发送内容。");
+    expect(effects.options.onAssistantText).not.toHaveBeenCalled();
+  });
+
+  it.each(PROVIDERS)("keeps an empty system configuration confirmation failed on %s", async (
+    _providerLabel, kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "assistant_text", args: { text: "正在处理。" } }] },
+      kind === "gemini-official" ? { text: " " } : {}
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "改设置" }], {
+      ...effects.options,
+      systemConfig: { execute: vi.fn(), mutationStaged: () => true }
+    })).rejects.toThrow("模型没有返回可发送内容。");
+  });
+
+  it.each(PROVIDERS)("does not treat a failed inline delivery as delivered text on %s", async (
+    _providerLabel, kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    const transport = installRounds(provider, kind, [
+      { calls: [{ name: "assistant_text", args: { text: "正在处理。" } }] },
+      kind === "gemini-official" ? { text: " " } : {}
+    ]);
+    const effects = sideEffects();
+    effects.options.onAssistantText.mockRejectedValueOnce(new Error("fixture_delivery_failed"));
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送文件" }], effects.options))
+      .rejects.toThrow("模型没有返回可发送内容。");
+    expect(JSON.stringify(transport.requestBody(1))).toContain("fixture_delivery_failed");
+  });
+
+  it("keeps a Codex transport failure after delivered text visible", async () => {
+    const provider = new OpenAIProvider(providerConfig("codex-responses"));
+    installRounds(provider, "codex-responses", [
+      { calls: [{ name: "assistant_text", args: { text: "正在处理。" } }] }
+    ]);
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      error: { message: "fixture_transport_failed" }
+    }), { status: 400 }));
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送文件" }], effects.options))
+      .rejects.toThrow("fixture_transport_failed");
+    expect(effects.options.onAssistantText).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["failed", { code: "server_error", message: "fixture_response_failed" }, "fixture_response_failed"],
+    ["failed", null, "模型请求失败。"],
+    ["incomplete", null, "模型没有返回可发送内容。"]
+  ])("rejects an explicit %s Responses payload after delivered text", async (status, error, message) => {
+    const provider = new OpenAIProvider(providerConfig("openai-official"));
+    const create = vi.fn()
+      .mockResolvedValueOnce({ output: responsesOutput({
+        calls: [{ name: "assistant_text", args: { text: "正在处理。" } }]
+      }, 0) })
+      .mockResolvedValueOnce({ status, error, output: [] });
+    vi.spyOn(provider as never, "createClient").mockReturnValue({ responses: { create } });
+    const effects = sideEffects();
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送文件" }], effects.options))
+      .rejects.toThrow(message as string);
+    expect(effects.options.onAssistantText).toHaveBeenCalledOnce();
+    expect(appendRequestLog).toHaveBeenCalledWith(expect.objectContaining({
+      category: "model.response", action: "responses.complete",
+      response: expect.objectContaining({ ok: false, error: message })
+    }));
   });
 
   it.each(PROVIDERS)("allows read_file, write_file and send_file across model rounds on %s", async (
@@ -587,43 +712,9 @@ function mappedCodexTool(body: Record<string, any>, kind: ProviderKind) {
   return body.tools.find((tool: Record<string, any>) => tool.name === "codex");
 }
 
-function expectWorkingMemoryToolChoice(body: Record<string, any>, kind: ProviderKind) {
-  expectMemoryToolChoice(body, kind, ADD_WORKMEMORY_TOOL_NAME);
-}
-
-function expectMemoryToolChoice(
-  body: Record<string, any>,
-  kind: ProviderKind,
-  toolName: string
-) {
-  if (kind === "openai-compatible") {
-    expect(body.tool_choice).toEqual({
-      type: "function",
-      function: { name: toolName }
-    });
-    return;
-  }
-  if (kind === "anthropic-official") {
-    expect(body.tool_choice).toEqual({
-      type: "tool",
-      name: toolName,
-      disable_parallel_tool_use: true
-    });
-    return;
-  }
-  if (kind === "gemini-official") {
-    expect(body.toolConfig).toEqual({
-      functionCallingConfig: {
-        mode: "ANY",
-        allowedFunctionNames: [toolName]
-      }
-    });
-    return;
-  }
-  expect(body.tool_choice).toEqual({
-    type: "function",
-    name: toolName
-  });
+function expectNoForcedToolChoice(body: Record<string, any>) {
+  expect(body.tool_choice).toBeUndefined();
+  expect(body.toolConfig).toBeUndefined();
 }
 
 function responsesOutput(round: ModelRound, roundIndex: number) {

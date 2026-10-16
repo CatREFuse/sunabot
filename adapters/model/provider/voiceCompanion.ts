@@ -18,6 +18,7 @@ export type VoiceCompanionSource =
 export interface ParsedVoiceCompanion {
   source: VoiceCompanionSource;
   text: string;
+  voiceText: string;
   voiceCall: ResponseFunctionCallItem;
   sourceCall?: ResponseFunctionCallItem;
   deferred?: {
@@ -44,40 +45,30 @@ export function parseVoiceCompanion(
   const visibleSibling = siblingText.trim();
 
   if (calls.length === 1) {
-    if (!visibleSibling) {
-      throw voiceContractError(
-        "send_voice_message requires accompanying visible assistant text.",
-      );
-    }
-    assertSameVoiceText(visibleSibling, voiceInput.text);
     return {
       source: "text",
-      text: visibleSibling,
+      text: visibleSibling || voiceInput.text,
+      voiceText: voiceInput.text,
       voiceCall,
     };
   }
 
-  if (calls.length !== 2 || voiceCall !== calls[1] || visibleSibling) {
+  if (calls.length !== 2) {
     throw voiceContractError(
-      "send_voice_message must follow exactly one assistant_text or deferred tool call without sibling text.",
+      "send_voice_message supports one accompanying assistant_text or deferred tool call.",
     );
   }
 
-  const sourceCall = calls[0]!;
+  const sourceCall = calls.find((call) => call !== voiceCall)!;
   const sourceArguments = readCallArguments(sourceCall);
   if (sourceCall.name === ASSISTANT_TEXT_TOOL_NAME) {
-    if (!hasExactKeys(sourceArguments, ["text"])) {
-      throw voiceContractError(
-        "assistant_text companion arguments must contain only text.",
-      );
-    }
     const sourceText = readAssistantText(sourceArguments);
     if (!sourceText)
       throw voiceContractError("assistant_text companion text is empty.");
-    assertSameVoiceText(sourceText, voiceInput.text);
     return {
       source: "assistant_text",
-      text: sourceText,
+      text: [visibleSibling, sourceText].filter(Boolean).join("\n"),
+      voiceText: voiceInput.text,
       voiceCall,
       sourceCall,
     };
@@ -93,10 +84,10 @@ export function parseVoiceCompanion(
     sourceCall.name,
   );
   if (!dispatch.ok) throw voiceContractError(dispatch.error);
-  assertSameVoiceText(dispatch.message, voiceInput.text);
   return {
     source: "dispatch_message",
-    text: dispatch.message,
+    text: [visibleSibling, dispatch.message].filter(Boolean).join("\n"),
+    voiceText: voiceInput.text,
     voiceCall,
     sourceCall,
     deferred: {
@@ -105,13 +96,6 @@ export function parseVoiceCompanion(
       arguments: dispatch.workerArguments,
     },
   };
-}
-
-export function voiceReadableText(value: string) {
-  return value
-    .replace(/(^|[^\\])\[\/[^\]\r\n]{1,64}\]/gu, "$1")
-    .replace(/\s+/gu, " ")
-    .trim();
 }
 
 function readVoiceCall(call: ResponseFunctionCallItem) {
@@ -132,28 +116,6 @@ function readCallArguments(call: ResponseFunctionCallItem) {
     throw voiceContractError(`Invalid tool arguments for ${call.name}.`);
   }
   return value as Record<string, unknown>;
-}
-
-function assertSameVoiceText(sourceText: string, voiceText: string) {
-  const source = voiceReadableText(sourceText);
-  const voice = voiceReadableText(voiceText);
-  if (!source || source !== voice) {
-    throw voiceContractError(
-      "send_voice_message text must exactly match the accompanying human-readable assistant text.",
-    );
-  }
-}
-
-function hasExactKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-) {
-  const actual = Object.keys(value).sort();
-  const sortedExpected = [...expected].sort();
-  return (
-    actual.length === sortedExpected.length &&
-    actual.every((key, index) => key === sortedExpected[index])
-  );
 }
 
 function voiceContractError(message: string) {

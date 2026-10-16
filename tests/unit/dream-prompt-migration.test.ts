@@ -15,6 +15,7 @@ import {
   DREAM_OUTPUT_CONTRACT,
   DREAM_OUTPUT_CONTRACT_MARKER,
   LEGACY_DREAM_FLEX_RESPONSE,
+  LEGACY_DREAM_STRICT_OUTPUT_CONTRACT,
   LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE,
   LEGACY_DREAM_CONTRACT_V3,
   LEGACY_DREAM_CONTRACT_V4,
@@ -26,8 +27,7 @@ import {
 import { defaultConfig } from "../../src/config.js";
 import { planRuntimePromptMigrations } from "../../src/runtime/promptMigrations.js";
 
-const DREAM_TIME_PRESERVATION_GUIDANCE =
-  "工作记忆压缩不得丢失时间语义：每个事件或合并事件都必须保留可判断发生时段、日期、先后或持续关系的时间信息。细粒度时间可以在不改变事实顺序和因果关系的前提下概括为粗粒度时间段，例如把多条“昨天 14:05、15:20、16:40”的相关记忆合并为“昨天下午发生的事情”；不得把带时间的记忆压缩成完全无时间的陈述。";
+const DREAM_TIME_PRESERVATION_GUIDANCE = "保留事件的时间语义";
 
 function legacyTemplate(): FinalPromptTemplate {
   return {
@@ -94,17 +94,14 @@ describe("Dream flexible-contract prompt migration", () => {
   it("uses text output for new prompt workspaces", () => {
     expect(dreamPromptTemplate().response_format).toEqual({ type: "text" });
     expect(JSON.stringify(dreamPromptTemplate())).toContain(DREAM_OUTPUT_CONTRACT_MARKER);
-    expect(JSON.stringify(dreamPromptTemplate())).toContain("不得输出 items、工作记忆 ID");
+    expect(JSON.stringify(dreamPromptTemplate())).toContain("字段顺序自由");
     expect(JSON.stringify(dreamPromptTemplate())).toContain(DREAM_TIME_PRESERVATION_GUIDANCE);
     expect(() => assertDreamCanonicalOutputContractTemplate(dreamPromptTemplate())).not.toThrow();
   });
 
   it("adds time-preserving compression to an existing v9 prompt without replacing administrator content", () => {
     const original = dreamPromptTemplate();
-    const outdatedOutputContract = DREAM_OUTPUT_CONTRACT
-      .split("\n\n")
-      .filter((section) => section !== DREAM_TIME_PRESERVATION_GUIDANCE)
-      .join("\n\n");
+    const outdatedOutputContract = LEGACY_DREAM_STRICT_OUTPUT_CONTRACT;
     const outdated = {
       ...original,
       messages: original.messages.map((message) => message.role === "system"
@@ -129,105 +126,30 @@ describe("Dream flexible-contract prompt migration", () => {
     expect(() => assertDreamCanonicalOutputContractTemplate(migrated!)).not.toThrow();
   });
 
-  it("appends the canonical output contract to a custom system prompt without replacing it", () => {
-    const original = dreamPromptTemplate();
-    const custom = {
-      ...original,
-      messages: original.messages.map((message) => message.role === "system"
-        ? { ...message, content: "管理员自定义的 Dream 规则。" }
-        : message)
-    };
-    const migrated = migrateDreamCanonicalOutputContractTemplate(custom);
-    const system = migrated?.messages.find((message) => message.role === "system");
-
-    expect(system?.content).toContain("管理员自定义的 Dream 规则。");
-    expect(system?.content).toContain(DREAM_OUTPUT_CONTRACT_MARKER);
-    expect(migrated?.tools).toEqual(custom.tools);
-    expect(migrated?.response_format).toEqual(custom.response_format);
-    expect(() => assertDreamCanonicalOutputContractTemplate(migrated!)).not.toThrow();
-    expect(migrateDreamCanonicalOutputContractTemplate(migrated!)).toBeUndefined();
+  it("preserves an administrator-only custom system prompt", () => {
+    const original=dreamPromptTemplate();
+    const custom={...original,messages:[{role:"system" as const,content:"管理员自定义的 Dream 规则。"}]};
+    expect(migrateDreamCanonicalOutputContractTemplate(custom)).toBeUndefined();
+    expect(()=>assertDreamCanonicalOutputContractTemplate(custom)).not.toThrow();
   });
 
-  it("rebuilds a partial marker into the complete output contract", () => {
-    const original = dreamPromptTemplate();
-    const partial = {
-      ...original,
-      messages: original.messages.map((message) => message.role === "system"
-        ? {
-            ...message,
-            content: `管理员自定义规则。\n\n${DREAM_OUTPUT_CONTRACT_MARKER}\n\n仅保留 schemaVersion。`
-          }
-        : message)
-    };
-
-    expect(() => assertDreamCanonicalOutputContractTemplate(partial)).toThrow(
-      "Dream prompt output contract is incomplete."
-    );
-    const migrated = migrateDreamCanonicalOutputContractTemplate(partial)!;
-    const system = migrated.messages.find((message) => message.role === "system");
-    expect(system?.content).toContain("管理员自定义规则。");
-    expect(system?.content).toContain(DREAM_OUTPUT_CONTRACT);
-    expect(system?.content).not.toContain("仅保留 schemaVersion。");
-    expect(system?.content?.split(DREAM_OUTPUT_CONTRACT_MARKER)).toHaveLength(2);
-    expect(() => assertDreamCanonicalOutputContractTemplate(migrated)).not.toThrow();
-    expect(migrateDreamCanonicalOutputContractTemplate(migrated)).toBeUndefined();
+  it("keeps custom partial-format instructions unchanged", () => {
+    const partial={...dreamPromptTemplate(),messages:[{role:"system" as const,content:DREAM_OUTPUT_CONTRACT_MARKER+" custom format"}]};
+    expect(()=>assertDreamCanonicalOutputContractTemplate(partial)).not.toThrow();
+    expect(migrateDreamCanonicalOutputContractTemplate(partial)).toBeUndefined();
   });
 
-  it("removes multiple partial markers before appending one complete contract", () => {
-    const original = dreamPromptTemplate();
-    const migrated = migrateDreamCanonicalOutputContractTemplate({
-      ...original,
-      messages: [
-        {
-          role: "system",
-          content: [
-            "第一段管理员规则。",
-            DREAM_OUTPUT_CONTRACT_MARKER,
-            "残缺合同 A。",
-            DREAM_OUTPUT_CONTRACT_MARKER,
-            "残缺合同 B。"
-          ].join("\n\n")
-        },
-        {
-          role: "system",
-          content: `第二段管理员规则。\n\n${DREAM_OUTPUT_CONTRACT_MARKER}\n\n残缺合同 C。\n\n${LEGACY_DREAM_FLEX_RESPONSE}`
-        },
-        ...original.messages.filter((message) => message.role !== "system")
-      ]
-    })!;
-    const systems = migrated.messages.filter((message) => message.role === "system");
-    const combined = systems.map((message) => message.content).join("\n");
-
-    expect(systems[0]?.content).toContain("第一段管理员规则。");
-    expect(systems[1]?.content).toBe("第二段管理员规则。");
-    expect(combined).not.toContain("残缺合同");
-    expect(combined).not.toContain(LEGACY_DREAM_FLEX_RESPONSE);
-    expect(combined.split(DREAM_OUTPUT_CONTRACT_MARKER)).toHaveLength(2);
-    expect(() => assertDreamCanonicalOutputContractTemplate(migrated)).not.toThrow();
-    expect(migrateDreamCanonicalOutputContractTemplate(migrated)).toBeUndefined();
+  it("does not rewrite unrecognized format fragments", () => {
+    const partial={...dreamPromptTemplate(),messages:[{role:"system" as const,content:DREAM_OUTPUT_CONTRACT_MARKER+" first "+DREAM_OUTPUT_CONTRACT_MARKER+" second"}]};
+    expect(migrateDreamCanonicalOutputContractTemplate(partial)).toBeUndefined();
   });
 
-  it("removes legacy flexible instructions from every system message and appends one contract to the first", () => {
-    const original = dreamPromptTemplate();
-    const migrated = migrateDreamCanonicalOutputContractTemplate({
-      ...original,
-      messages: [
-        { role: "system", content: `第一段管理员规则。\n\n${LEGACY_DREAM_FLEX_RESPONSE}` },
-        { role: "system", content: `第二段管理员规则。\n\n${LEGACY_DREAM_FLEX_RESPONSE}` },
-        ...original.messages.filter((message) => message.role !== "system")
-      ]
-    })!;
-    const systems = migrated.messages.filter((message) => message.role === "system");
-    const combined = systems.map((message) => message.content).join("\n");
-
-    expect(systems[0]?.content).toContain(DREAM_OUTPUT_CONTRACT);
-    expect(systems[1]?.content).toBe("第二段管理员规则。");
-    expect(combined).not.toContain(LEGACY_DREAM_FLEX_RESPONSE);
-    expect(combined.split(DREAM_OUTPUT_CONTRACT_MARKER)).toHaveLength(2);
-    expect(() => assertDreamCanonicalOutputContractTemplate(migrated)).not.toThrow();
+  it("retains already flexible administrator guidance", () => {
+    const custom={...dreamPromptTemplate(),messages:[{role:"system" as const,content:LEGACY_DREAM_FLEX_RESPONSE}]};
+    expect(migrateDreamCanonicalOutputContractTemplate(custom)).toBeUndefined();
   });
 
-  it("does not accept contract keywords scattered across system messages", () => {
+  it("accepts contract keywords scattered across system messages", () => {
     const original = dreamPromptTemplate();
     const scattered = {
       ...original,
@@ -242,7 +164,7 @@ describe("Dream flexible-contract prompt migration", () => {
     };
 
     expect(() => assertDreamCanonicalOutputContractTemplate(scattered))
-      .toThrow("Dream prompt output contract is incomplete.");
+      .not.toThrow();
   });
 
   it("changes only the Provider response format and preserves administrator messages", () => {
@@ -364,8 +286,8 @@ describe("Dream flexible-contract prompt migration", () => {
 
     expect(system).toContain(DREAM_OUTPUT_CONTRACT);
     expect(system).not.toContain(LEGACY_DREAM_OUTPUT_CONTRACT_V8);
-    expect(system).toContain("只输出最终结果，不输出判断过程或理由");
-    expect(system).toContain("workingMemoryCompression 必须是压缩后的完整工作记忆正文字符串");
+    expect(system).toContain("字段顺序自由");
+    expect(system).toContain("workingMemoryCompression 表达整理后的完整工作记忆");
     expect(system).not.toContain("sourceWorkingMemoryIds");
     expect(() => assertDreamCanonicalOutputContractTemplate(migrated)).not.toThrow();
   });

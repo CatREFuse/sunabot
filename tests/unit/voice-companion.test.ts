@@ -2,10 +2,17 @@
 import { describe, expect, it } from "vitest";
 import {
   parseVoiceCompanion,
-  voiceReadableText,
 } from "../../adapters/model/provider/voiceCompanion.js";
 
 describe("voice companion tool contract", () => {
+  it("keeps long visible text intact beside a short voice message", () => {
+    const text = "完整正文".repeat(1_100);
+    expect(parseVoiceCompanion([
+      call("assistant_text", "text", { text }),
+      call("send_voice_message", "voice", { text: "读完了。" }),
+    ], "", () => false)).toMatchObject({ text, voiceText: "读完了。" });
+  });
+
   it("accepts one voice call beside matching visible text", () => {
     expect(
       parseVoiceCompanion(
@@ -24,7 +31,7 @@ describe("voice companion tool contract", () => {
     });
   });
 
-  it("accepts assistant_text followed by voice and ignores emoji markers for equality", () => {
+  it("preserves assistant_text emoji markers separately from the voice text", () => {
     expect(
       parseVoiceCompanion(
         [
@@ -41,9 +48,8 @@ describe("voice companion tool contract", () => {
     ).toMatchObject({
       source: "assistant_text",
       text: "おやすみなさい、先生。[/害羞]",
+      voiceText: "おやすみなさい、先生。",
     });
-    expect(voiceReadableText("前[/开心] 后 ")).toBe("前 后");
-    expect(voiceReadableText("示例 \\[/开心]")).toBe("示例 \\[/开心]");
   });
 
   it("accepts a deferred dispatch followed by voice and strips dispatch_message from worker args", () => {
@@ -65,6 +71,7 @@ describe("voice companion tool contract", () => {
     ).toEqual({
       source: "dispatch_message",
       text: "我会认真把它检查完。",
+      voiceText: "我会认真把它检查完。",
       sourceCall: expect.objectContaining({ call_id: "codex-1" }),
       voiceCall: expect.objectContaining({ call_id: "voice-1" }),
       deferred: {
@@ -82,6 +89,7 @@ describe("voice companion tool contract", () => {
         call("send_voice_message", "voice", { text: "晚安。" }),
       ],
       sibling: "",
+      text: "晚安。",
     },
     {
       title: "mismatched source",
@@ -89,6 +97,7 @@ describe("voice companion tool contract", () => {
         call("send_voice_message", "voice", { text: "晚安。" }),
       ],
       sibling: "早安。",
+      text: "早安。",
     },
     {
       title: "voice before assistant_text",
@@ -97,6 +106,37 @@ describe("voice companion tool contract", () => {
         call("assistant_text", "text", { text: "晚安。" }),
       ],
       sibling: "",
+      text: "晚安。",
+    },
+    {
+      title: "source arguments with additional fields and sibling text",
+      calls: [
+        call("assistant_text", "text", { text: "晚安。", note: "可选附加说明" }),
+        call("send_voice_message", "voice", { text: "祝你好梦。" }),
+      ],
+      sibling: "今天辛苦了。",
+      text: "今天辛苦了。\n晚安。",
+    },
+  ])("accepts $title", ({ calls, sibling, text }) => {
+    expect(parseVoiceCompanion(calls, sibling, () => false)).toMatchObject({ text });
+  });
+
+  it("preserves distinct visible and voice text with a reordered deferred call", () => {
+    expect(parseVoiceCompanion([
+      call("send_voice_message", "voice", { text: "马上开始。" }),
+      call("codex", "worker", { task: "检查", dispatch_message: "任务已开始。" }),
+    ], "", (name) => name === "codex")).toMatchObject({
+      text: "任务已开始。",
+      voiceText: "马上开始。",
+      deferred: { name: "codex", callId: "worker" }
+    });
+  });
+
+  it.each([
+    {
+      title: "invalid voice text",
+      calls: [call("send_voice_message", "voice", { text: null })],
+      sibling: "晚安。",
     },
     {
       title: "unsupported source tool",

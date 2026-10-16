@@ -65,7 +65,7 @@ describe("QQ private PDF attachment user test", () => {
           }]
         );
       }
-      return codexSseResponse("BLUE");
+      return codexSseResponse("已成功读取文件：PDF-ATTACHMENT-ROUTING-OK-20260730");
     }));
     try {
       await fs.mkdir(path.join(source, "business/config"), { recursive: true });

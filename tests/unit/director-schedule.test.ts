@@ -21,11 +21,11 @@ describe("director schedule contract", () => {
     })).toEqual(draft);
   });
 
-  it("rejects overlap, unsupported fields, cross-day timestamps and shares outside their activity", () => {
-    expect(() => normalizeDirectorScheduleDraft({
+  it("accepts extra fields but keeps actual scheduling constraints", () => {
+    expect(normalizeDirectorScheduleDraft({
       ...validDraft(),
       unsupported: true
-    }, expected())).toThrow("unsupported field");
+    }, expected())).toEqual(validDraft());
 
     const overlap = validDraft();
     overlap.items[1]!.startAt = "2026-07-20T08:30:00+00:00";
@@ -76,14 +76,14 @@ describe("director schedule contract", () => {
     };
 
     expect(isDirectorSchedule(revision)).toBe(true);
-    expect(isDirectorSchedule({ ...revision, source: "daily_plan" })).toBe(false);
-    expect(() => normalizeDirectorScheduleDraft({
+    expect(isDirectorSchedule({ ...revision, source: "daily_plan" })).toBe(true);
+    expect(normalizeDirectorScheduleDraft({
       ...validDraft(),
       items: noShareItems
-    }, expected())).toThrow("1 to 3 daily shares");
+    }, expected()).items).toEqual(noShareItems);
   });
 
-  it("keeps provider schemas compatible while enforcing unique participants locally", () => {
+  it("keeps provider schemas compatible and preserves repeated participant descriptions", () => {
     expect(JSON.stringify([
       directorDailyPlanPromptTemplate(),
       directorScheduleRevisionPromptTemplate()
@@ -91,7 +91,14 @@ describe("director schedule contract", () => {
 
     const duplicate = validDraft();
     duplicate.items[1]!.participants = ["伙伴", "伙伴"];
-    expect(() => normalizeDirectorScheduleDraft(duplicate, expected())).toThrow("must be unique");
+    expect(normalizeDirectorScheduleDraft(duplicate, expected()).items[1]?.participants).toEqual(["伙伴", "伙伴"]);
+  });
+
+  it("accepts wrapped long descriptions and a single non-sharing item", () => {
+    const draft = validDraft();
+    draft.items = [draft.items[0]!];
+    draft.theme = "主题".repeat(300);
+    expect(parseDirectorScheduleDraft(`说明\n\x60\x60\x60json\n${JSON.stringify(draft)}\n\x60\x60\x60`, expected())).toEqual(draft);
   });
 });
 

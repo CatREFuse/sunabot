@@ -49,11 +49,17 @@ export class RuntimeWorkingMemory {
             return { ok: true, action: "skip", message: "本轮无需记录工作记忆。" };
           }
           if (!input.content) {
-            decision = undefined;
+            decision = "record";
+            recordMemoryOperation(this.host.config, {
+              source: "working", operation: "tool_decision", actor: "model_tool",
+              outcome: "unchanged", conversationId: source.conversationId,
+              conversationScope: source.scope, changedCount: 0, reasonCode: "content_unavailable"
+            });
             return {
-              ok: false,
-              code: "ADD_WORKMEMORY_INVALID",
-              error: "Working-memory content is required."
+              ok: true,
+              action: "record",
+              recorded: false,
+              message: "未提供工作记忆内容。"
             };
           }
           const result = await appendWorkingMemoryDocumentItem(this.host.config, input.content, source);
@@ -78,7 +84,8 @@ export class RuntimeWorkingMemory {
             conversationScope: result.item.conversationScope,
             revision: result.revision,
             deduplicated: result.deduplicated,
-            message: "工作记忆已记录。"
+            ...(result.capacityWarning ? { warnings: [result.capacityWarning] } : {}),
+            message: result.capacityWarning ? "工作记忆已记录，容量超过 64 KiB 阈值。" : "工作记忆已记录。"
           };
         } catch (error) {
           decision = undefined;

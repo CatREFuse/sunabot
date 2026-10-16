@@ -29,7 +29,7 @@ WSL2
 
 Core 固定 Native。NapCat 是唯一 Docker 例外；Bash、MCP、Skill、Codex 和 WebFetch 不创建容器。每个 QQ 账号对应一个 NapCat 容器、`workspace/runtime/napcat/accounts/<accountId>/` 目录和独立 WebUI 端口。
 
-Native Core 监听宿主回环管理端口 `8787`，OneBot listener 使用专用 `8788`。WSL 内安装的 Docker Engine 会在当前发行版网络命名空间创建 bridge gateway，Launcher 只绑定该本机 gateway；Docker Desktop 在独立 `docker-desktop` 发行版维护 bridge gateway，Launcher 只绑定 `127.0.0.1`，NapCat 通过 `host.docker.internal` 和 WSL localhost forwarding 连接。两种路径都必须通过 NapCat 容器内 `/healthz` 探针并携带 access token，不能回退到 `0.0.0.0`、WSL `eth0` 或局域网地址。跨组件图片使用 `base64://`，不共享绝对文件路径。
+Native Core 监听宿主回环管理端口 `8787`，OneBot listener 使用专用 `8788`。WSL 内安装的 Docker Engine 会在当前发行版网络命名空间创建 bridge gateway，Launcher 只绑定该本机 gateway；空闲网桥未出现在 Node 网络接口列表时，通过本机绑定探针确认 gateway。Docker Desktop 在独立 `docker-desktop` 发行版维护 bridge gateway，Launcher 只绑定 `127.0.0.1`，NapCat 通过 `host.docker.internal` 和 WSL localhost forwarding 连接。两种路径都必须通过 NapCat 容器内 `/healthz` 探针并携带 access token，不能回退到 `0.0.0.0`、WSL `eth0` 或局域网地址。跨组件图片使用 `base64://`，不共享绝对文件路径。
 
 Docker Desktop 官方将 `host.docker.internal` 定义为容器访问宿主服务的地址；WSL 官方文档确认 Linux 服务默认转发到 Windows `localhost`。相关边界见 [Docker Desktop networking](https://docs.docker.com/desktop/features/networking/networking-how-tos/#connect-a-container-to-a-service-on-the-host) 与 [WSL networking](https://learn.microsoft.com/en-us/windows/wsl/networking#accessing-linux-networking-apps-from-windows-localhost)。
 
@@ -56,7 +56,7 @@ Docker Engine、Compose 插件和当前 WSL 用户的 Docker 访问权限必须�
 
 Docker Desktop 用户需要为目标发行版启用 WSL Integration。WSL 内置 Docker Engine 用户不得同时启用 Docker Desktop integration；`docker context show`、`docker info` 与实际 daemon 必须指向同一实现。Launcher 根据运行网络 gateway 是否属于当前 WSL 网络命名空间选择安全监听方式，不依赖 daemon 名称或可伪造环境变量。
 
-发行归档已经内置 Node `24.18.0`、生产 `node_modules`、Codex CLI `0.139.0`、Lightpanda `0.3.3`、对应源码与许可，以及锁定的 Bubblewrap。WSL 不需要另行安装 Node、npm、Codex、Lightpanda 或 Bubblewrap。
+发行归档已经内置 Node `24.18.0`、生产 `node_modules`、Codex CLI `0.162.1`、Lightpanda `0.3.3`、对应源码与许可，以及锁定的 Bubblewrap。WSL 不需要另行安装 Node、npm、Codex、Lightpanda 或 Bubblewrap。
 
 ## 4. 新实例安装
 

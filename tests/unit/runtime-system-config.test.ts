@@ -502,6 +502,19 @@ describe("SunaRuntime system_config boundary", () => {
     expect(harness.gateway.send).not.toHaveBeenCalled();
   });
 
+  it("does not repeat text already delivered by an inline tool", async () => {
+    const harness = await createRuntimeHarness(async (_request, options = {}) => {
+      await options.onAssistantText!("文件已处理。", "assistant_text");
+      return { kind: "completed", text: "文件已处理。", messageOrigin: "assistant_text", textAlreadyDelivered: true };
+    }, { createTurn: () => idleSystemConfigTurn() });
+    const incoming = requiredIncoming(privateEvent(34, 171419991));
+    harness.runtime.recordIncomingMessage(incoming);
+    await expect(harness.runtime.replyToIncoming(conversationRecordId(incoming), incoming, harness.gateway))
+      .resolves.toBe(true);
+    expect(harness.gateway.send).toHaveBeenCalledOnce();
+    expect(JSON.stringify(harness.gateway.send.mock.calls)).toContain("文件已处理。");
+  });
+
   it("discards an empty final confirmation before appendHeld", async () => {
     const staged = stagedSystemConfigTurn();
     const harness = await createRuntimeHarness(async (_request, options = {}) => {

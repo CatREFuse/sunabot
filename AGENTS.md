@@ -20,6 +20,9 @@
 | `docs/audits/2026-07-23-llm-token-cache-audit.md` | 全部 LLM/图像节点的请求级 Token、缓存率、Prefix 复算、失败盲区与分层改进方案 | 调整模型路由、提示词缓存、上下文预算、记忆/编排/Tone 流程或模型调用统计前读取 |
 | `docs/audits/2026-07-23-llm-token-cache-audit.html` | LLM Token 与 Prompt Cache 审计的自包含交互式 HTML 报告 | 浏览审计结论、图表、完整节点清单、改进优先级和验收路线图时读取 |
 | `docs/audits/2026-07-24-memory-system-topology-and-logs-audit.md` | 工作记忆、长期记忆、用户画像、召回、Dream、调度器与操作日志的运行证据和高问题节点 | 排查记忆不更新、积压、模型门禁、Dream 失败或记忆操作历史前读取 |
+| `docs/audits/2026-10-12-file-tool-permission-audit.md` | Windows 主机 WSL 的文件权限、表情资源、真实 Bash 冒烟及审核失败证据 | 排查当前 Windows 环境文件、表情或 Bash 操作失败时读取 |
+| `docs/audits/2026-10-12-built-in-tool-validation.md` | 26 个内置工具的权限、执行证据、500 项本地测试与外部验收边界 | 全面检查工具可用性、MCP 或 Skill 脚本限制时读取 |
+| `docs/audits/2026-10-14-napcat-wsl-reliability-repair.md` | NapCat 4.18.30、WSL 进程身份、Windows 对时、登录缓存备份及真实收信验收边界 | 排查 QQ 掉线、状态冲突或执行本机升级回滚时读取 |
 | `docs/design/settings-information-architecture.md` | 管理台设置的信息层级、Provider 类型、字段归属与交互约束 | 调整设置页、Provider 配置或账号操作前读取 |
 | `docs/design/multi-agent-information-architecture.md` | 多 Agent、多 QQ、管理台导航、Agent 工作区与统计口径 | 新增 Agent、调整 Agent 切换、多 QQ 接入或按 Agent 隔离数据前读取 |
 | `docs/design/conversation-artifact-capabilities.md` | 会话文件、图片、单一 canonical Workbench 与 Codex 输入输出的统一产物句柄和能力上下文 | 调整附件获取、聊天媒体、Workbench 路由、Codex 产物或文件外发前读取 |
@@ -36,16 +39,26 @@
 | `docs/migrations/agent-workbenches.md` | 0.1.2 历史双 Workbench 迁移、验证与回滚 | 处理 0.1.0/0.1.1 历史实例时读取；当前运行合同以 0.3.0 单 Workbench 为准 |
 | `docs/migrations/upgrade-0.1.0-to-0.1.2.md` | 0.1.0 / 0.1.1 到 0.1.2 的双工作区迁移、恢复点、升级脚本、验收与回滚 | 现有 0.1.0 或 0.1.1 实例升级到 0.1.2 前必读 |
 | `docs/setup-napcat.md` | sunabot、NapCat、WebUI 和 OneBot 反向 WebSocket 的本机启动配置 | 部署、重启或排查 OneBot 连接时读取 |
+| `docs/user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md` | NapCat 摘要锁升级、离线恢复点、WSL 对时、真实收信与重连验收 | 升级 NapCat 或修复 Windows/WSL 对时与掉线时读取 |
+| `docs/user-tests/cases/runtime/wsl-process-identity-clock-change.md` | Linux 稳定进程身份、时钟跳变与旧部署安全停止 | 修改启动器、调和器或进程身份时读取 |
+| `docs/user-tests/cases/runtime/core-only-restart.md` | 单独重启 Core、Native 失败清理与 NapCat 登录会话保留 | 修改 restart-core 或 Native 生命周期时读取 |
+| `docs/user-tests/cases/admin-console/qq-runtime-status-recovery.md` | QQ 实际在线、逐账号心跳与管理台慢查询恢复 | 修改连接状态、登录探测或状态轮询时读取 |
 | `docs/security/admin-access.md` | 管理员账号密码、会话、CSRF、限流、熔断与公网代理边界 | 修改鉴权、WebUI 外网访问或紧急处置时读取 |
 | `docs/deployment/distributed-workspace.md` | Git pull、新终端、workspace 分离、主实例切换、离线备份与 Agent 配置文件夹复制边界 | 多终端开发、更新、接管 workspace 或迁移单个 Agent 时读取 |
 | `docs/deployment/online-voice-synthesis.md` | 在线语音协议、Provider 配置、音色 ID、安全边界与真实 QQ 外发流程 | 配置、迁移或验收在线语音合成前读取 |
 | `docs/operations/sqlite-backup-recovery.md` | 默认 Plana 与全部 Agent 业务库/queue 数据库对的一致恢复点、7/30 天保留、恢复校验、季度演练和故障门禁 | 执行每日备份、恢复、保留清理或故障演练时读取 |
 | `docs/references/README.md` | OneBot v11、v12 协议资料的来源、版本和本地入口 | 核对 OneBot 事件、消息段、动作或兼容性时读取 |
 | `docs/user-tests/README.md` | user test harness、用例文档、隔离 workspace、质量评审与上线门禁 | 开发任何功能、编写 user test case 或执行上线前验证时读取 |
+| `docs/user-tests/llm-permissive-content.md` | LLM 输入输出宽容处理、Dream 恢复、可选记忆工具与格式偏差回归 | 修改模型内容接纳、结构化结果解析或内容门禁时读取 |
+| `docs/user-tests/cases/admin-console/account-conversation-recovery.md` | 历史非 primary 会话账号恢复与后台消息查询 | 修改会话加载、后台历史查询或账号元数据时读取 |
+| `docs/user-tests/cases/admin-console/qq-login-qr-freshness.md` | QQ 二维码打开刷新、倒计时遮罩与旧图拒绝 | 修改 QQ 登录刷新、二维码时效或弹窗时读取 |
+| `docs/user-tests/cases/admin-console/conversation-image-recovery.md` | Node 24 固定 DNS 图片代理与头像占位请求 | 修改图片代理传输或管理台图片占位前读取 |
 | `docs/user-tests/current-system-tools.md` | 当前 Agent 工具目录的角色、平台与真实 Provider user test 计划 | 修改工具注册、会话权限、Native Bash 或工具验收矩阵时读取 |
+| `docs/user-tests/cases/workbench-resources/emoji-bash-roundtrip.md` | 管理员群聊在 WSL 中通过审核、Skill、Bash 创建表情并读回仓库 | 修改表情 Bash 管理或独立审核兼容配置时读取 |
 | `docs/user-tests/soul-package-roundtrip.md` | 当前 Agent 人格提示词灵魂文件的导出、预览、冲突导入与往返 | 修改灵魂文件 schema、批量提示词事务、WebUI 或 CLI 入口时读取 |
 | `docs/user-tests/offline-release-first-run.md` | Linux/WSL 自包含发行版、安装完整性、零下载启动与首次 Landing | 修改发行资产、安装脚本、首次启动或管理员初始化时读取 |
 | `docs/user-tests/native-core-single-container-boundary.md` | Native Core 与每账号一个 NapCat 容器的唯一运行边界 | 修改 Core、NapCat、Bash、MCP、Skill 或 Renderer 运行形态时读取 |
+| `docs/user-tests/cases/bash-agent-loop/wsl-native-runtime-compatibility.md` | WSL 高线程负载下的 Bash、Node、Python 执行及诊断一致性 | 修改 Native 工具资源限制、Node 挂载或 Bash 探针时读取 |
 | `docs/user-tests/webfetch-lightpanda-dynamic.md` | Linux/WSL Lightpanda 动态抓取、macOS unavailable 与静态回退 | 修改 WebFetch 动态 Renderer、平台能力或发行依赖时读取 |
 | `docs/user-tests/bash-skill-repository-install.md` | 管理员通过 Native Bash 完成 Skill 安装、审查、启用与回读 | 修改 Bash Skill 仓库命令、安装流程或系统提示词时读取 |
 | `docs/user-tests/workbench-image-reference.md` | workbench 图片相对路径直接进入生图工具的用户用例 | 修改 workbench 图片参数或生图参考解析时读取 |
@@ -72,6 +85,9 @@
 | `docs/user-tests/user-private-attachment-docker-workbench.md` | 0.2.0 Docker Workbench 历史附件用例 | 维护 0.2.0 到 0.3.0 迁移或历史回归时读取 |
 | `docs/user-tests/codex-chat-artifact-roundtrip.md` | 聊天文件句柄冻结为 Codex 输入并将产物回传原会话的用户用例 | 修改 Codex 异步输入、产物校验或会话资产回传前读取 |
 | `docs/user-tests/selfie-direct-delivery.md` | 阿罗娜单人自拍由异步图片任务直接回传的用户用例 | 修改自拍工具派发、完成回调或媒体发送时读取 |
+| `docs/user-tests/synthetic-selfie-reference-import.md` | 仅合成机器人参考的自拍状态链导入步骤 | 无真实人格外发的自拍验收时读取 |
+| `docs/user-tests/synthetic-selfie-direct-delivery.md` | 合成机器人自拍生成、直接回传与语音未配置边界 | 无真实人格外发的自拍验收时读取 |
+| `docs/user-tests/cases/system-tools/15-admin-private-director.md` | 合成当日日程自然生成与真实导演工具修订 | 验收 call_director 的 Provider、revision 与隔离持久化时读取 |
 | `docs/user-tests/selfie-knowledge-reference-direct-delivery.md` | 阿罗娜使用知识库普拉娜参考图生成双人自拍并直接回传的用户用例 | 修改自拍知识参考、Workbench 路径快照或异步媒体发送时读取 |
 | `docs/user-tests/address-name-priority.md` | 多称呼用户画像在主回复中优先使用第一个称呼的用户用例 | 修改称呼数组、用户画像提示上下文或回复称呼规则时读取 |
 | `docs/user-tests/add-workmemory-direct-write.md` | 主对话模型同轮调用 `add_workmemory` 直写短期工作记忆的用户用例 | 修改工作记忆工具、主回复工具调用规则或直写审计前读取 |
@@ -125,6 +141,7 @@
 ## 修改边界
 
 - 只修改请求涉及的模块，保持现有接口和代码风格。
+- LLM 输入与模型输出采用宽容处理，不因内容长度、字段顺序、附加字段、包装格式或规范化差异拒绝整轮；缺失字段不清空既有数据。工具账号权限、路径、真实执行参数、存储容量与事务边界独立保留。
 - 未经用户明确要求，禁止新增会改变正常业务流程的安全门禁、工具互斥、整轮污染标记、隐式降级、额外审批或失败关闭策略。设计阶段发现风险时，只说明风险、影响和可选方案，并询问用户是否需要；用户明确确认前，不得把建议写成代码、提示词、测试或强制规范。
 - Agent 工具循环默认允许同一 Provider turn 的不同模型轮次依次组合全部已启用且当前会话有权使用的工具，也允许模型响应正文与工具调用并存。不得仅依据“本地/联网”、工具名称、MCP server、先前工具活动、先前失败或 deferred/`no_reply`/语音的出现顺序拒绝后续调用。
 - 已由用户明确要求或现行规范确定的身份鉴权、会话权限、参数 schema、路径边界、执行隔离、持久化事务和外部系统审批继续保留。若协议结构确实无法支持某种组合，必须在设计阶段说明具体技术限制并取得用户选择，不能包装成安全策略自行实施。
@@ -138,7 +155,7 @@
 ## 跨运行环境
 
 - Sunabot Core、Bash、MCP、Skill Script 与 WebFetch 在当前版本只以 Native 形态运行；NapCat 是唯一 Docker 运行组件，每个 QQ 使用独立容器。禁止重新引入 Core、Bash、MCP、Skill Script 或 WebFetch Docker 运行路径。
-- 根目录 `./sunabot.sh` 是唯一人工运行入口，支持 `up|start|down|restart|status|logs|doctor|soul`；`up`、`start` 与 `restart` 使用同一套清空后启动流程。`SUNABOT_CORE_MODE` 与 `--core` 已退役，传入时必须明确拒绝。
+- 根目录 `./sunabot.sh` 是唯一人工运行入口，支持 `up|start|down|restart|restart-core|status|logs|doctor|soul`；`up`、`start` 与 `restart` 使用同一套清空后启动流程。`restart-core` 只替换 Native Core、账号调和器与 WebFetch Renderer，保留 NapCat 容器、网络和登录缓存。`SUNABOT_CORE_MODE` 与 `--core` 已退役，传入时必须明确拒绝。
 - 启动与迁移必须由拥有仓库和 workspace 的非 root 用户执行；不得通过 UID 0 绕过 Core、NapCat、Bubblewrap 或 workspace 权限边界。
 - 管理台只监听宿主回环 `127.0.0.1:8787`。OneBot v11 使用专用 `8788` 端口和强制 access token；Native Core 通过启动器配置的容器可达宿主网关接收 NapCat 连接，不得把 OneBot 端口直接发布到局域网或公网。
 - 跨组件媒体默认使用 OneBot `base64://` 内联数据。业务代码、Core 与 NapCat 不能依赖共享绝对路径、相同挂载点或容器内文件路径；大文件能力必须新增明确、鉴权、可限流的传输契约。

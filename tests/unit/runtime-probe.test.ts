@@ -3,20 +3,63 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { createRequire } from "node:module";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRuntimeProbe, collectWorkspaceProbeFacts } from "../../tooling/runtime/probe.mjs";
+import { ensureCodexAccessToken } from "../../packages/platform/codexTokenRefresh.mjs";
+
+vi.mock("../../packages/platform/codexTokenRefresh.mjs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../packages/platform/codexTokenRefresh.mjs")>();
+  return { ...actual, ensureCodexAccessToken: vi.fn(actual.ensureCodexAccessToken) };
+});
 
 const now = new Date("2026-07-14T12:00:00.000Z");
 const temporaryDirectories: string[] = [];
 const previousProviderProbeKey = process.env.SUNABOT_PROVIDER_PROBE_KEY;
 
 afterEach(async () => {
+  vi.clearAllMocks();
   if (previousProviderProbeKey == null) delete process.env.SUNABOT_PROVIDER_PROBE_KEY;
   else process.env.SUNABOT_PROVIDER_PROBE_KEY = previousProviderProbeKey;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
 });
 
 describe("versioned runtime readiness probe", () => {
+  it("uses the bundled CLI for auth refresh and preserves its failure code", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-provider-refresh-"));
+    temporaryDirectories.push(workspace);
+    delete process.env.SUNABOT_PROVIDER_PROBE_KEY;
+    await fs.mkdir(path.join(workspace, "business/config"), { recursive: true });
+    await fs.mkdir(path.join(workspace, "secrets/codex"), { recursive: true });
+    await fs.writeFile(path.join(workspace, "business/config/sunabot.json"), JSON.stringify({
+      providers: {
+        defaultProviderId: "codex",
+        items: [{
+          id: "codex",
+          kind: "codex-responses",
+          enabled: true,
+          apiKeyEnv: "SUNABOT_PROVIDER_PROBE_KEY"
+        }]
+      }
+    }));
+    await fs.writeFile(path.join(workspace, "secrets/codex/auth.json"), "{}");
+    vi.mocked(ensureCodexAccessToken).mockRejectedValueOnce(new Error("CODEX_AUTH_REFRESH_UNAVAILABLE"));
+
+    const facts = await collectWorkspaceProbeFacts({ workspace });
+
+    expect(ensureCodexAccessToken).toHaveBeenCalledWith({
+      authFile: path.join(workspace, "secrets/codex/auth.json"),
+      codexHome: path.join(workspace, "secrets/codex"),
+      command: createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js")
+    });
+    expect(facts.capabilities.provider).toMatchObject({
+      configured: false,
+      verifiedAvailable: false,
+      ok: false,
+      detail: "CODEX_AUTH_REFRESH_UNAVAILABLE"
+    });
+  });
+
   it("separates core liveness, readiness, and optional capabilities", () => {
     const report = buildRuntimeProbe({
       workspace: { exists: true, migrationState: "trusted", path: "/srv/sunabot/workspace" },

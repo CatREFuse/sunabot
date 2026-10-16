@@ -38,7 +38,7 @@ async function refreshAccessToken(options) {
 }
 
 async function requestManagedRefresh(options) {
-  const command = options.command?.trim() || "codex";
+  const command = options.command?.trim() || process.env.SUNABOT_CODEX_EXECUTABLE?.trim() || "codex";
   const args = options.args ?? ["app-server"];
   const timeoutMs = positiveInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS);
 

@@ -356,11 +356,11 @@ export function readUserGroupOrchestratorResult(
   value: unknown
 ): UserGroupOrchestratorResultV1 | undefined {
   if (!isRecord(value) || value.schemaVersion !== 1
-    || !boundedSnapshotString(value.reason, 1_000)
+    || typeof value.reason !== "string"
     || !boundedSnapshotString(value.replyToMessageId, 256)) return undefined;
   return {
     schemaVersion: 1,
-    reason: value.reason.trim(),
+    reason: value.reason,
     replyToMessageId: value.replyToMessageId
   };
 }

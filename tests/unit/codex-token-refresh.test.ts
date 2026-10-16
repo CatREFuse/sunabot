@@ -1,10 +1,11 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureCodexAccessToken } from "../../packages/platform/codexTokenRefresh.mjs";
 
 describe("Codex managed token refresh", () => {
+  afterEach(() => vi.unstubAllEnvs());
   it("reuses an access token that is not near expiry", async () => {
     const codexHome = await mkdtemp(path.join(tmpdir(), "sunabot-codex-auth-"));
     const authFile = path.join(codexHome, "auth.json");
@@ -19,14 +20,19 @@ describe("Codex managed token refresh", () => {
   });
 
   it.each([
-    ["expired", -60],
-    ["near expiry", 30]
-  ])("uses app-server account/read to refresh an %s token", async (_label, expiresInSeconds) => {
+    ["expired", -60, true],
+    ["near expiry", 30, true],
+    ["expired without a global CLI", -60, false]
+  ])("uses app-server account/read to refresh an %s token", async (_label, expiresInSeconds, explicitCommand) => {
     const codexHome = await mkdtemp(path.join(tmpdir(), "sunabot-codex-auth-"));
     const authFile = path.join(codexHome, "auth.json");
     const previous = jwt(Math.floor(Date.now() / 1_000) + expiresInSeconds);
     const refreshed = jwt(Math.floor(Date.now() / 1_000) + 3_600);
     const fakeServer = path.join(codexHome, "fake-app-server.mjs");
+    if (!explicitCommand) {
+      vi.stubEnv("PATH", path.join(codexHome, "no-global-cli"));
+      vi.stubEnv("SUNABOT_CODEX_EXECUTABLE", process.execPath);
+    }
     await writeFile(authFile, JSON.stringify({ tokens: { access_token: previous, refresh_token: "refresh" } }));
     await writeFile(fakeServer, `
       import fs from "node:fs";
@@ -45,7 +51,7 @@ describe("Codex managed token refresh", () => {
     await expect(ensureCodexAccessToken({
       authFile,
       codexHome,
-      command: process.execPath,
+      ...(explicitCommand ? { command: process.execPath } : {}),
       args: [fakeServer]
     })).resolves.toBe(refreshed);
     const saved = JSON.parse(await readFile(authFile, "utf8"));

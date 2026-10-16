@@ -46,17 +46,17 @@
       "smoke": ["lightpanda", "version"]
     },
     "napcat": {
-      "version": "4.15.0",
+      "version": "4.18.30",
       "source": "https://github.com/NapNeko/NapCat-Docker",
-      "image": "docker.io/mlikiowa/napcat-docker:v4.15.0",
-      "digest": "sha256:cde89d766604e570517e9ce66304d4222210479d2209ec04e5d58890dea087f7",
+      "image": "docker.io/mlikiowa/napcat-docker:v4.18.30",
+      "digest": "sha256:335f9310198504d8d07aba91cc91d89215269891919c26eb4e46052ff8bb176d",
       "license": "pending-review",
       "redistribution": "local-build-only-pending-review",
       "architectures": ["linux/amd64", "linux/arm64"],
       "smoke": ["test", "-f", "/app/napcat/napcat.mjs"]
     },
     "qq": {
-      "version": "3.2.21-42086",
+      "version": "3.2.32-52194",
       "source": "https://im.qq.com/linuxqq/index.shtml",
       "integrity": "provided-by-napcat-image-digest",
       "license": "proprietary",
@@ -276,10 +276,10 @@
       "smoke": ["bwrap", "--version"]
     },
     "codex-cli": {
-      "version": "0.139.0",
+      "version": "0.162.1",
       "source": "https://developers.openai.com/codex/cli",
       "package": "@openai/codex",
-      "integrity": "sha512-wr2fRE+fzW0CjEbfFsLh1ftarVEcw0CMLWS7QyA0nyOz5qacQPVq3cq2+/U7oEbwm1TOqoi0Fm1nxniB5FkpmA==",
+      "integrity": "sha512-NWZdi/kxyjv/8EUGFupziGU38YyleugZRM4JXgY5XFH7FUmaFA33NZS2Bmq0HPazf7S3jJQQWsZ/jAK9jsrV3Q==",
       "license": "Apache-2.0",
       "architectures": ["linux/amd64", "linux/arm64"],
       "smoke": ["codex", "--version"]

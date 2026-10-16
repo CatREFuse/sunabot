@@ -6,6 +6,10 @@ The isolated input event contains one inline controlled PNG image, which creates
 
 The Provider requests an inline progress update, export of the supplied image, administrator emoji import of that image, and delivery of the exported file. Asynchronous image generation and selfie generation use separate cases so each terminal media path has independent evidence.
 
+If the final model round has no text after successful inline text delivery, the turn must retain the already delivered reply and complete without repeating it or sending an empty-output error. A turn with no delivered text still rejects empty output. Failed delivery and transport errors remain visible. Pending system-configuration confirmation and atomic image replies retain their existing completion contracts.
+
+The companion deterministic protocol fixture also returns HTTP-successful OpenAI Responses payloads with `status: "failed"`, both with a provider error message and with no detail, and an empty `status: "incomplete"` payload. All variants must reject and record `ok: false` after the progress text was delivered; they must never complete through the empty-round path.
+
 ## Call contracts
 
 | Tool | Required parameters and result evidence |
@@ -40,7 +44,7 @@ The Provider requests an inline progress update, export of the supplied image, a
         {
           "type": "text",
           "data": {
-            "text": "请先调用 assistant_text 简短说明正在处理，再分别调用 export_chat_media 导出这条消息里的夹具图片、调用 import_chat_emoji 导入当前表情库，最后调用 send_file 把导出的文件发回这里。"
+            "text": "请调用 assistant_text 简短说明正在处理，再分别调用 export_chat_media 导出这条消息里的夹具图片、调用 import_chat_emoji 导入当前表情库，最后调用 send_file 把导出的文件发回这里。只用这些工具，不运行 Bash 或通用文件读写工具。"
           }
         },
         {
@@ -52,7 +56,7 @@ The Provider requests an inline progress update, export of the supplied image, a
           }
         }
       ],
-      "raw_message": "请先调用 assistant_text 简短说明正在处理，再分别调用 export_chat_media 导出这条消息里的夹具图片、调用 import_chat_emoji 导入当前表情库，最后调用 send_file 把导出的文件发回这里。[内容图片：媒体夹具]"
+      "raw_message": "请调用 assistant_text 简短说明正在处理，再分别调用 export_chat_media 导出这条消息里的夹具图片、调用 import_chat_emoji 导入当前表情库，最后调用 send_file 把导出的文件发回这里。只用这些工具，不运行 Bash 或通用文件读写工具。[内容图片：媒体夹具]"
     }
   },
   "expected": {

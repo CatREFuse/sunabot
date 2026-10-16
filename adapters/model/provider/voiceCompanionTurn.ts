@@ -49,7 +49,7 @@ export function providerVoiceCompanionTurn(
   acceptCall(SEND_VOICE_MESSAGE_TOOL_NAME, options, definitions, state);
   state.terminal = "voice";
   const voice = {
-    text: companion.text,
+    text: companion.voiceText,
     language,
     callId: companion.voiceCall.call_id,
     toolName: SEND_VOICE_MESSAGE_TOOL_NAME,

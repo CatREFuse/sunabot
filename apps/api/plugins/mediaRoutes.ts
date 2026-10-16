@@ -405,12 +405,16 @@ const requestPinnedRemoteImage: MediaPinnedRequest = async (url, init, addresses
   if (!selected) throw new Error("Pinned image address is unavailable.");
   const dispatcher = new Agent({
     connect: {
-      lookup(hostname, _options, callback) {
+      lookup(hostname, options, callback) {
         if (hostname.toLowerCase() !== url.hostname.toLowerCase()) {
           callback(new Error("Pinned image hostname changed."), "", 0);
           return;
         }
-        callback(null, selected.address, selected.family);
+        if (options.all) {
+          callback(null, [...addresses]);
+        } else {
+          callback(null, selected.address, selected.family);
+        }
       }
     }
   });

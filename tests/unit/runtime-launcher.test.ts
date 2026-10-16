@@ -46,7 +46,7 @@ describe("Native Core runtime launcher", () => {
     expect(nativeCapabilities).toContain(
       "command(bubblewrapExecutable(context), bubblewrapProbeArguments(context.workspace, true)"
     );
-    expect(nativeCapabilities).toContain("bubblewrap namespace probe passed");
+    expect(nativeCapabilities).toContain("bubblewrap resource and Node execution probe passed");
   });
 
   it("probes the isolated namespace used by Linux workspace Bash", () => {
@@ -58,10 +58,15 @@ describe("Native Core runtime launcher", () => {
       "--unshare-uts",
       "--unshare-ipc",
       "--unshare-net",
-      "--unshare-cgroup-try"
+      "--unshare-cgroup",
+      "/usr/bin/prlimit",
+      "--nproc=64:64"
     ]));
     expect(args.filter((argument) => argument === "--unshare-net")).toHaveLength(1);
     expect(args.indexOf("--unshare-net")).toBeLessThan(args.indexOf("--"));
+    expect(args.indexOf("--nproc=64:64")).toBeGreaterThan(args.indexOf("--"));
+    expect(args.join(" ")).toContain("node -e");
+    expect(args).not.toContain("--unshare-cgroup-try");
     expect(bubblewrapProbeArguments("/srv/sunabot/workspace", true)).not.toContain("--unshare-net");
   });
 
@@ -253,6 +258,26 @@ describe("Native Core runtime launcher", () => {
     }
   });
 
+  it.each([0, 1])("keeps ps stderr out of successful process evidence and preserves failures (%s)", async (code) => {
+    class FakeChild extends EventEmitter {
+      stdout = new EventEmitter();
+      stderr = new EventEmitter();
+    }
+    const child = new FakeChild();
+    const pending = command("ps", ["-p", "123", "-o", "lstart="], {
+      capture: "stdout",
+      spawnProcess: () => child
+    });
+    const outcome = code === 0
+      ? expect(pending).resolves.toBe("Sat Oct 10 00:00:00 2026\n")
+      : expect(pending).rejects.toThrow("screen size is bogus");
+    child.emit("exit", code, null);
+    child.stderr.emit("data", Buffer.from("screen size is bogus\n"));
+    child.stdout.emit("data", Buffer.from("Sat Oct 10 00:00:00 2026\n"));
+    child.emit("close", code, null);
+    await outcome;
+  });
+
   it("builds a launcher-owned Native Core identity without a Docker socket", () => {
     const context = {
       root: "/opt/sunabot/current",
@@ -267,7 +292,8 @@ describe("Native Core runtime launcher", () => {
       },
       runtimeEnvironment: {
         SUNABOT_RUNTIME_ID: "runtime-env-spoof",
-        SUNABOT_DOCKER_SOCKET: "/tmp/runtime-env.sock"
+        SUNABOT_DOCKER_SOCKET: "/tmp/runtime-env.sock",
+        SUNABOT_CODEX_EXECUTABLE: "  "
       },
       dev: false,
       packaged: true,
@@ -275,6 +301,7 @@ describe("Native Core runtime launcher", () => {
       workspace: "/srv/sunabot/workspace",
       contract: {
         runtimeId: "sunabot-qq-runtime",
+        codexCli: { executable: "node_modules/@openai/codex/bin/codex.js" },
         adminHost: "127.0.0.1",
         adminPort: 8787,
         onebotPort: 8788,
@@ -285,6 +312,7 @@ describe("Native Core runtime launcher", () => {
     expect(nativeCoreEnvironment(context, "127.0.0.1", "darwin")).toMatchObject({
       SUNABOT_RUNTIME_MODE: "macos",
       SUNABOT_RUNTIME_ID: "sunabot-qq-runtime",
+      SUNABOT_CODEX_EXECUTABLE: path.resolve(context.root, "node_modules/@openai/codex/bin/codex.js"),
       SUNABOT_WORKSPACE_ID: "bfa0ec2e0882d0fb",
       SUNABOT_BWRAP_EXECUTABLE: "/opt/sunabot/current/runtime/bubblewrap/bwrap",
       SUNABOT_PACKAGED_RELEASE: "1"
@@ -296,6 +324,9 @@ describe("Native Core runtime launcher", () => {
     expect(macosEnvironment).not.toHaveProperty("SUNABOT_WEBFETCH_RENDERER_URL");
 
     const linuxEnvironment = nativeCoreEnvironment(context, "172.18.0.1", "linux", true);
+    expect(nativeCoreEnvironment({ ...context, runtimeEnvironment: {
+      ...context.runtimeEnvironment, SUNABOT_CODEX_EXECUTABLE: "/opt/managed-codex"
+    } }, "172.18.0.1", "linux").SUNABOT_CODEX_EXECUTABLE).toBe("/opt/managed-codex");
     expect(linuxEnvironment).not.toHaveProperty("SUNABOT_DOCKER_SOCKET");
     expect(linuxEnvironment).not.toHaveProperty("SUNABOT_WEBFETCH_RENDERER_TOKEN");
     expect(linuxEnvironment).toMatchObject({
@@ -324,6 +355,19 @@ describe("Native Core runtime launcher", () => {
       networkInterfaces: {
         lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
         brSunabot: [{ address: "172.31.0.1", family: "IPv4", internal: false }]
+      }
+    })).toBe("172.31.0.1");
+  });
+
+  it("binds an idle WSL Docker bridge gateway when it is locally bindable", () => {
+    expect(selectNativeOnebotListenHost({
+      configuredHost: "docker-network-gateway-or-loopback",
+      dockerGateway: "172.31.0.1",
+      wsl: true,
+      gatewayBindable: true,
+      networkInterfaces: {
+        lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+        eth0: [{ address: "172.28.96.42", family: "IPv4", internal: false }]
       }
     })).toBe("172.31.0.1");
   });
@@ -526,6 +570,7 @@ describe("Native Core runtime launcher", () => {
     { args: ["up"], invocation: "up" },
     { args: ["start"], invocation: "start" },
     { args: ["restart"], invocation: "restart" },
+    { args: ["restart-core"], invocation: "restart-core" },
     { args: ["bootstrap"], invocation: "bootstrap" },
     { args: ["--dev"], invocation: "--dev" }
   ])("installs dependencies before starting with $invocation in a clean checkout", async ({ args, invocation }) => {
@@ -793,6 +838,7 @@ describe("Native Core runtime launcher", () => {
     expect(() => parseLauncherArguments(["up"], { SUNABOT_CORE_MODE: "native" }))
       .toThrow("SUNABOT_CORE_MODE 已移除");
     expect(parseLauncherArguments(["start"], {}).command).toBe("start");
+    expect(parseLauncherArguments(["restart-core"], {}).command).toBe("restart-core");
     expect(parseLauncherArguments(["doctor"], { SUNABOT_DEV: "1" }).dev).toBe(true);
     expect(parseLauncherArguments(["--help"], {}).command).toBe("help");
     expect(parseLauncherArguments(["reconcile-account", "--account=qq_arona"], {})).toMatchObject({
@@ -844,7 +890,7 @@ describe("Native Core runtime launcher", () => {
       accountId: "io.sunabot.account-id"
     });
     expect(resolved.codexCli).toEqual({
-      version: "0.139.0",
+      version: "0.162.1",
       executable: "node_modules/@openai/codex/bin/codex.js",
       authFile: "secrets/codex/auth.json"
     });

@@ -19,7 +19,7 @@ export interface DreamMinimalConsolidationInput {
 
 export interface DreamMinimalConsolidationPlan {
   workingMemoryId: null;
-  workingMemoryCompression: string;
+  workingMemoryCompression: string | null;
   working: DreamMemoryRecord[];
   longTerm: DreamMemoryRecord[];
   result: {
@@ -77,7 +77,10 @@ export function buildDreamMinimalConsolidationPlan(
   }
 
   const sourceCount = input.workingRecords.length;
-  const outputCount = input.output.workingMemoryCompression.trim() ? 1 : 0;
+  const compressionAvailable = input.output.workingMemoryCompression != null;
+  const outputCount = compressionAvailable
+    ? (input.output.workingMemoryCompression!.trim() ? 1 : 0)
+    : sourceCount;
   return {
     workingMemoryId: null,
     workingMemoryCompression: input.output.workingMemoryCompression,
@@ -89,7 +92,7 @@ export function buildDreamMinimalConsolidationPlan(
         sourceCount,
         outputCount,
         reducedBy: Math.max(0, sourceCount - outputCount),
-        unavailable: 0
+        unavailable: compressionAvailable ? 0 : sourceCount
       },
       longTermMemoryAdditions: {
         requested: input.output.longTermMemoryAdditions.length,

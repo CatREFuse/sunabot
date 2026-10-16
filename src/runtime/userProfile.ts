@@ -51,20 +51,26 @@ export class RuntimeUserProfile {
             decision = "skip";
             return { ok: true, action: "skip", message: "本轮无需更新用户画像。" };
           }
-          if (!input.profile || !input.addressNames) {
-            decision = undefined;
+          const before = await readUserProfileForUser(this.host.config, userId);
+          if (input.profile == null && input.addressNames == null) {
+            decision = "record";
+            recordMemoryOperation(this.host.config, {
+              source: "user_profile", operation: "tool_decision", actor: "model_tool",
+              outcome: "unchanged", conversationId, conversationScope: incoming.scope,
+              changedCount: 0, reasonCode: "content_unavailable"
+            });
             return {
-              ok: false,
-              code: "ADD_USER_PROFILE_INVALID",
-              error: "A complete profile and addressNames are required."
+              ok: true,
+              action: "record",
+              recorded: false,
+              message: "未提供用户画像更新。"
             };
           }
-          const before = await readUserProfileForUser(this.host.config, userId);
           const result = await replaceUserProfileFromTool(this.host.config, {
             userId,
             userName,
-            profile: input.profile,
-            addressNames: input.addressNames,
+            profile: input.profile ?? before?.text ?? "",
+            addressNames: input.addressNames ?? before?.addressNames ?? [],
             sourceDecisionKey
           });
           recordMemoryOperation(this.host.config, {
@@ -117,11 +123,11 @@ export class RuntimeUserProfile {
       source: "user_profile",
       operation: "tool_decision",
       actor: "model_tool",
-      outcome: invoked ? "rejected" : "failed",
+      outcome: invoked ? "rejected" : "unchanged",
       conversationId: conversationRecordId(incoming),
       conversationScope: incoming.scope,
       changedCount: 0,
-      reasonCode: invoked ? "decision_unresolved" : "decision_missing"
+      reasonCode: invoked ? "decision_unresolved" : "model_not_invoked"
     });
   }
 }

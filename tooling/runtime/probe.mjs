@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { inspectMultiAgentMigrationGate } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { ensureCodexAccessToken } from "../../packages/platform/codexTokenRefresh.mjs";
@@ -313,7 +314,7 @@ async function inspectProvider(workspace, options = {}) {
       ? config.providers.items.find((item) => item?.id === defaultProviderId)
       : undefined;
     const selected = Boolean(defaultProviderId && provider?.enabled);
-    const credential = selected ? await providerCredential(workspace, provider) : "";
+    const credential = selected ? await providerCredential(workspace, provider, options.environment ?? process.env) : "";
     const configured = selected && Boolean(credential);
     const verification = configured
       ? await verifyProviderAvailability(provider, credential, options.providerProbeTimeoutMs)
@@ -338,7 +339,7 @@ async function inspectProvider(workspace, options = {}) {
   }
 }
 
-async function providerCredential(workspace, provider) {
+async function providerCredential(workspace, provider, environment) {
   const name = String(provider?.apiKeyEnv ?? "").trim();
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return "";
   if (process.env[name]?.trim()) return process.env[name].trim();
@@ -352,12 +353,12 @@ async function providerCredential(workspace, provider) {
   if (provider?.kind === "codex-responses") {
     const authPath = path.join(workspace, "secrets/codex/auth.json");
     if (await regularFile(authPath)) {
-      try {
-        return await ensureCodexAccessToken({
-          authFile: authPath,
-          codexHome: path.dirname(authPath)
-        });
-      } catch {}
+      return await ensureCodexAccessToken({
+        authFile: authPath,
+        codexHome: path.dirname(authPath),
+        command: environment.SUNABOT_CODEX_EXECUTABLE?.trim() || process.env.SUNABOT_CODEX_EXECUTABLE?.trim()
+          || createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js")
+      });
     }
   }
   return "";

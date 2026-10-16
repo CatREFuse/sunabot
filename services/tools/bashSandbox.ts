@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { buildNativeBashSandboxInvocation, nativeToolPath } from "../../packages/platform/nativeToolSandbox.mjs";
 import type { BashExecutionBackend, BashPathAccess } from "./bashAudit.js";
 import {
   WORKSPACE_BASH_ADMIN_EXECUTABLE,
@@ -15,7 +16,6 @@ export const WORKSPACE_BASH_NATIVE_HOST_EXECUTABLE = "/bin/bash";
 export const WORKSPACE_BASH_VIRTUAL_ROOT = "/workbench";
 export const WORKSPACE_BASH_SKILLS_ROOT = "/skills";
 export const WORKSPACE_BASH_MCP_ROOT = "/mcp";
-const WORKSPACE_BASH_TARGET_PATH = "/usr/local/bin:/usr/bin:/bin";
 const WORKSPACE_BASH_NATIVE_HOST_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 export type WorkspaceBashSandboxKind = "bubblewrap" | "host";
@@ -55,7 +55,7 @@ export interface WorkspaceBashReadOnlyMounts {
 
 export function buildWorkspaceBashEnvironment(): Record<string, string> {
   return {
-    PATH: WORKSPACE_BASH_TARGET_PATH,
+    PATH: nativeToolPath(),
     HOME: WORKSPACE_BASH_VIRTUAL_ROOT,
     PWD: WORKSPACE_BASH_VIRTUAL_ROOT,
     TMPDIR: "/tmp/",
@@ -197,66 +197,19 @@ export function buildBubblewrapInvocation(
   readOnlyMounts?: WorkspaceBashReadOnlyMounts,
   networkAccess = false
 ): WorkspaceBashInvocation {
-  const args = [
-    executable,
-    "--die-with-parent",
-    "--new-session",
-    "--unshare-user",
-    "--unshare-pid",
-    "--unshare-uts",
-    "--unshare-ipc",
-    "--unshare-cgroup",
-    "--uid", "0",
-    "--gid", "0",
-    "--cap-drop", "ALL",
-    "--tmpfs", "/",
-    "--proc", "/proc",
-    "--dev", "/dev",
-    "--dir", "/tmp",
-    "--dir", "/etc",
-    "--dir", WORKSPACE_BASH_VIRTUAL_ROOT,
-    "--dir", WORKSPACE_BASH_SKILLS_ROOT,
-    "--dir", WORKSPACE_BASH_MCP_ROOT
-  ];
-  if (!networkAccess) args.splice(args.indexOf("--unshare-cgroup"), 0, "--unshare-net");
-  for (const directory of ["/usr", "/bin", "/sbin", "/lib", "/lib64"]) {
-    args.push("--dir", directory, "--ro-bind-try", directory, directory);
-  }
-  for (const directory of ["/etc/ssl", "/etc/ca-certificates"]) {
-    addParentDirectories(args, directory);
-    args.push("--ro-bind-try", directory, directory);
-  }
-  for (const file of [
-    "/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf", "/etc/passwd", "/etc/group", "/etc/localtime"
-  ]) {
-    addParentDirectories(args, file);
-    args.push("--ro-bind-try", file, file);
-  }
-  args.push("--bind", workbenchRoot, WORKSPACE_BASH_VIRTUAL_ROOT);
-  addReadOnlySharedBinds(args, readOnlyMounts);
+  validateReadOnlyMounts(readOnlyMounts);
+  const outsideReadOnlyPaths: string[] = [];
   for (const access of approvedOutsideAccesses) {
     if (access.access !== "read") {
       throw new WorkspaceBashIsolationError("Approved outside binds are read-only.");
     }
-    const target = validateOutsideBindPath(access.path, workbenchRoot);
-    addParentDirectories(args, target);
-    args.push("--ro-bind", target, target);
+    outsideReadOnlyPaths.push(validateOutsideBindPath(access.path, workbenchRoot));
   }
-  args.push("--chdir", WORKSPACE_BASH_VIRTUAL_ROOT, "--clearenv");
-  for (const [key, value] of Object.entries(environment)) args.push("--setenv", key, value);
-  args.push("--", ...executionArguments(execution));
-  return {
-    file: resourceLimiter,
-    args: [
-      "--nproc=64:64",
-      "--as=536870912:536870912",
-      "--nofile=128:128",
-      "--fsize=268435456:268435456",
-      "--core=0:0",
-      "--",
-      ...args
-    ]
-  };
+  return buildNativeBashSandboxInvocation({
+    workbenchRoot, environment, executable, resourceLimiter,
+    executionArguments: executionArguments(execution),
+    outsideReadOnlyPaths, readOnlyMounts, networkAccess
+  });
 }
 
 async function ensureBubblewrapSandbox(
@@ -395,15 +348,6 @@ function validateOutsideBindPath(candidate: string, workbenchRoot: string) {
   return resolved;
 }
 
-function addReadOnlySharedBinds(args: string[], mounts: WorkspaceBashReadOnlyMounts | undefined) {
-  if (!mounts) return;
-  validateReadOnlyMounts(mounts);
-  args.push(
-    "--ro-bind", mounts.skills, WORKSPACE_BASH_SKILLS_ROOT,
-    "--ro-bind", mounts.mcp, WORKSPACE_BASH_MCP_ROOT
-  );
-}
-
 function validateReadOnlyMounts(mounts: WorkspaceBashReadOnlyMounts | undefined, workbenchRoot?: string) {
   if (!mounts) return;
   for (const source of [mounts.skills, mounts.mcp]) {
@@ -427,16 +371,6 @@ function isWithin(root: string, candidate: string) {
 function isAncestorOrEqual(candidate: string, target: string) {
   const relative = path.relative(path.resolve(candidate), path.resolve(target));
   return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-}
-
-function addParentDirectories(args: string[], target: string) {
-  const parents: string[] = [];
-  let current = path.posix.dirname(target.replaceAll(path.sep, "/"));
-  while (current !== "/" && current !== ".") {
-    parents.push(current);
-    current = path.posix.dirname(current);
-  }
-  for (const parent of parents.reverse()) args.push("--dir", parent);
 }
 
 function errorMessage(error: unknown) {

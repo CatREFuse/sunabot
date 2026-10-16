@@ -85,10 +85,9 @@ export function parseAiOperations(
 ): Array<ConfigDoctorPatchOperation & { reason: string }> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidAiOutput("模型响应必须是 JSON 对象。");
   const record = value as Record<string, unknown>;
-  if (typeof record.summary !== "string" || !Array.isArray(record.operations)) {
-    throw invalidAiOutput("模型响应缺少 summary 或 operations。");
+  if (!Array.isArray(record.operations)) {
+    throw invalidAiOutput("模型响应缺少 operations。");
   }
-  if (record.operations.length > 16) throw invalidAiOutput("模型返回的修改数量过多。");
   const operations = record.operations.map((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw invalidAiOutput(`第 ${index + 1} 项修改无效。`);
@@ -97,7 +96,7 @@ export function parseAiOperations(
     if ((operation.op !== "add" && operation.op !== "replace") || typeof operation.path !== "string") {
       throw invalidAiOutput(`第 ${index + 1} 项修改操作无效。`);
     }
-    if (typeof operation.valueJson !== "string" || operation.valueJson.length > 4_096) {
+    if (typeof operation.valueJson !== "string") {
       throw invalidAiOutput(`第 ${index + 1} 项修改值无效。`);
     }
     let parsedValue: unknown;
@@ -110,7 +109,7 @@ export function parseAiOperations(
       op: operation.op,
       path: operation.path,
       value: parsedValue,
-      reason: typeof operation.reason === "string" ? operation.reason.slice(0, 240) : "智能诊断建议"
+      reason: typeof operation.reason === "string" ? operation.reason : "智能诊断建议"
     } as ConfigDoctorPatchOperation & { reason: string };
     assertOperations([parsed]);
     if (!isAiRepairableOperation(parsed)) throw invalidAiOutput(`模型建议修改受保护字段：${parsed.path}。`);

@@ -18,6 +18,7 @@ const avatarCropFixture = sharp({
 }).png().toBuffer();
 
 const migratedVisualScenarios = [
+  { title: "QQ 临时离线与登录态恢复矩阵", timeoutMs: 90_000, run: runQqStatusRecoveryVisualScenario },
   { title: "会话标题栏与侧栏矩阵", timeoutMs: 120_000, run: runConversationVisualScenario },
   { title: "日志工作台矩阵", timeoutMs: 90_000, run: runLogsVisualScenario },
   { title: "知识库页面与上传弹层矩阵", timeoutMs: 90_000, run: runKnowledgeVisualScenario },
@@ -35,6 +36,48 @@ for (const scenario of migratedVisualScenarios) {
     test.setTimeout(scenario.timeoutMs);
     await scenario.run(page, testInfo);
   });
+}
+
+async function runQqStatusRecoveryVisualScenario(page: Page, testInfo: TestInfo) {
+  const theme = await prepareVisualPage(page, testInfo);
+  await installMockApi(page);
+  let online = false;
+  let statusUnknown = false;
+  let loginWrites = 0;
+  await page.route("**/api/agents/plana/accounts/primary/login**", async (route) => {
+    if (route.request().method() === "POST") loginWrites += 1;
+    await route.fulfill({ json: {
+      connected: true, online: online && !statusUnknown, authenticated: true, available: true,
+      ...(statusUnknown ? { error: "QQ 在线状态读取失败。" } : {}),
+      phase: online ? "online" : "reconnecting",
+      data: { user_id: 123456, nickname: "普拉娜" }
+    } });
+  });
+  for (const viewport of viewports) {
+    online = false;
+    statusUnknown = false;
+    await page.setViewportSize(viewport);
+    await page.goto("/overview");
+    await expect(page.getByText("OneBot 已连接，QQ 离线", { exact: true })).toBeVisible();
+    await expect(page.getByText("OFFLINE", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "qq-temporarily-offline");
+    await page.getByRole("button", { name: "QQ 登录", exact: true }).click();
+    await expect(page.getByText("正在恢复连接", { exact: true })).toBeVisible();
+    await expect(page.getByText("登录状态已保留。", { exact: true })).toBeVisible();
+    await expect(page.getByAltText("QQ 登录二维码")).toHaveCount(0);
+    await capture(page, viewport.name, theme, "qq-session-retained");
+    expect(loginWrites).toBe(0);
+    online = true;
+    await expect(page.getByText("已登录", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "关闭", exact: true }).click();
+    await expect(page.getByText("ONLINE", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "qq-connection-recovered");
+    statusUnknown = true;
+    await page.getByRole("button", { name: "刷新 QQ 状态", exact: true }).click();
+    await expect(page.getByText("UNKNOWN", { exact: true })).toBeVisible();
+    await expect(page.getByText("OneBot 已连接，QQ 未知", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "qq-state-unknown");
+  }
 }
 
 async function runConversationVisualScenario(page: Page, testInfo: TestInfo) {

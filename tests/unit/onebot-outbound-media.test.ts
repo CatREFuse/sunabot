@@ -8,7 +8,6 @@ import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.js";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
-import { MAX_EMOJI_MARKERS_PER_REPLY } from "../../services/emojis/public.js";
 import {
   MAX_OUTBOUND_INLINE_EMOJI_BYTES_PER_MESSAGE,
   OutboundMediaDelivery,
@@ -269,7 +268,7 @@ describe("OneBot outbound media adapter", () => {
     );
     const sendAction = vi.spyOn(gateway, "sendAction").mockResolvedValue({ status: "ok" });
     const filePaths = Array.from(
-      { length: MAX_EMOJI_MARKERS_PER_REPLY },
+      { length: 6 },
       (_, index) => emojiFilePath(temporaryDirectory, index + 1)
     );
 
@@ -351,7 +350,7 @@ describe("OneBot outbound media adapter", () => {
     ]);
   });
 
-  it("rejects an excessive emoji marker count before reading or sending", async () => {
+  it("sends more than four emoji markers in order without repeated file reads", async () => {
     const inlineDelivery = new OutboundMediaDelivery({ rootDir: temporaryDirectory });
     const createReference = vi.spyOn(inlineDelivery, "createReference");
     const gateway = new OneBotGateway(
@@ -361,13 +360,14 @@ describe("OneBot outbound media adapter", () => {
       { outboundMedia: inlineDelivery }
     );
     const sendAction = vi.spyOn(gateway, "sendAction").mockResolvedValue({ status: "ok" });
-    const filePath = emojiFilePath(temporaryDirectory, 20);
-    expect(MAX_EMOJI_MARKERS_PER_REPLY).toBe(4);
-    const markerCount = 5;
+    const content = Buffer.from("emoji-content");
+    const filePath = path.join(temporaryDirectory, "agents", "arona", `emoji-${crypto.createHash("sha256").update(content).digest("hex")}.png`);
+    await fs.writeFile(filePath, content);
+    const markerCount = 6;
 
-    await expect(gateway.send({
+    await gateway.send({
       schemaVersion: 1,
-      id: "too-many-emoji-markers",
+      id: "multiple-emoji-markers",
       conversationId: "group:42",
       accountId: "primary",
       scope: "user_group",
@@ -384,9 +384,14 @@ describe("OneBot outbound media adapter", () => {
         { length: markerCount },
         (_, imageIndex) => ({ type: "image" as const, imageIndex })
       )
-    })).rejects.toThrow(`${MAX_EMOJI_MARKERS_PER_REPLY} emoji markers`);
-    expect(createReference).not.toHaveBeenCalled();
-    expect(sendAction).not.toHaveBeenCalled();
+    });
+    expect(createReference).toHaveBeenCalledTimes(1);
+    expect(sendAction).toHaveBeenCalledTimes(1);
+    const sent = sendAction.mock.calls[0]![1].message as Array<{ type: string; data: Record<string, string> }>;
+    expect(sent.map((segment) => segment.type)).toEqual(Array.from({ length: markerCount }, () => "image"));
+    expect(sent.map((segment) => segment.data.file)).toEqual(
+      Array.from({ length: markerCount }, () => `base64://${content.toString("base64")}`)
+    );
   });
 
   it("rejects the aggregate raw bytes of ordinary local inline images before OneBot transport", async () => {

@@ -51,6 +51,7 @@ export function buildConversationPromptVariables(config: AppConfig) {
       "当本轮没有必要继续回复、话题已经自然结束，或继续回应其他 Bot 的称呼可能引起循环广播时调用 no_reply；可以先查询记忆、知识库或调用其他工具，调用后不要再输出新的最终正文。",
       "当需要发出自己的形象、自拍、头像、照片或包含自身外观的图片时，调用 selfie 工具，不要用 generate_img 代替。",
       "当用户需要当前 Agent workbench 中已经存在的文件或图片时，调用 send_file；只填写 workbench 相对路径，不要指定、猜测或改投其他 QQ、群聊或 Bot 账号。",
+      "当前发言人明确表达新的稳定偏好、习惯、身份、使用的设备、长期目标或称呼变化时，可通过 add_user_profile 的 record 更新画像，保留仍有效的旧信息；一次明确表达即可作为依据，无需等用户说‘记住’。只改称呼时可只提供 addressNames。没有新增或修正时可 skip 或不调用。工作记忆与 read_air 不会代替画像更新，工具之间没有固定调用顺序。",
       "当对话出现明确的称呼、偏好、反感、禁忌、边界、群规、关系变化，或解释了小团体黑话、暗号、内部梗与共同话题时，调用 read_air；在 insight 中写明角色对此的理解、适用场域、证据与不确定性。",
       "daily_schedule 是今天已经提交的生活事实；只有角色因对话、邀约、延误、职责或新想法产生具体的改期理由时才调用 call_director，并在 request 中写清想改什么和原因。不得自行改写行程，也不要为迎合用户频繁改期。",
       "调用 generate_img 或 selfie 时，默认使用 1K 清晰度；只有用户明确要求更高清、更清晰、壁纸、海报、打印、2K 或 4K 时，才把 resolution 设为 2K 或 4K。",

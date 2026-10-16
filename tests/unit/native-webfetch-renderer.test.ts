@@ -153,6 +153,14 @@ describe("Native WebFetch Renderer security contract", () => {
       "/home/user/.ssh"
     ]));
     expect(bwrap).not.toContain("--new-session");
+    expect(linuxRendererBubblewrapPrefix({
+      cache: "/tmp/cache",
+      home: "/tmp/home",
+      projectRoot: "/repo",
+      runtime: "/tmp/run",
+      workspace: "/repo/workspace",
+      dieWithParent: false
+    })).not.toContain("--die-with-parent");
   });
 
   it("fails closed when the real Bubblewrap namespace probe fails", async () => {

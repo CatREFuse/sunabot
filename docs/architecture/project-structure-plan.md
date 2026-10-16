@@ -187,7 +187,7 @@ GitHub Release 为 Linux amd64 与 arm64 各提供归档和 SHA-256 文件。归
 
 - `sunabot.sh`、`dist/`、管理台产物、production `node_modules`；
 - Node `24.18.0`；
-- Codex CLI `0.139.0`；
+- Codex CLI `0.162.1`；
 - Lightpanda `0.3.3`、对应源码与许可；
 - Bubblewrap、包内 ELF loader、完整动态库闭包、对应 Debian 源码与许可；
 - launcher、迁移器、runtime contract、component lock、NapCat Compose 模板和当前文档。

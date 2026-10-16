@@ -1,3 +1,5 @@
+import { modelContentText } from "../../packages/contracts/model/modelContent.js";
+
 export const ADD_WORKMEMORY_TOOL_NAME = "add_workmemory";
 export const ADD_WORKMEMORY_STABLE_ERROR_CODES = [
   "ADD_WORKMEMORY_INVALID",
@@ -42,7 +44,7 @@ export const addWorkMemoryTool = {
   ].join(" "),
   parameters: {
     type: "object",
-    additionalProperties: false,
+    additionalProperties: true,
     properties: {
       action: {
         type: "string",
@@ -51,14 +53,12 @@ export const addWorkMemoryTool = {
       },
       content: {
         type: ["string", "null"],
-        minLength: 1,
-        maxLength: 4_000,
         description: "A concise working-memory item when action=record, or null when action=skip. Image memories include a real Markdown link whose target starts with knowledge/... after the image and a searchable Markdown note with its own relative image link have been saved with Bash."
       }
     },
-    required: ["action", "content"]
+    required: ["action"]
   },
-  strict: true
+  strict: false
 } as const;
 
 export async function runAddWorkMemory(
@@ -70,25 +70,12 @@ export async function runAddWorkMemory(
     return { ok: false, code: "ADD_WORKMEMORY_INVALID", error: "add_workmemory arguments must be an object." };
   }
   const record = input as Record<string, unknown>;
-  if (Object.keys(record).some((key) => key !== "action" && key !== "content")) {
-    return { ok: false, code: "ADD_WORKMEMORY_INVALID", error: "add_workmemory contains unsupported arguments." };
-  }
   const action = record.action;
   if (action !== "record" && action !== "skip") {
     return { ok: false, code: "ADD_WORKMEMORY_INVALID", error: "action must be record or skip." };
   }
   if (action === "skip") {
-    if (record.content !== null) {
-      return { ok: false, code: "ADD_WORKMEMORY_INVALID", error: "content must be null when action is skip." };
-    }
     return port.execute({ action: "skip" }, signal);
   }
-  if (
-    typeof record.content !== "string"
-    || !record.content.trim()
-    || Array.from(record.content).length > 4_000
-  ) {
-    return { ok: false, code: "ADD_WORKMEMORY_INVALID", error: "content must contain 1 to 4000 characters." };
-  }
-  return port.execute({ action: "record", content: record.content.trim() }, signal);
+  return port.execute({ action: "record", content: modelContentText(record.content).trim() }, signal);
 }

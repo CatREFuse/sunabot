@@ -245,18 +245,20 @@ export type AppConfig = AppConfigShape<BotConfig>;
 export interface OneBotLoginCheck {
   connected: boolean;
   online: boolean;
+  authenticated?: boolean;
   data?: { user_id?: number; nickname?: string };
   error?: string;
 }
 
 export interface OneBotQrLogin extends OneBotLoginCheck {
   available: boolean;
-  phase?: "online" | "connecting" | "restarting" | "starting" | "waiting_scan" | "expired";
+  phase?: "online" | "connecting" | "reconnecting" | "restarting" | "starting" | "waiting_scan" | "expired";
   loginError?: string;
   action?: string;
   imageDataUrl?: string;
   imageUrl?: string;
   imageUpdatedAt?: string;
+  imageExpiresAt?: string;
   qrcode?: string;
   webuiUrl?: string;
 }

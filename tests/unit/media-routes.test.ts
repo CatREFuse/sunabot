@@ -1,5 +1,7 @@
 // @vitest-environment node
 import path from "node:path";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import Fastify, { type FastifySchema } from "fastify";
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +19,35 @@ afterEach(async () => {
 });
 
 describe("media API plugin", () => {
+  it.each([
+    [{ address: "127.0.0.1", family: 4 }],
+    [{ address: "::1", family: 6 }, { address: "127.0.0.1", family: 4 }]
+  ])("uses the default transport with pinned DNS addresses %j", async (...addresses) => {
+    const png = await sharp({ create: { width: 8, height: 8, channels: 3, background: "red" } }).png().toBuffer();
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "image/png" });
+      response.end(png);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const app = Fastify();
+    apps.push(app);
+    registerMediaRoutes(app, {
+      getConfig: () => defaultConfig(),
+      runtime: {} as SunaRuntime,
+      lookupHostname: async () => addresses
+    });
+    try {
+      const source = `http://media.example:${(server.address() as AddressInfo).port}/image.png`;
+      for (const route of ["image", "thumbnail"]) {
+        const response = await app.inject(`/api/media/${route}?url=${encodeURIComponent(source)}`);
+        expect(response.statusCode).toBe(200);
+        expect((await sharp(response.rawPayload).metadata()).width).toBeGreaterThan(0);
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it("loads private addresses returned by an injected DNS lookup", async () => {
     const app = Fastify();
     apps.push(app);

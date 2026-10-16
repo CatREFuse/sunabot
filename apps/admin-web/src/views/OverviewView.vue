@@ -28,6 +28,7 @@ const chatsError = shallowRef("");
 const chatsOpen = shallowRef(false);
 const actionMessage = shallowRef("");
 const overviewError = shallowRef("");
+const qqStatusError = shallowRef("");
 const diagnosticsOpen = shallowRef(false);
 const tokenUsage = shallowRef<TokenUsagePayload | null>(null);
 const tokenUsageModel = shallowRef("");
@@ -37,6 +38,8 @@ const selectedAccountId = shallowRef("");
 const loginAccount = shallowRef<AgentAccount | null>(null);
 let tokenUsageRequestId = 0;
 let overviewMounted = false;
+let accountStatusRequest: { key: string; promise: Promise<void> } | undefined;
+let accountStatusRequestId = 0;
 const currentAccounts = computed(() => agentsState.currentAgent.value?.accounts ?? []);
 const accountCatalogKey = computed(() => `${agentsState.currentAgent.value?.id ?? ""}:${currentAccounts.value.map((account) => account.id).join("|")}`);
 const selectedAccount = computed(() => currentAccounts.value.find((account) => account.id === selectedAccountId.value));
@@ -44,7 +47,12 @@ const selectedAccountKey = computed(() => accountKey(selectedAccount.value));
 const qqLogin = useQqLogin({
   paths: () => accountLoginPaths(loginAccount.value),
   onStatus(snapshot) {
-    if (accountKey(loginAccount.value ?? undefined) === selectedAccountKey.value) qqStatus.value = snapshot;
+    if (accountKey(loginAccount.value ?? undefined) === selectedAccountKey.value) {
+      accountStatusRequestId += 1;
+      accountStatusRequest = undefined;
+      qqStatus.value = snapshot;
+      qqStatusError.value = "";
+    }
   },
   async onOnline() {
     await Promise.all([runtime.refresh(), loadOverviewDetails(), loadChats()]);
@@ -55,6 +63,9 @@ watch(accountCatalogKey, syncSelectedAccount, { immediate: true });
 watch(selectedAccountKey, (next, previous) => {
   if (next === previous) return;
   qqStatus.value = null;
+  qqStatusError.value = "";
+  accountStatusRequestId += 1;
+  accountStatusRequest = undefined;
   chats.value = null;
   chatsError.value = "";
   chatsOpen.value = false;
@@ -64,28 +75,32 @@ watch(selectedAccountKey, (next, previous) => {
   if (overviewMounted) void loadSelectedAccountStatus();
 });
 
-const runtimeConnected = computed(() => runtime.status.value?.onebot.connected ?? false);
-const accountConnected = computed(() => qqStatus.value?.connected ?? selectedAccount.value?.connected ?? false);
-const primaryState = computed(() => runtime.error.value && !runtime.status.value ? "ERROR" : runtimeConnected.value ? "ONLINE" : "OFFLINE");
+const accountConnection = computed(() => runtime.status.value?.onebot.accounts?.find((account) => account.accountId === selectedAccountId.value));
+const accountConnected = computed(() => qqStatus.value?.connected ?? Boolean(accountConnection.value));
+const primaryState = computed(() => runtime.error.value ? "ERROR" : !runtime.status.value || qqState.value === "unknown" ? "UNKNOWN" : accountConnected.value && qqState.value === "online" ? "ONLINE" : "OFFLINE");
 const qqIdentity = computed(() => {
   const value = qqStatus.value?.data?.user_id ?? selectedAccount.value?.qqId;
   return value || "--";
 });
 const qqNickname = computed(() => qqStatus.value?.data?.nickname ?? selectedAccount.value?.label ?? "--");
 const qqState = computed<"online" | "offline" | "unknown">(() => {
-  if (!selectedAccount.value || !accountConnected.value) return "offline";
+  if (!selectedAccount.value) return "offline";
   if (qqStatus.value?.error) return "unknown";
   if (!qqStatus.value) return "unknown";
   return qqStatus.value.online && Boolean(qqStatus.value.data?.user_id) ? "online" : "offline";
 });
+watch(() => runtime.status.value, () => {
+  if (overviewMounted) void loadSelectedAccountStatus();
+});
 const headerMessage = computed(() => {
   if (actionMessage.value === "刷新中") return actionMessage.value;
   if (runtime.error.value) return runtime.error.value;
+  if (qqStatusError.value) return qqStatusError.value;
   if (overviewError.value) return overviewError.value;
   return actionMessage.value;
 });
 const headerMessageKind = computed(() => {
-  if (runtime.error.value || overviewError.value) return "error";
+  if (runtime.error.value || qqStatusError.value || overviewError.value) return "error";
   if (headerMessage.value === "已更新") return "success";
   if (headerMessage.value && headerMessage.value !== "刷新中") return "error";
   return undefined;
@@ -123,16 +138,11 @@ onMounted(async () => {
 });
 
 async function loadOverviewDetails() {
-  const statusAccount = selectedAccount.value;
-  const statusAccountKey = accountKey(statusAccount);
   const results = await Promise.allSettled([
-    statusAccount
-      ? apiRequest<OneBotLoginCheck>(`${accountApiBaseFor(statusAccount)}/login/status`)
-      : Promise.resolve({ connected: false, online: false } as OneBotLoginCheck),
+    loadSelectedAccountStatus(),
     apiRequest<{ conversations: number; images: number }>("/api/overview/summary"),
     Promise.resolve().then(() => apiRequest<TokenUsagePayload>(tokenUsageUrl()))
   ]);
-  if (results[0].status === "fulfilled" && selectedAccountKey.value === statusAccountKey) qqStatus.value = results[0].value;
   if (results[1].status === "fulfilled") {
     conversationCount.value = results[1].value.conversations;
     imageCount.value = results[1].value.images;
@@ -140,24 +150,35 @@ async function loadOverviewDetails() {
   if (results[2].status === "fulfilled") tokenUsage.value = results[2].value;
   const names = ["QQ 状态", "概览", "Token"];
   overviewError.value = results.flatMap((result, index) => result.status === "rejected"
-    && (index !== 0 || selectedAccountKey.value === statusAccountKey)
+    && index !== 0
     ? [`${names[index]}: ${result.reason instanceof Error ? result.reason.message : "读取失败"}`]
     : []).join(" · ");
 }
 
-async function loadSelectedAccountStatus() {
+function loadSelectedAccountStatus(): Promise<void> {
   const account = selectedAccount.value;
   const key = accountKey(account);
   if (!account) {
     qqStatus.value = null;
-    return;
+    return Promise.resolve();
   }
-  try {
-    const result = await apiRequest<OneBotLoginCheck>(`${accountApiBaseFor(account)}/login/status`);
-    if (selectedAccountKey.value === key) qqStatus.value = result;
-  } catch (error) {
-    if (selectedAccountKey.value === key) overviewError.value = `QQ 状态: ${error instanceof Error ? error.message : "读取失败"}`;
-  }
+  if (accountStatusRequest?.key === key) return accountStatusRequest.promise;
+  const requestId = ++accountStatusRequestId;
+  const promise = apiRequest<OneBotLoginCheck>(`${accountApiBaseFor(account)}/login/status`).then((result) => {
+    if (selectedAccountKey.value === key && requestId === accountStatusRequestId) {
+      qqStatus.value = result;
+      qqStatusError.value = "";
+    }
+  }).catch((error) => {
+    if (selectedAccountKey.value === key && requestId === accountStatusRequestId) {
+      qqStatus.value = null;
+      qqStatusError.value = `QQ 状态: ${error instanceof Error ? error.message : "读取失败"}`;
+    }
+  }).finally(() => {
+    if (accountStatusRequest?.promise === promise) accountStatusRequest = undefined;
+  });
+  accountStatusRequest = { key, promise };
+  return promise;
 }
 
 function tokenUsageUrl() {
@@ -195,7 +216,7 @@ async function applyTokenUsageFilters(filters: TokenUsageFilters) {
 async function refreshAll() {
   actionMessage.value = "刷新中";
   await Promise.all([runtime.refresh(), loadOverviewDetails()]);
-  actionMessage.value = runtime.error.value || overviewError.value ? "" : "已更新";
+  actionMessage.value = runtime.error.value || qqStatusError.value || overviewError.value ? "" : "已更新";
 }
 
 async function loadChats() {
@@ -315,14 +336,14 @@ function accountOptionLabel(account: AgentAccount) {
       <OneBotStatusPanel
         class="mt-4"
         :primary-state="primaryState"
-        :connected="runtimeConnected"
+        :connected="accountConnected"
         :qq-state="qqState"
         :qq="qqIdentity"
         :nickname="qqNickname"
-        :connections="runtime.status.value?.onebot.connections ?? 0"
-        :connected-at="runtime.status.value?.onebot.connectedAt"
-        :last-event-at="runtime.status.value?.onebot.lastEventAt"
-        :last-message-event-at="runtime.status.value?.onebot.lastMessageEventAt"
+        :connections="accountConnected ? 1 : 0"
+        :connected-at="accountConnection?.connectedAt"
+        :last-event-at="accountConnection?.lastEventAt"
+        :last-message-event-at="accountConnection?.lastMessageEventAt"
         :refreshing="runtime.loading.value || actionMessage === '刷新中'"
         @refresh="refreshAll"
       />
@@ -374,6 +395,8 @@ function accountOptionLabel(account: AgentAccount) {
       :account-label="loginAccount?.label ?? ''"
       :busy="qqLogin.busy.value"
       :checking="qqLogin.checking.value"
+      :remaining-seconds="qqLogin.remainingSeconds.value"
+      :qr-blocked="qqLogin.qrBlocked.value"
       :snapshot="qqLogin.snapshot.value"
       :error="qqLogin.error.value"
       :confirming-logout="qqLogin.confirmingLogout.value"

@@ -16,6 +16,114 @@ afterEach(async () => {
 });
 
 describe("NapcatLoginControl", () => {
+  it("never returns an expired QR as scannable", async () => {
+    const fixture = await createFixture();
+    await fs.writeFile(fixture.qrCodePath, pngHeader);
+    const old = new Date(Date.now() - 61_000);
+    await fs.utimes(fixture.qrCodePath, old, old);
+    const control = new NapcatLoginControl({ ...fixture, fetchImpl: async (input) =>
+      json(new URL(input).pathname === "/api/auth/login"
+        ? { code: 0, data: { Credential: "credential" } }
+        : { code: 0, data: { isLogin: false } }) });
+    const snapshot = await control.status();
+    expect(snapshot.imageDataUrl).toBeUndefined();
+    expect(snapshot.loginError).toContain("过期");
+    control.close();
+  });
+
+  it("rejects an acknowledged refresh that only touches the old image and coalesces requests", async () => {
+    const fixture = await createFixture();
+    await fs.writeFile(fixture.qrCodePath, pngHeader);
+    let refreshes = 0;
+    const control = new NapcatLoginControl({ ...fixture, fetchImpl: async (input) => {
+      const pathname = new URL(input).pathname;
+      if (pathname === "/api/auth/login") return json({ code: 0, data: { Credential: "credential" } });
+      if (pathname === "/api/QQLogin/RefreshQRcode") {
+        refreshes += 1;
+        await fs.utimes(fixture.qrCodePath, new Date(), new Date());
+      }
+      return json({ code: 0, data: { isLogin: false } });
+    } });
+    const first = control.refreshQrCode();
+    const second = control.refreshQrCode();
+    expect(second).toBe(first);
+    await expect(first).rejects.toMatchObject({ statusCode: 504, code: "QQ_QR_REFRESH_TIMEOUT", message: expect.stringContaining("未生成新二维码") });
+    expect(refreshes).toBe(1);
+    control.close();
+  }, 15_000);
+
+  it("keeps watching a scanned but offline identity until login completion is persisted", async () => {
+    const fixture = await createFixture();
+    await fs.writeFile(fixture.manualLoginMarkerPath, JSON.stringify({ offlineObservedAt: "2026-10-14T00:00:00.000Z" }));
+    await fs.writeFile(fixture.qrCodePath, pngHeader);
+    let online = false;
+    let loginInfoReads = 0;
+    const quickLoginAccounts: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const pathname = new URL(input).pathname;
+      if (pathname === "/api/auth/login") return json({ code: 0, data: { Credential: "credential" } });
+      if (pathname === "/api/QQLogin/CheckLoginStatus") return json({ code: 0, data: { isLogin: true } });
+      if (pathname === "/api/QQLogin/GetQQLoginInfo") {
+        loginInfoReads += 1;
+        return json({ code: 0, data: { uin: "985436737", online } });
+      }
+      if (pathname === "/api/QQLogin/SetQuickLoginQQ") {
+        quickLoginAccounts.push(JSON.parse(String(init?.body)).uin);
+        return json({ code: 0, data: null });
+      }
+      throw new Error(`Unexpected request: ${pathname}`);
+    });
+    const control = new NapcatLoginControl({ ...fixture, fetchImpl, watchIntervalMs: 20 });
+    try {
+      control.startLoginCompletionWatch();
+      await vi.waitFor(() => expect(loginInfoReads).toBeGreaterThanOrEqual(2), { timeout: 2_000 });
+      expect(quickLoginAccounts).toEqual([]);
+      await expect(fs.access(fixture.manualLoginMarkerPath)).resolves.toBeUndefined();
+      online = true;
+      await vi.waitFor(async () => {
+        await expect(fs.access(fixture.manualLoginMarkerPath)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+      await expect(fs.readFile(fixture.runtimeEnvPath, "utf8")).resolves.toContain("NAPCAT_ACCOUNT=985436737");
+      await expect(fs.access(fixture.qrCodePath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(quickLoginAccounts).toEqual(["985436737"]);
+      const completedReads = loginInfoReads;
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(loginInfoReads).toBe(completedReads);
+    } finally {
+      control.close();
+    }
+  });
+
+  it("preserves a kicked-session error even when cached login and identity remain present", async () => {
+    const fixture = await createFixture();
+    const fetchImpl = vi.fn(async (input: string | URL) => {
+      const pathname = new URL(input).pathname;
+      if (pathname === "/api/auth/login") return json({ code: 0, data: { Credential: "credential" } });
+      if (pathname === "/api/QQLogin/CheckLoginStatus") return json({ code: 0, data: { isLogin: true, loginError: "[KICKEDOFFLINE] 登录已失效" } });
+      if (pathname === "/api/QQLogin/GetQQLoginInfo") return json({ code: 0, data: { uin: "985436737", online: true } });
+      throw new Error(`Unexpected write: ${pathname}`);
+    });
+    const control = new NapcatLoginControl({ ...fixture, fetchImpl });
+    await expect(control.status()).resolves.toMatchObject({ isLogin: true, loginError: "[KICKEDOFFLINE] 登录已失效" });
+    await expect(fs.readFile(fixture.runtimeEnvPath, "utf8")).resolves.toBe("NAPCAT_ACCOUNT=\n");
+    control.close();
+  });
+
+  it("reports an authenticated but offline QQ without rewriting its login cache", async () => {
+    const fixture = await createFixture();
+    const fetchImpl = vi.fn(async (input: string | URL) => {
+      const pathname = new URL(input).pathname;
+      if (pathname === "/api/auth/login") return json({ code: 0, data: { Credential: "credential" } });
+      if (pathname === "/api/QQLogin/CheckLoginStatus") return json({ code: 0, data: { isLogin: true } });
+      if (pathname === "/api/QQLogin/GetQQLoginInfo") return json({ code: 0, data: { uin: "985436737", online: false } });
+      throw new Error(`Unexpected write: ${pathname}`);
+    });
+    const control = new NapcatLoginControl({ ...fixture, fetchImpl });
+    await expect(control.status()).resolves.toMatchObject({ isLogin: true, online: false, manualLogin: false });
+    await expect(fs.readFile(fixture.runtimeEnvPath, "utf8")).resolves.toBe("NAPCAT_ACCOUNT=\n");
+    control.close();
+  });
+
   it("authenticates once and returns the newly refreshed QR image", async () => {
     const fixture = await createFixture();
     const fetchImpl = vi.fn(async (input: string | URL) => {
@@ -147,7 +255,7 @@ describe("NapcatLoginControl", () => {
       if (pathname === "/api/auth/login") return json({ code: 0, data: { Credential: "credential" } });
       if (pathname === "/api/QQLogin/CheckLoginStatus") return json({ code: 0, data: { isLogin: true } });
       if (pathname === "/api/QQLogin/GetQQLoginInfo") {
-        return json({ code: 0, data: { uin: "985436737", nick: "A.R.O.N.A [试作型]" } });
+        return json({ code: 0, data: { uin: "985436737", nick: "A.R.O.N.A [试作型]", online: true } });
       }
       if (pathname === "/api/QQLogin/SetQuickLoginQQ") return json({ code: 0, data: null });
       throw new Error(`Unexpected request: ${pathname}`);

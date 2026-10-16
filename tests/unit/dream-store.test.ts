@@ -441,6 +441,41 @@ describe("Dream SQLite store", () => {
       .toThrow("Dream run occurrence collision");
   });
 
+  it("keeps complete model text in output while projecting the bounded history column", () => {
+    const created=store.claimDailyRun(claimInput("worker:a")).run;
+    const dreamDescription="梦".repeat(5000);
+    const output={dreamDescription,rawOutput:JSON.stringify({dreamDescription})};
+    expect(store.markGenerated({runId:created.id,workerId:"worker:a",output,dreamText:dreamDescription,now:new Date(now)})).toMatchObject({dreamText:"梦".repeat(4096),output});
+  });
+
+  it("stores a partial generated result without inventing a Dream description", () => {
+    const created=store.claimDailyRun(claimInput("worker:a")).run;
+    const output={workingMemoryCompression:null,longTermMemoryAdditions:[],dreamDescription:"",rawOutput:"{}"};
+    expect(store.markGenerated({runId:created.id,workerId:"worker:a",output,dreamText:"",now:new Date(now)})).toMatchObject({status:"generated",dreamText:null,output});
+    expect(store.getRunByLocalDate(created.localDate)?.output).toEqual(output);
+  });
+
+  it("roundtrips model input and output beyond the former total byte limit", () => {
+    const content = "记".repeat(400_000);
+    const input = { schemaVersion: 1, payload: { workingMemory: content } };
+    const created = store.claimDailyRun({ ...claimInput("worker:a"), input }).run;
+    const output = { dreamDescription: content, rawOutput: JSON.stringify({ dreamDescription: content }) };
+
+    store.markGenerated({
+      runId: created.id,
+      workerId: "worker:a",
+      output,
+      dreamText: content,
+      now: new Date(now)
+    });
+
+    expect(store.getRunByLocalDate(created.localDate)).toMatchObject({
+      input,
+      output,
+      dreamText: "记".repeat(4096)
+    });
+  });
+
   it("persists generated output through lease recovery, consolidation, persona audit, and completion", () => {
     const created = store.claimDailyRun(claimInput("worker:a")).run;
     now += 10;

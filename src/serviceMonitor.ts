@@ -22,6 +22,9 @@ export class ServiceMonitor {
   private readonly pending = new Map<MonitorChannel, PendingNotification>();
   private onebotStale = false;
   private onebotOfflineNotified = false;
+  private readonly accountStale = new Set<string>();
+  private readonly accountOfflineNotified = new Set<string>();
+  private readonly accountDisconnectTimers = new Map<string, NodeJS.Timeout>();
   private lastOnlineAnnouncementAt = 0;
   private started = false;
 
@@ -36,6 +39,8 @@ export class ServiceMonitor {
     this.started = true;
     this.gateway.on("connected", this.onConnected);
     this.gateway.on("disconnected", this.onDisconnected);
+    this.gateway.on("accountConnected", this.onAccountConnected);
+    this.gateway.on("accountDisconnected", this.onAccountDisconnected);
     this.gateway.on("error", this.onGatewayError);
     process.on("unhandledRejection", this.onUnhandledRejection);
     process.on("uncaughtException", this.onUncaughtException);
@@ -50,10 +55,14 @@ export class ServiceMonitor {
     this.started = false;
     if (this.timer) clearInterval(this.timer);
     if (this.disconnectTimer) clearTimeout(this.disconnectTimer);
+    for (const timer of this.accountDisconnectTimers.values()) clearTimeout(timer);
+    this.accountDisconnectTimers.clear();
     for (const item of this.pending.values()) if (item.timer) clearTimeout(item.timer);
     this.pending.clear();
     this.gateway.off("connected", this.onConnected);
     this.gateway.off("disconnected", this.onDisconnected);
+    this.gateway.off("accountConnected", this.onAccountConnected);
+    this.gateway.off("accountDisconnected", this.onAccountDisconnected);
     this.gateway.off("error", this.onGatewayError);
     process.off("unhandledRejection", this.onUnhandledRejection);
     process.off("uncaughtException", this.onUncaughtException);
@@ -86,6 +95,30 @@ export class ServiceMonitor {
     void this.enqueue("onebot", `OneBot 连接异常：${errorMessage(error)}`);
   };
 
+  private readonly onAccountConnected = ({ accountId }: { accountId: string }) => {
+    clearTimeout(this.accountDisconnectTimers.get(accountId));
+    this.accountDisconnectTimers.delete(accountId);
+    const recovered = this.accountOfflineNotified.delete(accountId) || this.accountStale.has(accountId);
+    this.accountStale.delete(accountId);
+    if (recovered) void this.enqueue("onebot", `OneBot ${accountId} 已恢复连接。`);
+  };
+
+  private readonly onAccountDisconnected = ({ accountId }: { accountId: string }) => {
+    clearTimeout(this.accountDisconnectTimers.get(accountId));
+    void this.settings.runtimeSettings().then((settings) => {
+      if (!this.started) return;
+      const timer = setTimeout(() => {
+        this.accountDisconnectTimers.delete(accountId);
+        if (this.gateway.getStatus().accounts?.some((account) => account.accountId === accountId)
+          || this.accountOfflineNotified.has(accountId)) return;
+        this.accountOfflineNotified.add(accountId);
+        void this.enqueue("onebot", `OneBot ${accountId} 反向 WebSocket 已断开。`);
+      }, settings.onebotOfflineGraceMs);
+      timer.unref();
+      this.accountDisconnectTimers.set(accountId, timer);
+    });
+  };
+
   private readonly onUnhandledRejection = (reason: unknown) => {
     void this.enqueue("server", `Unhandled rejection：${errorMessage(reason)}`);
   };
@@ -98,6 +131,19 @@ export class ServiceMonitor {
     const status = this.gateway.getStatus();
     if (!status.connected) return;
     const settings = await this.settings.runtimeSettings();
+    if (status.accounts) {
+      for (const account of status.accounts) {
+        const lastEventAt = Date.parse(account.lastEventAt ?? account.connectedAt);
+        const stale = !Number.isFinite(lastEventAt) || Date.now() - lastEventAt > settings.heartbeatStaleMs;
+        if (stale && !this.accountStale.has(account.accountId)) {
+          this.accountStale.add(account.accountId);
+          await this.enqueue("onebot", `OneBot ${account.accountId} 已连接，但事件心跳超时。`);
+        } else if (!stale && this.accountStale.delete(account.accountId)) {
+          await this.enqueue("onebot", `OneBot ${account.accountId} 事件心跳已恢复。`);
+        }
+      }
+      return;
+    }
     const lastEventAt = status.lastEventAt ? Date.parse(status.lastEventAt) : Date.parse(status.connectedAt ?? "");
     const stale = !Number.isFinite(lastEventAt) || Date.now() - lastEventAt > settings.heartbeatStaleMs;
     if (stale && !this.onebotStale) {

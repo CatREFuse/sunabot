@@ -38,6 +38,7 @@ import {
 } from "./onebotEventIngress.js";
 import type { OneBotEvent } from "./protocol.js";
 import { normalizeMentionUserIds } from "./outboundMentions.js";
+import { summarizeOneBotConnections, startOneBotHeartbeat } from "./connectionStatus.js";
 import {
   loadOneBotConversationDirectory,
   resolveOneBotAttachment,
@@ -68,7 +69,11 @@ export interface OneBotGatewayOptions {
 
 export class OneBotGateway extends EventEmitter implements MessagingPort, ConversationDirectoryPort, AttachmentSourcePort {
   private readonly wss: WebSocketServer;
-  private readonly sockets = new Map<WebSocket, MessagingConnectionContextV1 & { connectedAt: string }>();
+  private readonly sockets = new Map<WebSocket, MessagingConnectionContextV1 & {
+    connectedAt: string;
+    lastEventAt?: string;
+    lastMessageEventAt?: string;
+  }>();
   private readonly pending = new Map<string, PendingAction>();
   private readonly recentEvents: OneBotEventTrace[] = [];
   private lastEventAtValue?: string;
@@ -98,6 +103,7 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     if (this.mounted) return;
     this.mounted = true;
     this.server.on("upgrade", this.handleUpgrade);
+    startOneBotHeartbeat(this.wss);
 
     this.wss.on("connection", (ws, _request, connection?: MessagingConnectionContextV1) => {
       const wasDisconnected = this.sockets.size === 0;
@@ -106,9 +112,8 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
       this.sockets.set(ws, { accountId, selfId: connection?.selfId, connectedAt });
       if (wasDisconnected) {
         this.emit("connected", { connectedAt, accountId, selfId: connection?.selfId });
-      } else {
-        this.emit("accountConnected", { connectedAt, accountId, selfId: connection?.selfId });
       }
+      this.emit("accountConnected", { connectedAt, accountId, selfId: connection?.selfId });
 
       ws.on("message", (data) => {
         void this.handleMessage(ws, data.toString()).catch((error) => {
@@ -220,18 +225,8 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
   }
 
   getStatus() {
-    const socketValues = [...this.sockets.values()];
-    const selfIds = socketValues.flatMap((socket) => (socket.selfId ? [socket.selfId] : []));
     return {
-      connected: this.sockets.size > 0,
-      connections: this.sockets.size,
-      selfIds,
-      accounts: socketValues.map((socket) => ({
-        accountId: socket.accountId,
-        ...(socket.selfId ? { selfId: socket.selfId } : {}),
-        connectedAt: socket.connectedAt
-      })),
-      connectedAt: socketValues[0]?.connectedAt,
+      ...summarizeOneBotConnections([...this.sockets.values()]),
       lastEventAt: this.lastEventAtValue,
       lastMessageEventAt: this.lastMessageEventAtValue
     };
@@ -528,6 +523,11 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
       onReceived: (receivedAt) => {
         this.lastEventAtValue = receivedAt;
         if (event.post_type === "message") this.lastMessageEventAtValue = receivedAt;
+        for (const socket of this.sockets.values()) {
+          if (socket.accountId !== connection.accountId) continue;
+          socket.lastEventAt = receivedAt;
+          if (event.post_type === "message") socket.lastMessageEventAt = receivedAt;
+        }
         this.recordEventTrace(event, receivedAt, connection.accountId);
         this.emit("event", event);
       }

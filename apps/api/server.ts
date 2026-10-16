@@ -7,6 +7,7 @@ import fsp from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
+import { summarizeOneBotConnections } from "../../adapters/onebot/connectionStatus.js";
 import { SqliteAdminSessionStore } from "../../adapters/sqlite/adminSessionStore.js";
 import {
   applicationDatabasePath,
@@ -400,14 +401,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   const getOnebotStatus = (agentId: string) => {
     const status = onebotGateway.getStatus();
     const accounts = (status.accounts ?? []).filter((account) => agentRegistry.account(account.accountId)?.agentId === agentId);
-    return {
-      ...status,
-      connected: accounts.length > 0,
-      connections: accounts.length,
-      selfIds: accounts.flatMap((account) => account.selfId ? [account.selfId] : []),
-      accounts,
-      connectedAt: accounts[0]?.connectedAt
-    };
+    return summarizeOneBotConnections(accounts);
   };
   const getRuntimeProbeFacts = async (agentId: string) => {
     agentRuntimeManager.require(agentId);

@@ -120,7 +120,7 @@ codex_version=$("$stage/runtime/node/bin/node" \
   echo "发行包内置 Codex CLI 无法运行。" >&2
   exit 1
 }
-[[ $codex_version == "codex-cli 0.139.0" ]] || {
+[[ $codex_version == "codex-cli 0.162.1" ]] || {
   echo "发行包内置 Codex CLI 版本无效。" >&2
   exit 1
 }

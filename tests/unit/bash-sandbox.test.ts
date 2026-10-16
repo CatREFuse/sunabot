@@ -53,16 +53,18 @@ describe("workspace Bash isolation", () => {
   ])("uses resource-limited minimal bubblewrap for the %s bypass", (_kind, command) => {
     const invocation = buildBubblewrapInvocation({ kind: "shell", command }, workbench, environment);
 
-    expect(invocation.file).toBe("/usr/bin/prlimit");
-    expect(invocation.args.slice(0, 6)).toEqual([
+    expect(invocation.file).toBe("/usr/bin/bwrap");
+    const commandBoundary = invocation.args.indexOf("--");
+    expect(invocation.args.slice(commandBoundary + 1, commandBoundary + 8)).toEqual([
+      "/usr/bin/prlimit",
       "--nproc=64:64",
-      "--as=536870912:536870912",
+      "--as=4294967296:4294967296",
       "--nofile=128:128",
       "--fsize=268435456:268435456",
       "--core=0:0",
       "--"
     ]);
-    expect(invocation.args).toContain("/usr/bin/bwrap");
+    expect(invocation.args.slice(0, commandBoundary)).not.toContain("--nproc=64:64");
     expect(hasSequence(invocation.args, ["--tmpfs", "/"])).toBe(true);
     expect(hasSequence(invocation.args, ["--ro-bind", "/", "/"])).toBe(false);
     expect(hasSequence(invocation.args, ["--bind", workbench, WORKSPACE_BASH_VIRTUAL_ROOT])).toBe(true);
@@ -264,9 +266,9 @@ describe("workspace Bash isolation", () => {
       networkAccess: true
     });
     expect(probe).toHaveBeenCalledOnce();
-    expect(probe.mock.calls[0]?.[0]).toBe("/fixture/prlimit");
+    expect(probe.mock.calls[0]?.[0]).toBe("/fixture/bwrap");
     expect(probe.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([
-      "--nproc=64:64", "--as=536870912:536870912", "/fixture/bwrap",
+      "--nproc=64:64", "--as=4294967296:4294967296", "/fixture/prlimit",
       "--unshare-pid", "--unshare-cgroup"
     ]));
     expect(probe.mock.calls[0]?.[1]).not.toContain("--unshare-net");

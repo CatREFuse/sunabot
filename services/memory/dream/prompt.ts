@@ -4,7 +4,7 @@ export const DREAM_PAYLOAD_VARIABLE = "dream.payload";
 export const LEGACY_DREAM_OUTPUT_CONTRACT_MARKER = "[dream-output-contract-v6]";
 export const LEGACY_DREAM_MINIMAL_OUTPUT_CONTRACT_MARKER = "[dream-minimal-contract-v7]";
 export const LEGACY_DREAM_REASONLESS_OUTPUT_CONTRACT_MARKER = "[dream-minimal-contract-v8]";
-export const DREAM_OUTPUT_CONTRACT_MARKER = "[dream-minimal-contract-v9]";
+export const DREAM_OUTPUT_CONTRACT_MARKER = "[dream-minimal-contract-v10]";
 
 const DREAM_MODEL_TIME_CONTEXT = [
   "<time_context>当前系统时间与系统时区：@{runtime.current_time}。",
@@ -123,7 +123,7 @@ export const LEGACY_DREAM_OUTPUT_CONTRACT_V8 = [
 ].join("\n\n");
 
 export const LEGACY_DREAM_OUTPUT_CONTRACT_V9 = [
-  DREAM_OUTPUT_CONTRACT_MARKER,
+  "[dream-minimal-contract-v9]",
   "只输出一个合法 JSON 对象，不要输出 Markdown、代码围栏、说明、原因、决策码、内部推理或额外字段。三个顶层字段必须按 workingMemoryCompression、longTermMemoryAdditions、dreamDescription 的顺序出现。",
   "先在内部推理中判断如何无损压缩整份工作记忆、哪些事实值得长期保存，以及零新增是否具有正当依据。只输出最终结果，不输出判断过程或理由。",
   "workingMemoryCompression 必须是压缩后的完整工作记忆正文字符串，最多 4000 个字符，直接替换整份工作记忆。payload.workingMemory 为空时允许输出空字符串；不得输出 items、工作记忆 ID、来源映射或逐项动作。",
@@ -137,8 +137,8 @@ export const LEGACY_DREAM_OUTPUT_CONTRACT_V9 = [
   })
 ].join("\n\n");
 
-export const DREAM_OUTPUT_CONTRACT = [
-  DREAM_OUTPUT_CONTRACT_MARKER,
+export const LEGACY_DREAM_STRICT_OUTPUT_CONTRACT = [
+  "[dream-minimal-contract-v9]",
   "只输出一个合法 JSON 对象，不要输出 Markdown、代码围栏、说明、原因、决策码、内部推理或额外字段。三个顶层字段必须按 workingMemoryCompression、longTermMemoryAdditions、dreamDescription 的顺序出现。",
   "先在内部推理中判断如何无损压缩整份工作记忆、哪些事实值得长期保存，以及零新增是否具有正当依据。只输出最终结果，不输出判断过程或理由。",
   "workingMemoryCompression 必须是压缩后的完整工作记忆正文字符串，最多 4000 个字符，直接替换整份工作记忆。payload.workingMemory 为空时允许输出空字符串；不得输出 items、工作记忆 ID、来源映射或逐项动作。",
@@ -151,6 +151,14 @@ export const DREAM_OUTPUT_CONTRACT = [
     longTermMemoryAdditions: ["会持续影响未来回复的长期事实。"],
     dreamDescription: "梦境正文"
   })
+].join("\n\n");
+
+export const DREAM_OUTPUT_CONTRACT = [
+  DREAM_OUTPUT_CONTRACT_MARKER,
+  "建议用 JSON 分别提供 workingMemoryCompression、longTermMemoryAdditions 和 dreamDescription，字段顺序自由，也可以保留补充内容。",
+  "workingMemoryCompression 表达整理后的完整工作记忆。保留仍有效的原因、变化、结果、承诺、边界和下一步，并保留事件的时间语义；相关精确时间可以概括为有依据的时间段。无法整理时可以不提供此字段，现有工作记忆会保留。",
+  "longTermMemoryAdditions 表达本轮值得长期保存的新事实，通常使用字符串数组；没有新增时可以省略或提供空数组。已有长期记忆会保留。",
+  "dreamDescription 表达本轮梦境，梦境与现实事实分开保存。"
 ].join("\n\n");
 
 export const LEGACY_DREAM_CONTRACT_V3 = [

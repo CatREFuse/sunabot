@@ -299,42 +299,30 @@ describe("Dream context projection", () => {
     expect(first.seed).toBe(SEED);
   });
 
-  it("applies explicit field, array, and total payload limits with deterministic tail clipping", { timeout: 15_000 }, () => {
-    const huge = oversizedPayload();
-    const first = projectDreamContext(huge);
-    const second = projectDreamContext(huge);
-    const payload = first.payload;
-    const longTerm = objectArray(payload.longTermMemories);
-    const retainedIds = longTerm.map((item) => String(item.id));
-
-    expect(second).toEqual(first);
-    expect(first.byteLength).toBe(dreamContextPayloadByteLength(payload));
-    expect(first.byteLength).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.totalPayloadBytes);
-    expect(Array.from(String(payload.workingMemory)).length)
-      .toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.workingMemory);
-    expect(longTerm.length).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.arrays.longTermMemories);
-    expect(objectArray(payload.userProfiles).length).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.arrays.userProfiles);
-    expect(objectArray(payload.observedConversations).length).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.arrays.conversations);
-    expect(objectArray(payload.activeTasks).length).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.arrays.activeTasks);
-    for (const item of longTerm) {
-      const fact = String(objectValue(item.memory).fact);
-      expect([...fact].length).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.memoryFact);
-    }
-    expect(stringArray(payload.sourceMemoryIds)).toEqual(retainedIds);
-    expect(stringArray(payload.personaEvidenceIds).every((id) => retainedIds.includes(id))).toBe(true);
-    expect(objectArray(payload.recallStats).every((item) => retainedIds.includes(String(item.recordId)))).toBe(true);
-    expect(payload.fieldKnowledgeWritable).toBe(false);
+  it("preserves large content and all supplied records without arbitrary clipping", {timeout:15000}, () => {
+    const huge=oversizedPayload();
+    const first=projectDreamContext(huge);
+    expect(first.byteLength).toBe(dreamContextPayloadByteLength(first.payload));
+    expect(first.byteLength).toBeGreaterThan(DREAM_CONTEXT_PROJECTION_LIMITS.totalPayloadBytes);
+    expect(first.payload.workingMemory).toBe(huge.workingMemory);
+    expect(objectArray(first.payload.longTermMemories)).toHaveLength(huge.longTermMemories.length);
+    expect(objectArray(first.payload.userProfiles)).toHaveLength(huge.userProfiles.length);
+    expect(projectDreamContext(first.payload).payload).toEqual(first.payload);
   });
 
-  it("fails closed on an invalid seed or a secret-shaped memory id", () => {
-    expect(() => projectDreamContextPayload({ ...sensitivePayload(), seed: "not-a-digest" }))
-      .toThrow("seed must be a SHA-256 digest");
-    const raw = sensitivePayload();
-    raw.longTermMemories[0]!.id = "sk-supersecretmemoryid";
-    expect(() => projectDreamContextPayload(raw)).toThrow("safe opaque memory id");
-    const oversized = sensitivePayload();
-    oversized.longTermMemories[0]!.id = "m".repeat(129);
-    expect(() => projectDreamContextPayload(oversized)).toThrow("safe opaque memory id");
+  it("redacts unusual identifiers without rejecting the complete input", () => {
+    const raw=sensitivePayload();
+    raw.longTermMemories[0]!.id="sk-supersecretmemoryid";
+    const payload=projectDreamContextPayload({...raw,seed:"not-a-digest"});
+    expect(JSON.stringify(payload)).not.toContain("sk-supersecretmemoryid");
+    expect(payload.seed).toBe("not-a-digest");
+  });
+
+  it("accepts replay of a previously clipped field with trailing whitespace", () => {
+    const first=projectDreamContextPayload({...sensitivePayload(),userProfiles:[{facts:["x".repeat(799)+" "]}]});
+    const stored={schemaVersion:1,workingDigest:"a".repeat(64),longTermDigest:"b".repeat(64),payload:{...first,userProfiles:[{facts:["x".repeat(799)+" "]}]}};
+    expect(isCurrentDreamPipelineInput(stored,stored)).toBe(true);
+    expect(projectDreamContextPayload({...sensitivePayload(),userProfiles:[{facts:["x".repeat(799)+" tail"]}]}).userProfiles).toEqual(expect.arrayContaining([expect.objectContaining({facts:["x".repeat(799)+" tail"]})]));
   });
 });
 

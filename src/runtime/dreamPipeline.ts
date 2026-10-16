@@ -8,7 +8,6 @@ import {
   dreamRunSummary,
   nextDreamScheduledAt
 } from "./dreamHistory.js";
-import { assertDreamProviderRequest } from "./dreamProviderRequest.js";
 import {
   commitDreamWithWorkingMemory,
   type RuntimeDreamWorkingMemoryPort
@@ -17,7 +16,6 @@ import {
   boundedDreamPipelineId as boundedId,
   digestDreamPipelineJson as digestJson,
   digestDreamPipelineText as digestText,
-  isCurrentDreamPipelineInput as currentInput,
   isDreamPipelineAbortError as abortError,
   isRetryableDreamPipelineError as retryableDreamError,
   isDreamPipelineObject as isObject,
@@ -30,7 +28,6 @@ import {
 } from "./dreamPipelineSupport.js";
 import {
   combineDreamPipelineSignals as combineSignals,
-  dreamPipelineModelExpectations as modelExpectations,
   DreamRunError
 } from "./dreamPipelineExecutionSupport.js";
 import type { RuntimeDreamContextPort, RuntimeDreamContextSnapshot, RuntimeDreamPromptPort } from "./dreamPorts.js";
@@ -440,14 +437,12 @@ export class RuntimeDreams {
         signal.throwIfAborted();
       }
       const input = persistedInput(run.input);
-      modelExpectations(input.payload);
       if (run.status === "running") {
         const request = await this.options.prompt.render(DREAM_PROMPT_ID, {
           [DREAM_PAYLOAD_VARIABLE]: input.payload,
           ...dreamPersonaPromptVariables(input.payload)
         });
         signal.throwIfAborted();
-        assertDreamProviderRequest(request);
         const text = await this.options.model.complete(request, {
           signal,
           logContext: {
@@ -496,26 +491,34 @@ export class RuntimeDreams {
         });
         const externalCommit = await commitDreamWithWorkingMemory({
           workingMemory: this.options.workingMemory,
-          workingRevision: snapshot.workingRevision,
+          workingRevision: input.workingRevision,
           content: plan.workingMemoryCompression,
           runId: run.id,
           localDate: run.localDate,
           signal,
-          commit: (externalWorkingMemory) => this.options.store.commitConsolidation({
-            runId: run.id,
-            workerId: this.workerId,
-            expectedWorkingDigest: snapshot.workingDigest,
-            expectedLongTermDigest: snapshot.longTermDigest,
-            externalWorkingMemory,
-            workingMemoryId: plan.workingMemoryId,
-            working: plan.working,
-            longTerm: plan.longTerm,
-            archives: [],
-            recallLineages: [],
-            reviews: [],
-            result: toJsonObject(plan.result, "dream consolidation result"),
-            now: this.clock()
-          })
+          commit: (externalWorkingMemory, workingMemoryApplied) => {
+            if (!workingMemoryApplied) {
+              const compression = plan.result.workingMemoryCompression;
+              compression.outputCount = compression.sourceCount;
+              compression.reducedBy = 0;
+              compression.unavailable = compression.sourceCount;
+            }
+            return this.options.store.commitConsolidation({
+              runId: run.id,
+              workerId: this.workerId,
+              expectedWorkingDigest: snapshot.workingDigest,
+              expectedLongTermDigest: snapshot.longTermDigest,
+              externalWorkingMemory,
+              workingMemoryId: plan.workingMemoryId,
+              working: plan.working,
+              longTerm: plan.longTerm,
+              archives: [],
+              recallLineages: [],
+              reviews: [],
+              result: toJsonObject(plan.result, "dream consolidation result"),
+              now: this.clock()
+            });
+          }
         });
         signal.throwIfAborted();
         const committed = externalCommit.committed;
@@ -649,14 +652,8 @@ function persistedInput(value: JsonObject): PersistedDreamInput {
       workingRevision: validDigest(value.workingRevision, "workingRevision")
     }),
     longTermDigest: validDigest(value.longTermDigest, "longTermDigest"),
-    payload: value.payload
+    payload: projectDreamContext(value.payload).payload
   };
-  if (!currentInput(value, input)) {
-    throw new DreamRunError(
-      "DREAM_INPUT_INVALID",
-      "Stored Dream input does not match the current safety contract."
-    );
-  }
   return input;
 }
 function normalizeStoredOutput(

@@ -10,7 +10,6 @@ import { withLogContext } from "./logger.js";
 import {
   promptRequestFields,
   readToolName,
-  responseFormatFields,
   toChatCompletionTool
 } from "./promptMapping.js";
 import {
@@ -48,15 +47,11 @@ import {
 } from "./toolLoopLimits.js";
 import {
   createTurnToolState,
+  completeProviderText,
   withTurnToolState
 } from "./turnToolState.js";
 import { processProviderToolRound } from "./toolRound.js";
 import { assertMappedProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
-import {
-  assertMemoryToolDecisionsResolved,
-  chatMemoryToolChoice,
-  responsesMemoryToolChoice
-} from "./memoryToolDecisions.js";
 
 export async function completeProviderTurn(
   context: ProviderAdapterContext,
@@ -111,11 +106,9 @@ async function completeOpenAIResponses(
       max_output_tokens: context.provider.maxOutputTokens,
       reasoning: context.provider.reasoningEffort ? { effort: context.provider.reasoningEffort } : undefined,
       ...requestFields,
-      ...responseFormatFields(request.response_format, requestFields.text),
       prompt_cache_key: cacheKey,
       input: input as never,
       tools: tools.length ? tools as never : undefined,
-      tool_choice: responsesMemoryToolChoice(options),
       parallel_tool_calls: tools.length ? requestFields.parallel_tool_calls ?? false : undefined
     };
     const metadata = withLogContext({
@@ -134,19 +127,22 @@ async function completeOpenAIResponses(
       () => client.responses.create(requestBody as never, { signal: options.signal })
     );
     const response = attempt.value;
+    const responseError = response.error?.message || (response.status === "failed" ? "模型请求失败。"
+      : response.status === "incomplete" && !extractProviderText(response) && !extractFunctionCalls(response).length
+        ? "模型没有返回可发送内容。" : undefined);
     await context.logger.response("responses.complete", {
-      ok: true,
+      ok: !responseError,
+      ...(responseError ? { error: responseError } : {}),
       payload: response,
       summary: summarizeResponsesPayload(response, "")
     }, attempt.metadata);
+    if (responseError) throw new Error(responseError);
 
     const toolCalls = extractFunctionCalls(response);
     state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, toolCalls, maxToolCalls);
     if (!toolCalls.length) {
-      assertMemoryToolDecisionsResolved(options);
       const text = extractProviderText(response);
-      if (!text) throw new Error("模型没有返回可发送内容。");
-      return { kind: "completed", text };
+      return completeProviderText(text, state, options);
     }
 
     const siblingText = extractProviderText(response);
@@ -217,12 +213,10 @@ async function completeCodexResponses(
         : undefined,
       include: ["reasoning.encrypted_content"],
       ...requestFields,
-      ...responseFormatFields(request.response_format, requestFields.text),
       prompt_cache_key: cacheKey,
       input,
       instructions: stableInputCache ? undefined : systemPrompt,
       tools: tools.length ? tools : undefined,
-      tool_choice: responsesMemoryToolChoice(options),
       parallel_tool_calls: tools.length ? requestFields.parallel_tool_calls ?? false : undefined
     };
     const metadata = withLogContext({
@@ -291,10 +285,8 @@ async function completeCodexResponses(
     const toolCalls = extractFunctionCalls(payload);
     state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, toolCalls, maxToolCalls);
     if (!toolCalls.length) {
-      assertMemoryToolDecisionsResolved(options);
       const outputText = extractResponsesTextFromSse(text) || extractResponsesText(payload);
-      if (!outputText) throw new Error("模型没有返回可发送内容。");
-      return { kind: "completed", text: outputText };
+      return completeProviderText(outputText, state, options);
     }
 
     const streamText = extractResponsesTextFromSse(text);
@@ -370,9 +362,7 @@ async function completeChatCompletions(
       max_completion_tokens: context.provider.maxOutputTokens,
       reasoning_effort: undefined,
       tools: tools.length ? tools : undefined,
-      tool_choice: chatMemoryToolChoice(options),
-      parallel_tool_calls: tools.length ? false : undefined,
-      response_format: request.response_format?.type === "text" ? undefined : request.response_format
+      parallel_tool_calls: tools.length ? false : undefined
     };
     const metadata = withLogContext({
       round,
@@ -412,10 +402,8 @@ async function completeChatCompletions(
     });
     state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, calls, maxToolCalls);
     if (!calls.length) {
-      assertMemoryToolDecisionsResolved(options);
       const text = choice.content?.trim();
-      if (!text) throw new Error("模型没有返回可发送内容。");
-      return { kind: "completed", text };
+      return completeProviderText(text, state, options);
     }
 
     const siblingText = choice.content?.trim() ?? "";

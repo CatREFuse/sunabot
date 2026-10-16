@@ -22,6 +22,7 @@ export async function main(argv = process.argv.slice(2)) {
       agentId: optional(args, "agent"),
       providerId: optional(args, "provider-id"),
       model: optional(args, "model"),
+      codexModel: args.has("codex-model") ? required(args, "codex-model") : undefined,
       lockProviderRoutes: flag(args, "lock-provider-routes"),
       copyCodexAuth: flag(args, "copy-codex-auth")
     });

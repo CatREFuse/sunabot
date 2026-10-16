@@ -11,7 +11,7 @@ import {
   ConversationRecord,
   ParsedIncomingMessage
 } from "../types.js";
-import { persistedAttachments, persistedQuoteReferences } from "./messagingAttachmentHelpers.js";
+import { parseConversationId, persistedAttachments, persistedQuoteReferences } from "./messagingAttachmentHelpers.js";
 import { MAX_STORED_CONVERSATION_MESSAGES } from "./runtimeContracts.js";
 
 export class TaskLimiter {
@@ -105,10 +105,6 @@ export function buildAsyncToolCompletionPrompt(
     arguments: publicToolArguments(payload.arguments),
     outcome: payload.outcome
   }, null, 2);
-  const maxChars = 120_000;
-  const boundedEnvelope = envelope.length > maxChars
-    ? `${envelope.slice(0, maxChars)}\n[tool result truncated by Sunabot]`
-    : envelope;
   return buildCallbackInput("async_tool_completion", {
     instructions: [
       "这是 Sunabot 生成的可信内部完成事件。异步工具任务已经结束。",
@@ -117,7 +113,7 @@ export function buildAsyncToolCompletionPrompt(
       "不要重新调用 codex 工具处理同一个任务。"
     ],
     toolResultMarker: "<tool_result>",
-    toolResult: envelope.length > maxChars ? boundedEnvelope : JSON.parse(envelope)
+    toolResult: JSON.parse(envelope)
   });
 }
 
@@ -151,6 +147,7 @@ export function loadConversationRecords(config?: Pick<AppConfig, "persona">) {
     store.ensureLegacyConversationsImported(conversationStorePath());
     return store.readConversations().filter(isConversationRecord).map((record) => ({
       ...record,
+      accountId: record.accountId ?? parseConversationId(record.id)?.accountId,
       disabledTools: normalizeConversationDisabledTools(record.disabledTools),
       messages: record.messages
         .slice(-MAX_STORED_CONVERSATION_MESSAGES)

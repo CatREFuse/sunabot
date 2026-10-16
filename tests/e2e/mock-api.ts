@@ -1021,7 +1021,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         available: true,
         phase: online ? "online" : "waiting_scan",
         ...(account?.qqId ? { data: { user_id: Number(account.qqId), nickname: account.label } } : {}),
-        ...(online ? {} : { imageDataUrl: `data:image/png;base64,${qr}`, imageUpdatedAt: "2026-07-13T08:00:00.000Z" })
+        ...(online ? {} : { imageDataUrl: `data:image/png;base64,${qr}`, imageUpdatedAt: "2026-07-13T08:00:00.000Z", imageExpiresAt: new Date(Date.now() + 60_000).toISOString() })
       });
     }
     const agentLogoutMatch = pathname.match(/^\/api\/agents\/([^/]+)\/accounts\/([^/]+)\/logout$/);
@@ -1316,6 +1316,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       });
     }
 
+    if (pathname === "/api/overview/summary") return json(route, { conversations: 2, images: 1 });
     if (pathname === "/api/conversations") {
       return json(route, {
         conversations: [
@@ -2148,7 +2149,8 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         available: true,
         phase: "waiting_scan",
         imageDataUrl: `data:image/png;base64,${qr}`,
-        imageUpdatedAt: new Date(Date.UTC(2026, 6, 12, 0, 0, state.qrVersion)).toISOString()
+        imageUpdatedAt: new Date(Date.UTC(2026, 6, 12, 0, 0, state.qrVersion)).toISOString(),
+        imageExpiresAt: new Date(Date.now() + 60_000).toISOString()
       });
     }
     if (pathname === "/api/onebot/napcat-webui-url") {

@@ -105,7 +105,7 @@
     },
     "codexCli": {
       "managedBy": "native",
-      "version": "0.139.0",
+      "version": "0.162.1",
       "executable": "node_modules/@openai/codex/bin/codex.js",
       "authFile": "secrets/codex/auth.json",
       "failClosed": true
@@ -132,8 +132,8 @@
     "composeFile": "deploy/napcat/compose.yml",
     "service": "napcat",
     "network": { "name": "sunabot-napcat", "nameEnv": "SUNABOT_NAPCAT_NETWORK" },
-    "image": "docker.io/mlikiowa/napcat-docker:v4.15.0",
-    "digest": "sha256:cde89d766604e570517e9ce66304d4222210479d2209ec04e5d58890dea087f7",
+    "image": "docker.io/mlikiowa/napcat-docker:v4.18.30",
+    "digest": "sha256:335f9310198504d8d07aba91cc91d89215269891919c26eb4e46052ff8bb176d",
     "pullPolicy": "never",
     "labels": {
       "runtimeId": "io.sunabot.runtime-id",

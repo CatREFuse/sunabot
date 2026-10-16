@@ -34,7 +34,8 @@ describe("RuntimeDreams minimal pipeline", () => {
     expect(Object.keys(fixture.store.generatedCalls[0]!.output)).toEqual([
       "workingMemoryCompression",
       "longTermMemoryAdditions",
-      "dreamDescription"
+      "dreamDescription",
+      "rawOutput"
     ]);
     expect(fixture.workingMemory.calls).toHaveLength(1);
     expect(fixture.workingMemory.calls[0]!.content)
@@ -125,6 +126,39 @@ describe("RuntimeDreams minimal pipeline", () => {
     await expect(pending).resolves.toBeUndefined();
   });
 
+  it("replays legacy failed input without projection equality and keeps its original working revision", async () => {
+    const now = new Date("2026-08-04T04:05:00.000Z");
+    const fixture = createFixture(() => now);
+    await fixture.runtime.tick(now);
+    const run = fixture.store.runs.get("2026-08-04")!;
+    const payload = run.input.payload as Record<string, unknown>;
+    payload.userProfiles = [{ id: "profile-a", facts: ["x".repeat(799) + " "] }];
+    run.input.workingRevision = "9".repeat(64);
+    updateRun(run, {
+      status: "failed",
+      output: null,
+      result: null,
+      dreamText: null,
+      errorCode: "DREAM_INPUT_INVALID",
+      attemptCount: 3,
+      completedAt: null
+    });
+    fixture.workingMemory.calls.length = 0;
+    fixture.workingMemory.updated = 0;
+
+    await expect(fixture.runtime.force(now)).resolves.toMatchObject({ status: "completed" });
+
+    expect(fixture.model.calls).toBe(2);
+    expect(fixture.workingMemory.calls[0]?.expectedRevision).toBe("9".repeat(64));
+    expect(fixture.workingMemory.updated).toBe(0);
+    expect(fixture.store.commitCalls.at(-1)?.result).toMatchObject({
+      workingMemoryCompression: { outputCount: 2, reducedBy: 0, unavailable: 2 }
+    });
+    expect((run.input.payload as Record<string, unknown>).userProfiles)
+      .toEqual([{ id: "profile-a", facts: ["x".repeat(799) + " "] }]);
+    expect(fixture.store.failedCalls).toHaveLength(0);
+  });
+
   it("treats working-memory revision drift as a soft link and still commits add-only SQLite data", async () => {
     const now = new Date("2026-08-04T04:05:00.000Z");
     const fixture = createFixture(() => now);
@@ -135,7 +169,29 @@ describe("RuntimeDreams minimal pipeline", () => {
     expect(completed).toMatchObject({ status: "completed" });
     expect(fixture.store.commitCalls).toHaveLength(1);
     expect(fixture.store.commitCalls[0]!.externalWorkingMemory).toBe(true);
+    expect(fixture.store.commitCalls[0]!.result).toMatchObject({
+      workingMemoryCompression: { outputCount: 2, reducedBy: 0, unavailable: 2 }
+    });
     expect(fixture.workingMemory.rollbacks).toBe(0);
+  });
+
+  it("preserves current working memory when a legacy run has no captured file revision", async () => {
+    const now = new Date("2026-08-04T04:05:00.000Z");
+    const fixture = createFixture(() => now);
+    await fixture.runtime.tick(now);
+    const run = fixture.store.runs.get("2026-08-04")!;
+    delete run.input.workingRevision;
+    updateRun(run, {
+      status: "failed", output: null, result: null, completedAt: null,
+      errorCode: "DREAM_INPUT_INVALID", attemptCount: 3
+    });
+    fixture.workingMemory.calls.length = 0;
+    await expect(fixture.runtime.force(now)).resolves.toMatchObject({ status: "completed" });
+    expect(fixture.workingMemory.calls).toHaveLength(0);
+    expect(fixture.store.commitCalls.at(-1)).toMatchObject({
+      externalWorkingMemory: true,
+      result: { workingMemoryCompression: { reducedBy: 0, unavailable: 2 } }
+    });
   });
 
   it("rolls back the working-memory write when the long-term snapshot conflicts", async () => {
@@ -149,25 +205,16 @@ describe("RuntimeDreams minimal pipeline", () => {
     expect(fixture.workingMemory.rollbacks).toBe(1);
   });
 
-  it("rejects malformed output before markGenerated and stops automatic retry after three attempts", async () => {
-    let now = new Date("2026-08-04T04:05:00.000Z");
-    const fixture = createFixture(() => now);
-    fixture.model.response = "not-json";
-
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      const failed = await fixture.runtime.tick(now);
-      expect(failed).toMatchObject({
-        status: "failed",
-        attemptCount: attempt,
-        errorCode: "DREAM_OUTPUT_CONTRACT_INVALID"
-      });
-      now = new Date(now.getTime() + 15 * 60_000 + 1);
-    }
-
-    expect(fixture.model.calls).toBe(3);
-    expect(fixture.store.generatedCalls).toHaveLength(0);
-    expect(fixture.store.commitCalls).toHaveLength(0);
-    expect(fixture.store.failedCalls.at(-1)?.retryAt).toBeNull();
+  it("accepts prose output and preserves working memory when no compression was returned", async () => {
+    const now=new Date("2026-08-04T04:05:00.000Z");
+    const fixture=createFixture(()=>now);
+    fixture.model.response="a dream in prose";
+    await expect(fixture.runtime.tick(now)).resolves.toMatchObject({status:"completed"});
+    expect(fixture.model.calls).toBe(1);
+    expect(fixture.store.generatedCalls[0]?.output).toMatchObject({rawOutput:"a dream in prose",workingMemoryCompression:null});
+    expect(fixture.workingMemory.calls).toHaveLength(0);
+    expect(fixture.store.commitCalls[0]?.result).toMatchObject({workingMemoryCompression:{reducedBy:0,unavailable:2}});
+    expect(fixture.store.failedCalls).toHaveLength(0);
   });
 
   it("aborts an in-flight model request on stop without recording a failure", async () => {
@@ -384,10 +431,14 @@ class FakeWorkingMemory implements RuntimeDreamWorkingMemoryPort {
   readonly calls: Array<Parameters<RuntimeDreamWorkingMemoryPort["compareAndSwap"]>[0]> = [];
   conflict = false;
   rollbacks = 0;
+  updated = 0;
 
   async compareAndSwap(input: Parameters<RuntimeDreamWorkingMemoryPort["compareAndSwap"]>[0]) {
     this.calls.push(structuredClone(input));
-    if (this.conflict) return { status: "conflict" as const, revision: "e".repeat(64) };
+    if (this.conflict || input.expectedRevision !== "d".repeat(64)) {
+      return { status: "conflict" as const, revision: "e".repeat(64) };
+    }
+    this.updated += 1;
     return {
       status: "updated" as const,
       revision: "f".repeat(64),

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
+import { readProcessSignature } from "./process-signature.mjs";
 
 const execFileAsync = promisify(execFile);
 const PROCESS_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -157,10 +158,7 @@ function parseProcessRow(line) {
 
 async function processSignature(pid) {
   try {
-    const { stdout } = await execFileAsync("ps", ["-p", String(pid), "-o", "lstart="], {
-      maxBuffer: PROCESS_OUTPUT_BYTES
-    });
-    return String(stdout).trim();
+    return await readProcessSignature(pid);
   } catch {
     return "";
   }

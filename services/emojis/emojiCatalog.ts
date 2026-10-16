@@ -17,9 +17,8 @@ export const PRESET_EMOJI_KEYS = [
 ] as const;
 
 export const MAX_AGENT_EMOJIS = 64;
-export const MAX_EMOJI_MARKERS_PER_REPLY = 4;
 export const EMOJI_MARKER_SYNTAX =
-  "需要发送表情时，在正文对应位置输出由斜杠和真实 key 组成的标记。例如可用列表包含“开心”时，只能输出 [/开心]。方括号内的内容必须严格等于 key，不得添加“表情”等前缀，也不得原样输出占位文字。key 必须从可用列表中精确选择，不得编造、转义或嵌套；单条回复最多 4 个表情，没有合适表情时不要输出标记。";
+  "需要发送表情时，在正文对应位置输出由斜杠和真实 key 组成的标记。例如可用列表包含“开心”时，输出 [/开心]。请从可用列表中精确选择 key，方括号内不添加“表情”等前缀；没有合适表情时可以只回复文字。";
 
 export const EMOJI_EXPRESSION_PROMPTS: Readonly<Record<string, string>> = {
   开心: "真诚开心地笑，眼神明亮，嘴角自然上扬",
@@ -90,9 +89,6 @@ export function planEmojiMarkers(text: string, port: EmojiCatalogPort): EmojiMar
   const entries = port.listAvailable();
   const catalog = new Map(entries.map((entry) => [entry.key, { ...entry.image }] as const));
   const markers = recognizedEmojiMarkers(text, catalog);
-  if (markers.length > MAX_EMOJI_MARKERS_PER_REPLY) {
-    throw new Error(`单条回复最多 ${MAX_EMOJI_MARKERS_PER_REPLY} 个表情，请减少后重试。`);
-  }
   const expectedKeys = markers.map((marker) => marker.key);
   return {
     text,
@@ -105,8 +101,6 @@ export function planEmojiMarkers(text: string, port: EmojiCatalogPort): EmojiMar
 }
 
 export function replanEmojiMarkers(text: string, plan: EmojiMarkerPlan) {
-  const markers = recognizedEmojiMarkers(text, plan.catalog);
-  assertExpectedMarkers(markers, plan);
   return planEmojiMarkersFromCatalog(text, plan.catalog);
 }
 

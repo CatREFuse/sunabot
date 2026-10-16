@@ -6,7 +6,7 @@ The current Agent administrator can add one image to the canonical Workbench emo
 
 ## Preconditions
 
-Use a fresh isolated workspace with an enabled administrator group conversation. The Agent has one canonical Workbench with `emoji/emojis.jsonl` and `selfie/references.jsonl`. Seed two bounded inline PNG images in the raw OneBot event.
+Use a fresh isolated workspace with an enabled administrator group conversation and a direct mention of the fixture Bot. The Agent has one canonical Workbench with `emoji/emojis.jsonl` and `selfie/references.jsonl`. Seed two bounded inline PNG images in the raw OneBot event; both must pass full pixel decoding before the run.
 
 ## Mechanical review
 
@@ -38,9 +38,15 @@ Confirm that `import_chat_emoji` and `import_chat_selfie` are both available and
       },
       "message": [
         {
+          "type": "at",
+          "data": {
+            "qq": "40004"
+          }
+        },
+        {
           "type": "text",
           "data": {
-            "text": "把第一张图用 import_chat_emoji 加入当前群聊使用的表情库，key 是“群聊表情”；把第二张图用 import_chat_selfie 加入当前群聊使用的自拍参考图库，备注是“群聊新增的正面角色参考”。两项都成功后简短告诉我结果。"
+            "text": "把第一张图用 import_chat_emoji 加入当前群聊使用的表情库，key 是“群聊表情”；把第二张图用 import_chat_selfie 加入当前群聊使用的自拍参考图库，备注是“群聊新增的正面角色参考”。只使用这两个导入工具，不运行 Bash 或通用文件读写工具，两项都成功后简短告诉我结果。"
           }
         },
         {
@@ -54,12 +60,12 @@ Confirm that `import_chat_emoji` and `import_chat_selfie` are both available and
         {
           "type": "image",
           "data": {
-            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEElEQVQI12NQWBAARAwQCgAdDgRBkEQ1ogAAAABJRU5ErkJggg==",
             "summary": "自拍参考夹具"
           }
         }
       ],
-      "raw_message": "把第一张图用 import_chat_emoji 加入当前群聊使用的表情库，key 是“群聊表情”；把第二张图用 import_chat_selfie 加入当前群聊使用的自拍参考图库，备注是“群聊新增的正面角色参考”。两项都成功后简短告诉我结果。[表情图片：表情夹具][内容图片：自拍参考夹具]"
+      "raw_message": "[CQ:at,qq=40004]把第一张图用 import_chat_emoji 加入当前群聊使用的表情库，key 是“群聊表情”；把第二张图用 import_chat_selfie 加入当前群聊使用的自拍参考图库，备注是“群聊新增的正面角色参考”。只使用这两个导入工具，不运行 Bash 或通用文件读写工具，两项都成功后简短告诉我结果。[表情图片：表情夹具][内容图片：自拍参考夹具]"
     }
   },
   "expected": {

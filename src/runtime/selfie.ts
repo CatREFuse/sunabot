@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { parseModelJson } from "../../packages/contracts/model/modelContent.js";
 import { AGENT_RESOURCE_LAYOUT } from "../../packages/platform/agentResourceLayout.js";
 import {
   OpenAIProvider
@@ -338,39 +339,28 @@ async function assertRuntimeSelfieDirectory(reference: RuntimeSelfieReference) {
   }
 }
 
-function parseRewrittenSelfiePrompt(raw: string, knownIds: ReadonlySet<string>): RewrittenSelfiePrompt {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("Selfie prompt rewrite returned invalid JSON.");
-  }
+export function parseRewrittenSelfiePrompt(raw: string, knownIds: ReadonlySet<string>): RewrittenSelfiePrompt {
+  const parsed = parseModelJson(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Selfie prompt rewrite returned an invalid result.");
   }
   const result = parsed as Record<string, unknown>;
-  const keys = Object.keys(result);
-  if (keys.length !== 2 || !keys.includes("prompt") || !keys.includes("selectedSelfieReferenceIds")) {
-    throw new Error("Selfie prompt rewrite returned an invalid result.");
-  }
   if (typeof result.prompt !== "string") {
     throw new Error("Selfie prompt rewrite returned an invalid prompt.");
   }
   const prompt = result.prompt.trim();
-  if (!prompt || [...prompt].length > 4_000) {
+  if (!prompt) {
     throw new Error("Selfie prompt rewrite returned an invalid prompt.");
   }
-  if (!Array.isArray(result.selectedSelfieReferenceIds)
-    || result.selectedSelfieReferenceIds.length < 1
-    || result.selectedSelfieReferenceIds.length > MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES) {
+  if (!Array.isArray(result.selectedSelfieReferenceIds)) {
     throw new Error("Selfie prompt rewrite selected an invalid number of references.");
   }
-  const selectedIds = result.selectedSelfieReferenceIds;
+  const selectedIds = [...new Set(result.selectedSelfieReferenceIds)];
+  if (!selectedIds.length || selectedIds.length > MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES) {
+    throw new Error("Selfie prompt rewrite selected an invalid number of references.");
+  }
   if (!selectedIds.every((id): id is string => typeof id === "string" && knownIds.has(id))) {
     throw new Error("Selfie prompt rewrite selected an unknown reference.");
-  }
-  if (new Set(selectedIds).size !== selectedIds.length) {
-    throw new Error("Selfie prompt rewrite selected duplicate references.");
   }
   return { prompt, selectedSelfieReferenceIds: selectedIds };
 }

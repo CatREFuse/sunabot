@@ -33,6 +33,7 @@ export interface MemoryOperationAuditInput {
   beforeRevision?: string;
   afterRevision?: string;
   reasonCode?: string;
+  capacityError?: { code: string; message: string; blocking: false; actualBytes: number; limitBytes: number };
 }
 
 export interface MemoryOperationLogPage {
@@ -85,6 +86,7 @@ export function recordMemoryOperation(
     },
     response: {
       outcome: input.outcome,
+      ...(input.capacityError ? { capacityError: input.capacityError } : {}),
       ...optionalCount("beforeCount", input.beforeCount),
       ...optionalCount("afterCount", input.afterCount),
       ...optionalCount("changedCount", input.changedCount),

@@ -36,15 +36,11 @@ describe("AIR.md repository", () => {
     expect((await readAirKnowledge(config)).content).not.toContain("过时覆盖");
   });
 
-  it("rejects malformed replacement content", () => {
-    expect(() => normalizeAirKnowledge("普通文本")).toThrow("# 场域知识");
-    expect(() => normalizeAirKnowledge("# 场域知识\n\n## 使用边界\n内容")).toThrow("场域约定");
-    expect(() => normalizeAirKnowledge(
-      "# 场域知识\n\n## 使用边界\n内容\n\n## 公共百科\n内容\n\n## 场域约定\n内容"
-    )).toThrow("unsupported or misplaced heading");
-    expect(() => normalizeAirKnowledge(
-      "# 场域知识\n\n## 场域约定\n内容\n\n## 使用边界\n内容"
-    )).toThrow("unsupported or misplaced heading");
+  it("accepts ordinary text and arbitrary heading order without losing content", () => {
+    for (const content of ["普通文本", "# 其他标题\n\n## 新章节\n内容", "# 场域知识\n\n## 场域约定\n内容\n\n## 使用边界\n内容"]) {
+      expect(normalizeAirKnowledge(content)).toBe(content);
+    }
+    expect(() => normalizeAirKnowledge(" ")).toThrow("empty");
   });
 
   it("restores AIR.md when cancellation lands after atomic rename", async () => {

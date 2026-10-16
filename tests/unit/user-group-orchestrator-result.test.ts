@@ -89,17 +89,25 @@ describe("user-group orchestrator result", () => {
       reason: "reply",
       reply_to_message_id: " message-2 "
     }]
-  ])("rejects %s", (_label, payload) => {
+  ])("normalizes %s", (_label, payload) => {
     expect(parseUserGroupOrchestratorDecision(JSON.stringify(payload), ["2", "message-2"]))
-      .toBeNull();
+      .not.toBeNull();
   });
 
-  it("rejects non-JSON wrappers and keeps absent results empty", () => {
+  it("accepts JSON wrappers and keeps absent results empty", () => {
     expect(parseUserGroupOrchestratorDecision(
       '```json\n{"should_reply":false,"reason":"skip","reply_to_message_id":null}\n```',
       ["message-1"]
-    )).toBeNull();
+    )).toEqual({ shouldReply: false, reason: "skip", replyToMessageId: null });
     expect(serializeUserGroupOrchestratorResult(undefined)).toBe("");
+  });
+
+  it("preserves long multiline reasons through the persisted result", () => {
+    const reason = "多行原因\n".repeat(500);
+    const decision = parseUserGroupOrchestratorDecision(JSON.stringify({
+      should_reply: true, reason, reply_to_message_id: "1001", explanation: "extra"
+    }), ["1001"]);
+    expect(userGroupOrchestratorResult(decision!)).toMatchObject({ reason });
   });
 
   it("preserves the result through ambient debounce and deferred callback contracts", () => {

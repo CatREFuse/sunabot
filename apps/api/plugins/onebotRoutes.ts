@@ -91,7 +91,7 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
 
   app.post("/api/onebot/qq-login", { schema: { response: { 200: openObject } } }, async () => {
     const current = await getQqLoginSnapshot(onebotGateway, napcatLoginControl, "primary");
-    if (current.online) return current;
+    if (current.online || current.authenticated) return current;
     if (current.action === "recover_login") {
       await recoverLogin("primary", napcatLoginControl);
       return getQqLoginSnapshot(onebotGateway, napcatLoginControl, "primary");
@@ -106,7 +106,7 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
 
   app.post("/api/onebot/qq-logout", { schema: { response: { 200: openObject } } }, async () => {
     const current = await getQqLoginSnapshot(onebotGateway, napcatLoginControl, "primary");
-    if (!current.online) conflict("QQ_ALREADY_OFFLINE", "QQ 当前未登录。");
+    if (!current.online && !current.authenticated) conflict("QQ_ALREADY_OFFLINE", "QQ 当前未登录。");
     await recoverLogin("primary", napcatLoginControl);
     return {
       ok: true,
@@ -134,7 +134,7 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
     };
     const snapshot = async (account: AgentAccountRegistryRow, refreshed?: NapcatLoginSnapshot) => {
       const result = await getQqLoginSnapshot(onebotGateway, accountControl(account), account.id, refreshed);
-      if (result.action !== "recover_login" && result.data?.user_id && String(result.data.user_id) !== account.qqId) {
+      if (result.online && result.action !== "recover_login" && result.data?.user_id && String(result.data.user_id) !== account.qqId) {
         await identityCoordinator!.assign(account.id, String(result.data.user_id));
       }
       return result;
@@ -148,7 +148,7 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
     app.post("/api/agents/:agentId/accounts/:accountId/login", { schema: { response: { 200: openObject } } }, async (request) => {
       const account = resolveAccount(request.params);
       const current = await snapshot(account);
-      if (current.online) return current;
+      if (current.online || current.authenticated) return current;
       if (current.action === "recover_login") {
         await recoverLogin(account.id, accountControl(account));
         return snapshot(account);
@@ -160,7 +160,7 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
       const account = resolveAccount(request.params);
       const control = accountControl(account);
       const current = await snapshot(account);
-      if (!current.online) conflict("QQ_ALREADY_OFFLINE", "QQ 当前未登录。");
+      if (!current.online && !current.authenticated) conflict("QQ_ALREADY_OFFLINE", "QQ 当前未登录。");
       await recoverLogin(account.id, control);
       await registry.clearAccountIdentity(account.id);
       return {
@@ -235,28 +235,31 @@ async function getQqLoginSnapshot(
     napcatSnapshot ? Promise.resolve(napcatSnapshot) : napcatLoginControl.status()
   ]);
   const recoverLogin = /\[KICKEDOFFLINE\]/i.test(napcat.loginError ?? "");
-  const online = !recoverLogin && (onebot.online || napcat.isLogin);
+  const online = !recoverLogin && (napcat.online === false ? false : onebot.online || napcat.online === true);
   const data = onebot.data?.user_id ? onebot.data : napcat.data;
   const webuiUrl = getLocalNapcatWebuiRoute(accountId);
   return {
     connected: onebot.connected,
     online,
+    authenticated: !recoverLogin && napcat.isLogin,
     data,
     available: Boolean(webuiUrl || napcat.imageDataUrl),
     phase: recoverLogin ? "restarting" : loginPhase(online, onebot.connected, napcat),
     ...(recoverLogin ? { action: "recover_login" } : {}),
     loginError: recoverLogin ? undefined : napcat.loginError,
-    error: napcat.manualLogin || recoverLogin ? undefined : napcat.error,
+    error: napcat.manualLogin || recoverLogin || online ? undefined : napcat.error ?? (napcat.online === undefined ? onebot.error : undefined),
     imageDataUrl: online ? undefined : napcat.imageDataUrl,
     imageUpdatedAt: online ? undefined : napcat.imageUpdatedAt,
+    imageExpiresAt: online ? undefined : napcat.imageExpiresAt,
     webuiUrl
   };
 }
 
 function loginPhase(online: boolean, connected: boolean, napcat: NapcatLoginSnapshot): OneBotQrLogin["phase"] {
   if (online) return connected ? "online" : "connecting";
-  if (napcat.manualLogin && !napcat.imageDataUrl) return "restarting";
+  if (napcat.isLogin) return "reconnecting";
   if (napcat.loginError && /二维码.*(?:过期|失效)|(?:过期|失效).*二维码/i.test(napcat.loginError)) return "expired";
+  if (napcat.manualLogin && !napcat.imageDataUrl) return "restarting";
   if (napcat.imageDataUrl || napcat.qrcodeUrl) return "waiting_scan";
   return "starting";
 }
@@ -266,9 +269,16 @@ async function getOneBotLoginCheck(onebotGateway: OneBotGateway, accountId: stri
   const connected = Boolean(status.accounts?.some((account) => account.accountId === accountId));
   if (!connected) return { connected: false, online: false };
   try {
-    const payload = await onebotGateway.sendAction("get_login_info", {}, accountId);
+    const [payload, state] = await Promise.all([
+      onebotGateway.sendAction("get_login_info", {}, accountId),
+      onebotGateway.sendAction("get_status", {}, accountId)
+    ]);
     const response = payload as { data?: { user_id?: number; nickname?: string } };
-    return { connected: true, online: Boolean(response.data?.user_id), data: response.data ?? {} };
+    const runtime = state as { data?: { online?: boolean } };
+    if (typeof runtime.data?.online !== "boolean") {
+      return { connected: true, online: false, data: response.data ?? {}, error: "OneBot 在线状态未返回。" };
+    }
+    return { connected: true, online: runtime.data?.online === true, data: response.data ?? {} };
   } catch (error) {
     return { connected: true, online: false, error: error instanceof Error ? error.message : String(error) };
   }

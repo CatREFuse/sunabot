@@ -1,12 +1,9 @@
 import type { AppConfig } from "../types.js";
 import {
   EMOJI_MARKER_SYNTAX,
-  emojiPlanContainsMarkers,
   emojiPlanContainsOnlyMarkers,
-  guardEmojiToneRewrite,
   prepareEmojiReply,
   replanEmojiMarkers,
-  restoreEmojiToneRewrite,
   type EmojiMarkerPlan
 } from "../../services/emojis/emojiCatalog.js";
 import {
@@ -37,12 +34,8 @@ export async function rewritePlannedEmojiText(
 ) {
   const currentPlan = replanEmojiMarkers(text, plan);
   if (emojiPlanContainsOnlyMarkers(currentPlan)) return { text, plan: currentPlan };
-  if (!emojiPlanContainsMarkers(currentPlan)) {
-    const rewritten = await rewriteTone(text);
-    return { text: rewritten, plan: replanEmojiMarkers(rewritten, currentPlan) };
-  }
-  const guard = guardEmojiToneRewrite(text, currentPlan);
-  return restoreEmojiToneRewrite(await rewriteTone(guard.input), guard);
+  const rewritten = await rewriteTone(text);
+  return { text: rewritten, plan: replanEmojiMarkers(rewritten, currentPlan) };
 }
 
 export function emojiPromptVariables(config: AppConfig) {

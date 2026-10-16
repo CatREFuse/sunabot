@@ -65,7 +65,8 @@ describe("Skill script sandbox", () => {
       bwrapExecutable: "/fixture/bwrap",
       prlimitExecutable: "/fixture/prlimit"
     });
-    expect(invocation).toMatchObject({ kind: "bubblewrap", file: "/fixture/prlimit", env: {} });
+    expect(invocation).toMatchObject({ kind: "bubblewrap", file: "/fixture/bwrap", env: {} });
+    expect(invocation.args.indexOf("--nproc=64:64")).toBeGreaterThan(invocation.args.indexOf("--"));
     expect(invocation.args).toEqual(expect.arrayContaining([
       "--unshare-net", "--unshare-user", "--unshare-pid", "--unshare-cgroup",
       "--cap-drop", "ALL", "--clearenv",

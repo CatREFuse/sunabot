@@ -5,7 +5,7 @@ import { formatDashboardMetric, formatExactNumber } from "../../utils/numberForm
 import IdentityAvatar from "../ui/IdentityAvatar.vue";
 
 const props = defineProps<{
-  primaryState: "ONLINE" | "OFFLINE" | "ERROR";
+  primaryState: "ONLINE" | "OFFLINE" | "ERROR" | "UNKNOWN";
   connected: boolean;
   qqState: "online" | "offline" | "unknown";
   qq: string | number;
@@ -28,13 +28,13 @@ const stateIcon = computed(() => props.primaryState === "ONLINE" ? "bx-check-shi
     <article class="dashboard-card runtime-card" :data-state="stateKind">
       <header class="dashboard-card__header">
         <span class="meta-label"><i class="bx bx-radio-circle-marked mr-1" aria-hidden="true"></i>Core / OneBot</span>
-        <span class="inline-state" :data-kind="stateKind"><i class="bx" :class="stateIcon" aria-hidden="true"></i>{{ connected ? "运行正常" : primaryState === "ERROR" ? "状态异常" : "等待连接" }}</span>
+        <span class="inline-state" :data-kind="stateKind"><i class="bx" :class="stateIcon" aria-hidden="true"></i>{{ primaryState === "ERROR" ? "状态异常" : primaryState === "UNKNOWN" ? "状态未知" : primaryState === "ONLINE" ? "运行正常" : connected ? `QQ ${qqStateLabel[qqState]}` : "等待连接" }}</span>
       </header>
       <div class="runtime-card__body">
         <strong class="runtime-card__state">{{ primaryState }}</strong>
         <p :class="stateKind === 'success' ? 'text-success' : stateKind === 'error' ? 'text-accent' : 'text-warning'">
           <i class="bx" :class="stateIcon" aria-hidden="true"></i>
-          {{ connected ? `OneBot 已连接，QQ ${qqStateLabel[qqState]}` : primaryState === "ERROR" ? "状态服务不可用" : "等待 OneBot 连接" }}
+          {{ primaryState === "ERROR" ? "状态服务不可用" : connected ? `OneBot 已连接，QQ ${qqStateLabel[qqState]}` : primaryState === "UNKNOWN" ? "等待状态更新" : "等待 OneBot 连接" }}
         </p>
       </div>
       <footer class="runtime-card__footer">

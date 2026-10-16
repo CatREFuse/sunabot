@@ -40,12 +40,21 @@ import {
 import { appendMarkdownReport } from "../../tooling/user-test-harness/markdownReport.js";
 import { gateUserTestReleaseManifest } from "../../tooling/user-test-harness/releaseGate.js";
 import { deriveBranchCaseFromSample } from "../../tooling/user-test-harness/deriveBranchCase.js";
+import { main as runHarnessCli } from "../../tooling/user-test-harness/cli.js";
 import {
   materializeDreamAtRuntime,
   rebaseDreamTemplateToFixture
 } from "../../tooling/user-test-harness/timeline.js";
 
 describe("user test harness", () => {
+  it.each(["--codex-model=", "--codex-model"])("rejects an empty CLI model argument: %s", async (argument) => {
+    await expect(runHarnessCli([
+      "prepare", "--source", path.join(os.tmpdir(), "sunabot-cli-missing-source"),
+      "--destination", path.join(os.tmpdir(), "sunabot-cli-missing-destination"),
+      argument
+    ])).rejects.toThrow("missing --codex-model");
+  });
+
   it("parses a strict executable case from its required Markdown document", () => {
     const testCase = conversationCase("admin_private", "private", 10001);
     const parsed = parseUserTestCaseDocument([
@@ -1392,7 +1401,8 @@ describe("user test harness", () => {
         confirmCredentialCopy: true,
         agentId: "arona",
         providerId: "open-arona-codex",
-        model: "gpt-5.6-sol",
+        model: "gpt-6.1-sol",
+        codexModel: "gpt-5.4",
         lockProviderRoutes: true,
         copyCodexAuth: true
       });
@@ -1405,6 +1415,19 @@ describe("user test harness", () => {
         "utf8"
       ));
       expect(authMarker.codexAuthCopied).toBe(true);
+      expect(authMarker.providerRouteLock.codexModel).toBe("gpt-5.4");
+      const mixedAgentPath = path.join(authDestination, "business/agents/arona/agent.json");
+      const mixedAgent = JSON.parse(await fs.readFile(mixedAgentPath, "utf8"));
+      expect(mixedAgent.bot.replyModel).toBe("gpt-6.1-sol");
+      expect(mixedAgent.bot.tools.codex.model).toBe("gpt-5.4");
+      await expect(assertUserTestWorkspace(authDestination)).resolves.toBe(authDestination);
+      mixedAgent.bot.tools.codex.model = "gpt-6.1-sol";
+      await fs.writeFile(mixedAgentPath, JSON.stringify(mixedAgent));
+      await expect(assertUserTestWorkspace(authDestination)).rejects.toThrow(
+        "USER_TEST_PROVIDER_ROUTE_LOCK_INVALID: agent.bot.tools.codex.model"
+      );
+      mixedAgent.bot.tools.codex.model = "gpt-5.4";
+      await fs.writeFile(mixedAgentPath, JSON.stringify(mixedAgent));
       expect(Object.keys(authMarker).sort()).toEqual([
         "agentId",
         "codexAuthCopied",
@@ -1740,38 +1763,16 @@ describe("user test harness", () => {
         })
       },
       {
-        text: "",
-        calls: [{
-          name: "add_workmemory",
-          args: { action: "skip", content: null }
-        }]
+        text: "夹具主对话已收到。"
       },
       {
-        text: "夹具主对话已收到。",
-        calls: [{
-          name: "add_user_profile",
-          args: { action: "skip", profile: null, addressNames: null }
-        }]
-      },
-      {
-        text: "",
-        calls: [{
-          name: "add_workmemory",
-          args: { action: "skip", content: null }
-        }]
-      },
-      {
-        text: "夹具私聊已收到。",
-        calls: [{
-          name: "add_user_profile",
-          args: { action: "skip", profile: null, addressNames: null }
-        }]
+        text: "夹具私聊已收到。"
       }
     ];
     const fetchMock = vi.fn(async () => {
       const output = providerOutputs.shift();
       if (!output) throw new Error("unexpected fixture Provider request");
-      return codexSseResponse(output.text, output.calls);
+      return codexSseResponse(output.text);
     });
     vi.stubGlobal("fetch", fetchMock);
     try {
@@ -1832,7 +1833,7 @@ describe("user test harness", () => {
         id: "provider_prompt.ordered:conversation.group-reply",
         passed: true
       }));
-      expect(report.observation.tools).toEqual(["add_user_profile", "add_workmemory"]);
+      expect(report.observation.tools).toEqual([]);
       expect(await fs.readFile(
         path.join(
           destination,
@@ -1870,7 +1871,7 @@ describe("user test harness", () => {
         passed: true
       }));
       expect(JSON.stringify(privateReport.observation.outbound)).toContain("夹具私聊已收到");
-      expect(fetchMock).toHaveBeenCalledTimes(5);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     } finally {
       vi.unstubAllGlobals();
       if (previousWorkspace == null) delete process.env.SUNABOT_WORKSPACE;
