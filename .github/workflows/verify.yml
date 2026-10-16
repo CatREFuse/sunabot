@@ -19,6 +19,15 @@ jobs:
       - run: npm ci
       - name: Install Chromium for Playwright UI tests only
         run: npx playwright install --with-deps chromium
+      - name: Prepare Native sandbox tests
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          if sysctl -n kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
       - run: npm run verify
       - if: failure()
         uses: actions/upload-artifact@v4

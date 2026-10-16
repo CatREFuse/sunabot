@@ -56,6 +56,15 @@ jobs:
       - run: npm ci
       - name: Install Chromium for UI acceptance only
         run: npx playwright install --with-deps chromium
+      - name: Prepare Native sandbox tests
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          if sysctl -n kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
       - name: Run runtime, unit, harness, integration, smoke, build and E2E gates
         run: npm run verify
       - name: Run light and dark visual acceptance
