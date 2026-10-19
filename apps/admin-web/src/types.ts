@@ -120,7 +120,7 @@ export interface ConfigSectionValueMap {
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
   normalReply: NormalReplyConfig;
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyModel" | "replyReasoningEffort" | "imageReader" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize" | "emojiSendSeparately">;
+  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyModel" | "replyReasoningEffort" | "airModel" | "imageReader" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize" | "emojiSendSeparately">;
   tone: BotToneSettings;
   memory: BotMemorySettings;
   director: BotDirectorSettings;

@@ -440,6 +440,13 @@ describe("tool configuration", () => {
     expect(config.bot.tools.codex.enabled).toBe(false);
   });
 
+  it.each([undefined, "", "air-model"])("loads an optional AIR model independently of the reply model: %s", async (airModel) => {
+    await fs.writeFile(configPath, JSON.stringify({ bot: { replyModel: "reply-model", airModel } }), "utf8");
+    const config = await loadConfig();
+    expect(config.bot.airModel).toBe(airModel);
+    expect(config.bot.replyModel).toBe("reply-model");
+  });
+
   it("migrates the reply model and image reader from legacy Provider settings", async () => {
     await fs.writeFile(configPath, JSON.stringify({
       providers: {

@@ -85,6 +85,7 @@ describe("LLM input content preservation", () => {
       config: defaultConfig(),
       conversationRecords: new Map(),
       getProvider: vi.fn(),
+      getProviderForModel: vi.fn(),
       renderPromptRequest,
       completePrompt: vi.fn(async () => "原有知识")
     });

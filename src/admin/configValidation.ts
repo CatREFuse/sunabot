@@ -18,6 +18,7 @@ export const IMAGE_RESOLUTIONS = ["1K", "2K", "4K"];
 export const IMAGE_QUALITIES = ["auto", "low", "medium", "high"];
 
 const OPTIONAL_KEYS = new Set([
+  "airModel",
   "baseUrl",
   "envFile",
   "reasoningEffort",

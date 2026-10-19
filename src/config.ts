@@ -466,6 +466,9 @@ function mergeBotConfig(
     adminQq: typeof incoming?.adminQq === "string" ? incoming.adminQq.trim() : base.adminQq,
     adminName: normalizeString(incoming?.adminName, base.adminName),
     replyModel,
+    ...(incoming?.airModel == null && base.airModel == null ? {} : {
+      airModel: typeof incoming?.airModel === "string" ? incoming.airModel.trim() : base.airModel ?? ""
+    }),
     replyReasoningEffort: resolveModelReasoningEffort(
       replyModel,
       isReasoningEffort(incoming?.replyReasoningEffort) ? incoming.replyReasoningEffort : undefined,

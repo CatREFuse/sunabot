@@ -566,7 +566,7 @@ test("防抖时间、回复开关、名称和命令前缀只在回复行为分�
   const state = await installMockApi(page);
   await page.goto("/agent-settings/bot");
 
-  await expect(page.getByRole("heading", { name: "回复行为" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Agent 行为" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "模型", exact: true })).toHaveValue("gpt-5.6-sol");
   await expect(page.getByLabel("生成图片描述")).toBeChecked();
   await expect(page.getByLabel("读图模型")).toHaveValue("gpt-5.4-mini");
@@ -751,7 +751,7 @@ test("旧版 Agent 配置缺少回复模型和读图设置时仍可打开设置�
 
   await page.goto("/agent-settings/bot");
 
-  await expect(page.getByRole("heading", { name: "回复行为" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Agent 行为" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "模型", exact: true })).toHaveValue("gpt-5.5");
   await expect(page.getByLabel("推理强度").first()).toHaveValue("medium");
   await expect(page.getByLabel("生成图片描述")).toBeChecked();

@@ -9,6 +9,7 @@ import dotenv from "dotenv";
 const PROVIDER_ROUTE_LOCK_FIELDS = Object.freeze([
   ["bot.replyProviderId", "provider"],
   ["bot.replyModel", "model"],
+  ["bot.airModel", "model"],
   ["bot.imageReader.providerId", "provider"],
   ["bot.imageReader.model", "model"],
   ["bot.tone.providerId", "provider"],

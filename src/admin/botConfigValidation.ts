@@ -22,7 +22,7 @@ import {
 
 export type BotConfigSection = Pick<
   BotConfig,
-  "adminQq" | "adminName" | "replyModel" | "replyReasoningEffort" | "imageReader"
+  "adminQq" | "adminName" | "replyModel" | "replyReasoningEffort" | "airModel" | "imageReader"
   | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies"
   | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit"
   | "emojiSendSize" | "emojiSendSeparately"
@@ -31,7 +31,7 @@ export type BotConfigSection = Pick<
 export function validateBotConfigSection(input: unknown, current?: AppConfig): BotConfigSection {
   const value = object(input, "bot");
   exactKeys(value, [
-    "adminQq", "adminName", "replyModel", "replyReasoningEffort", "imageReader",
+    "adminQq", "adminName", "replyModel", "replyReasoningEffort", "airModel", "imageReader",
     "replyDebounceMs", "pokeOnNoReply", "quoteGroupReplies",
     "quoteGroupReplyExcludedUserIds", "contextMessageLimit", "emojiSendSize",
     "emojiSendSeparately"
@@ -77,6 +77,9 @@ export function validateBotConfigSection(input: unknown, current?: AppConfig): B
       max: 80
     }),
     replyModel,
+    airModel: requiredString(value.airModel ?? current?.bot.airModel ?? "", "bot.airModel", {
+      trim: true, min: 0, max: 200, allowEmpty: true
+    }),
     ...(replyReasoningEffort ? { replyReasoningEffort } : {}),
     imageReader: validateImageReader(value.imageReader, current?.providers),
     replyDebounceMs: integer(

@@ -68,7 +68,7 @@ describe("ConfigService section semantics", () => {
     expect(states["onebot.accessTokenEnv"]?.applyMode).toBe("reconnect");
   });
 
-  it("persists the Agent reply debounce time as a hot setting", async () => {
+  it("persists the Agent reply debounce time and AIR model as hot settings", async () => {
     const subject = service();
     const envelope = await subject.readEnvelope();
     const result = await subject.patch("bot", {
@@ -78,6 +78,7 @@ describe("ConfigService section semantics", () => {
         adminName: envelope.config.bot.adminName,
         replyModel: envelope.config.bot.replyModel,
         replyReasoningEffort: envelope.config.bot.replyReasoningEffort,
+        airModel: "gpt-6.1-sol",
         imageReader: envelope.config.bot.imageReader,
         replyDebounceMs: 7_500,
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
@@ -90,6 +91,8 @@ describe("ConfigService section semantics", () => {
     });
 
     expect(result.config.bot.replyDebounceMs).toBe(7_500);
+    expect(result.config.bot.airModel).toBe("gpt-6.1-sol");
+    expect((await subject.readEnvelope()).config.bot.airModel).toBe("gpt-6.1-sol");
     expect(result.applyMode).toBe("hot");
     expect(result.fieldStates["bot.replyDebounceMs"]?.applyMode).toBe("hot");
   });

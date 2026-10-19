@@ -257,3 +257,5 @@ OpenAI Responses 即使 HTTP 成功，响应体有明确 error 或 `status=faile
 此处模型目录指 Sunabot 的 Codex Responses Provider。CLI worker 使用 `bot.tools.codex.model`，其实际可用模型由已登录 CLI 的目录及执行结果核验，不能从 Responses 请求成功推断 CLI 同样支持该模型。
 
 Codex 模型目录增加 `gpt-6.1-sol` 和 `gpt-6-luna`。GPT-6.1 Sol 支持 low、medium、high、xhigh、max；GPT-6 Luna 另支持 none。默认推理强度均为 medium。管理员为阿罗娜选择主回复 gpt-6.1-sol/medium、独立 Tone gpt-6-luna/low；已核对目录 API 与配置回读，两模型的真实 Codex 订阅测试均返回成功；38 项目录/配置测试、84 项 runtime smoke、运行合同、类型检查和构建通过。既有人格与其他模型路由保持原配置。
+
+`read_air` 模型由当前 Agent 的 `bot.airModel` 选择，缺失或空值时动态跟随 `bot.replyModel` 和回复推理强度；独立模型使用默认 Provider 的连接与该模型适用的推理配置，不直接使用公共默认模型。

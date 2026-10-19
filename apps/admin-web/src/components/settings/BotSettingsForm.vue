@@ -13,6 +13,14 @@ const props = defineProps<{
   defaultProviderId: string;
 }>();
 const enabledProviders = computed(() => props.providers.filter((provider) => provider.enabled));
+const airModel = computed({
+  get: () => draft.value.airModel ?? "",
+  set: (value: string) => (draft.value.airModel = value)
+});
+const airModels = computed<ModelCatalogItem[]>(() => [
+  { id: "", label: "跟随回复模型", defaultReasoningEffort: "medium", supportedReasoningEfforts: [] },
+  ...props.models
+]);
 const names = computed({
   get: () => reply.value.mentionNames.join(", "),
   set: (value: string) => (reply.value.mentionNames = split(value))
@@ -37,8 +45,8 @@ function split(value: string) {
 <template>
   <section class="grid gap-8">
     <div>
-      <h2 class="section-title">回复行为</h2>
-      <p class="mt-2 text-sm leading-6 text-mute">设置回复模型、读图、时机、范围和唤醒方式。</p>
+      <h2 class="section-title">Agent 行为</h2>
+      <p class="mt-2 text-sm leading-6 text-mute">回复、互动约定、读图与唤醒。</p>
     </div>
     <div class="settings-group grid gap-5">
       <h3 class="settings-group-title">回复模型</h3>
@@ -49,6 +57,12 @@ function split(value: string) {
           :model="draft.replyModel"
           :models="props.models"
         />
+      </div>
+    </div>
+    <div class="settings-group grid gap-5">
+      <h3 class="settings-group-title">互动约定</h3>
+      <div class="grid gap-5 sm:grid-cols-2">
+        <ModelSelect v-model="airModel" :models="airModels" label="互动约定模型" />
       </div>
     </div>
     <div class="settings-group grid gap-5">

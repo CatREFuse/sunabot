@@ -667,6 +667,7 @@ export function validateCompleteConfig(config: AppConfig) {
     adminName: config.bot.adminName,
     replyModel: config.bot.replyModel,
     replyReasoningEffort: config.bot.replyReasoningEffort,
+    airModel: config.bot.airModel,
     imageReader: config.bot.imageReader,
     replyDebounceMs: config.bot.replyDebounceMs,
     pokeOnNoReply: config.bot.pokeOnNoReply,

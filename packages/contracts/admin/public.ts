@@ -193,6 +193,7 @@ export interface BotConfigShape<TTools extends BotToolSettingsBase> {
   adminName: string;
   replyModel: string;
   replyReasoningEffort?: ReasoningEffort;
+  airModel?: string;
   imageReader: BotImageReaderSettings;
   replyDebounceMs: number;
   pokeOnNoReply: boolean;

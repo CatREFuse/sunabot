@@ -423,6 +423,7 @@ describe("prepare provider smoke workspace", () => {
     expect(providerRouteLockFieldPaths()).toEqual([
       "bot.replyProviderId",
       "bot.replyModel",
+      "bot.airModel",
       "bot.imageReader.providerId",
       "bot.imageReader.model",
       "bot.tone.providerId",

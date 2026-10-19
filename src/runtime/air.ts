@@ -15,7 +15,7 @@ import type {
   ReadAirToolPort
 } from "../../services/tools/public.js";
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
-import type { ChatMessage, ConversationRecord, ParsedIncomingMessage } from "../types.js";
+import type { ChatMessage, ConversationRecord, ParsedIncomingMessage, ReasoningEffort } from "../types.js";
 import {
   auxiliaryModelSignal,
   auxiliaryProviderCompleteOptions
@@ -28,6 +28,7 @@ const READ_AIR_MAX_ATTEMPTS = 2;
 const READ_AIR_MESSAGE_LIMIT = 64;
 
 interface RuntimeAirHost extends RuntimePromptPort {
+  getProviderForModel(model: string, requestedEffort?: ReasoningEffort): ReturnType<RuntimePromptPort["getProvider"]>;
   readonly conversationRecords: ReadonlyMap<string, ConversationRecord>;
   persona?: AgentPersona;
 }
@@ -76,7 +77,12 @@ export class RuntimeAir {
           [AIR_CONVERSATION_VARIABLE]: boundedConversation(context),
           [AIR_INSIGHT_VARIABLE]: input.insight
         });
-        const next = await this.host.completePrompt(this.host.getProvider(), request, auxiliaryProviderCompleteOptions({
+        const { airModel, replyModel, replyReasoningEffort } = this.host.config.bot;
+        const provider = this.host.getProviderForModel(
+          airModel || replyModel,
+          airModel ? undefined : replyReasoningEffort
+        );
+        const next = await this.host.completePrompt(provider, request, auxiliaryProviderCompleteOptions({
           signal: modelSignal,
           logContext: {
             conversationId: context.conversationId,

@@ -470,6 +470,7 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
       adminName: config.bot.adminName,
       replyModel: config.bot.replyModel ?? emptyConfig.bot.replyModel,
       replyReasoningEffort: config.bot.replyReasoningEffort ?? emptyConfig.bot.replyReasoningEffort,
+      airModel: config.bot.airModel ?? "",
       imageReader: clone(config.bot.imageReader ?? {
         ...emptyConfig.bot.imageReader,
         providerId: config.providers.defaultProviderId

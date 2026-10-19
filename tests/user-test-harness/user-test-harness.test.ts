@@ -2752,6 +2752,7 @@ function applyOffRouteBot(
 ) {
   bot.replyProviderId = providerId;
   bot.replyModel = model;
+  bot.airModel = model;
   bot.imageReader = { ...(bot.imageReader ?? {}), providerId, model };
   bot.tone = { ...(bot.tone ?? {}), providerId, model };
   bot.memory = { ...(bot.memory ?? {}), memoryProviderId: providerId, memoryModel: model };
@@ -2778,6 +2779,7 @@ function expectLockedBot(
   expect(bot).toMatchObject({
     replyProviderId: providerId,
     replyModel: model,
+    airModel: model,
     imageReader: { providerId, model },
     tone: { providerId, model },
     memory: { memoryProviderId: providerId, memoryModel: model },
