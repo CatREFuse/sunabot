@@ -1,5 +1,7 @@
 # 功能—代码文件索引
 
+远端 QQ 每账号缓存限额维护：`deploy/napcat/cache-maintenance.py`、同目录 service/timer 模板；隔离测试：`tests/runtime/napcat-cache-maintenance.test.py`。
+
 [返回当前系统规范索引](./index.md)
 
 进程启动身份由 `tooling/runtime/process-signature.mjs` 统一采集，供 launcher、账号调和器、Native Core 与 Renderer 的进程管理使用；Linux 使用 boot ID 与 start ticks。时钟变化回归位于 `tests/unit/runtime-process-identity.test.ts`，部署验收见 `../user-tests/cases/runtime/wsl-process-identity-clock-change.md`。

@@ -1,5 +1,7 @@
 # 验证标准与已知限制
 
+QQ 缓存维护独立运行 `python3 tests/runtime/napcat-cache-maintenance.test.py`，以稀疏文件验证 1 GiB 阈值、账号隔离、旧文件优先、登录与数据库保留、链接和权限错误边界。实机记录清理前后容量与定时器状态；定时触发不等于文件系统硬配额。
+
 [返回当前系统规范索引](./index.md)
 
 远端 NapCat 验收遵循 `../user-tests/cases/runtime/remote-napcat-ssh.md`。合成 SSH 文件协议和二维码测试只证明控制路径、摘要链与时效处理，不代表 ECS 的真实 QQ 登录、收信、隧道恢复或 arm64 实机运行通过；这些结果必须在切换后分别记录。

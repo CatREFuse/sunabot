@@ -76,3 +76,11 @@ Docker 28 之前的版本存在同一二层网络访问回环发布端口的已�
 远端断开时报错，不回退启动本机 QQ。`restart-core` 保留远端 NapCat；完整 `restart/up/down` 继续作用于当前选择的远端账号容器。二维码从对应远端账号目录读取原始修改时间，刷新等待新内容，过期图不显示；手动登录标记及快速登录账号也写回远端。
 
 QQ 留在 ECS 可避免本地网络断开直接结束 QQ 进程。本地断网期间 Core 的消息处理和回复仍会中断，NapCat 是否补发历史事件需要实测，不能承诺零消息丢失。低内存 ECS 加 Swap 仅用于试运行，需要持续观察实际内存、Swap、OOM、磁盘与登录状态。
+
+## QQ 缓存维护
+
+`deploy/napcat/cache-maintenance.py` 按账号分别统计 QQ 媒体、临时文件、表情缓存和日志，超过 1 GiB 时按修改时间从旧到新删除至不超过 1 GiB。登录文件、配置、消息库与 Sunabot 业务数据库均不属于自动清理范围。它不跟随符号链接，权限错误及清理后仍超限会明确失败。
+
+运行 `python3 deploy/napcat/cache-maintenance.py --accounts-root <远端账号目录>` 查看计划，带 `--apply` 执行。管理员要求清空全部可重建缓存时增加 `--purge-cache`。QQ 消息历史的删除单独确认并在停止对应 QQ 后处理，不能用缓存任务删除活动数据库。
+
+随附 service 模板以 `sunabot-napcat` 用户运行；根据实际安装目录调整 ExecStart 后，安装为 `/etc/systemd/system/sunabot-napcat-cache.service`，timer 安装为 `sunabot-napcat-cache.timer` 并启用。每次任务结束一分钟后再次检查，超限会在下一次检查触发清理，检查间隔内可以短暂超限。运行日志交给 systemd journal，不新增增长型 JSON/JSONL 文件。

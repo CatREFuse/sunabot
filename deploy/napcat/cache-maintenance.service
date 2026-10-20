@@ -1,0 +1,8 @@
+[Unit]
+Description=NapCat account cache limit
+
+[Service]
+Type=oneshot
+User=sunabot-napcat
+Group=sunabot-napcat
+ExecStart=/usr/bin/python3 /home/sunabot-napcat/sunabot/deploy/napcat/cache-maintenance.py --accounts-root /home/sunabot-napcat/sunabot/workspace/runtime/napcat/accounts --apply

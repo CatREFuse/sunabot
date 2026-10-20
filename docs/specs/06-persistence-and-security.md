@@ -1,5 +1,7 @@
 # 持久化、迁移与安全
 
+远端 QQ 的可重建缓存可通过 `deploy/napcat/cache-maintenance.py` 每分钟检查，每账号独立采用 1 GiB 触发阈值，超限按旧文件优先清理。登录资料、配置、QQ 消息库及 Sunabot 业务库不参与自动清理；消息历史删除必须另行授权并停止对应 QQ。
+
 [返回当前系统规范索引](./index.md)
 
 ## 8. SQLite 持久化
