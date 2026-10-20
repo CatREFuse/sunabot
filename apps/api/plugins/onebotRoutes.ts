@@ -9,6 +9,7 @@ import {
 import type { OneBotGateway } from "../../../adapters/onebot/onebotGateway.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
 import { getWorkspacePath } from "../../../packages/platform/projectPaths.js";
+import { readRemoteNapcatSync, createRemoteLoginFiles } from "../../../packages/platform/remoteNapcat.mjs";
 import type { OneBotLoginCheck, OneBotQrLogin } from "../../../packages/contracts/admin/public.js";
 import { AdminApiError, conflict, notFound } from "../../../src/admin/errors.js";
 import type { AgentRegistry } from "../../../services/agents/agentRegistry.js";
@@ -295,7 +296,9 @@ function getLocalNapcatWebuiRoute(accountId: string) {
 
 function createNapcatLoginControl(accountId: string, webuiPort?: number) {
   const accountRoot = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, accountId);
+  const remote = readRemoteNapcatSync(getWorkspacePath());
   return new NapcatLoginControl({
+    loginFiles: remote ? createRemoteLoginFiles(remote, accountId) : undefined,
     webuiConfigPath: path.join(accountRoot, "config-full", "webui.json"),
     webuiBaseUrl: typeof webuiPort === "number" && Number.isInteger(webuiPort) && webuiPort > 0
       ? `http://127.0.0.1:${webuiPort}`

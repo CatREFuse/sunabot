@@ -73,6 +73,11 @@ export interface NapcatLoginControlOptions {
   fetchImpl?: FetchLike;
   requestTimeoutMs?: number;
   watchIntervalMs?: number;
+  loginFiles?: {
+    read(name: string): Promise<{ data: Buffer; mtimeMs: number } | undefined>;
+    write(name: string, data: string): Promise<void>;
+    remove(name: string): Promise<void>;
+  };
 }
 
 export class NapcatLoginControl implements NapcatLoginControlPort {
@@ -159,10 +164,7 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
     const current = await this.status();
     if (current.isLogin) return current;
 
-    const previousImage = await fs.readFile(this.options.qrCodePath).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    });
+    const previousImage = (await this.readLoginFile("qrcode.png", this.options.qrCodePath))?.data;
     await this.request("/QQLogin/RefreshQRcode");
     await this.waitForQrChange(previousImage);
     const refreshed = await this.status();
@@ -173,16 +175,14 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
   }
 
   async beginManualLogin() {
-    await fs.mkdir(path.dirname(this.options.manualLoginMarkerPath), { recursive: true, mode: 0o700 });
-    const temporary = `${this.options.manualLoginMarkerPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    await fs.writeFile(temporary, `${JSON.stringify({ requestedAt: new Date().toISOString() })}\n`, { mode: 0o600 });
-    await fs.rename(temporary, this.options.manualLoginMarkerPath);
-    await fs.rm(this.options.qrCodePath, { force: true });
+    await this.writeLoginFile("manual-login-required", this.options.manualLoginMarkerPath,
+      `${JSON.stringify({ requestedAt: new Date().toISOString() })}\n`);
+    await this.removeLoginFile("qrcode.png", this.options.qrCodePath);
     this.manualLoginObservedOffline = false;
     try {
       await this.request("/QQLogin/SetQuickLoginQQ", { uin: "" });
     } catch (error) {
-      await fs.rm(this.options.manualLoginMarkerPath, { force: true });
+      await this.removeLoginFile("manual-login-required", this.options.manualLoginMarkerPath);
       throw error;
     }
   }
@@ -190,7 +190,7 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
   async cancelManualLogin() {
     const account = await this.readRuntimeEnvAccount();
     if (account) await this.request("/QQLogin/SetQuickLoginQQ", { uin: account }).catch(() => undefined);
-    await fs.rm(this.options.manualLoginMarkerPath, { force: true });
+    await this.removeLoginFile("manual-login-required", this.options.manualLoginMarkerPath);
   }
 
   startLoginCompletionWatch() {
@@ -232,34 +232,37 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
     await this.request("/QQLogin/SetQuickLoginQQ", { uin: String(userId) });
     await this.persistNapcatAccount(userId);
     await Promise.all([
-      fs.rm(this.options.manualLoginMarkerPath, { force: true }),
-      fs.rm(this.options.qrCodePath, { force: true })
+      this.removeLoginFile("manual-login-required", this.options.manualLoginMarkerPath),
+      this.removeLoginFile("qrcode.png", this.options.qrCodePath)
     ]);
     this.stopLoginCompletionWatch();
     this.manualLoginObservedOffline = false;
   }
 
   private async persistNapcatAccount(userId: number) {
-    const source = await fs.readFile(this.options.runtimeEnvPath, "utf8").catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return "";
-      throw error;
-    });
+    const source = (await this.readLoginFile("account.env", this.options.runtimeEnvPath))?.data.toString("utf8") ?? "";
     const next = setUniqueEnvValue(source, "NAPCAT_ACCOUNT", String(userId));
     if (next === source) return;
-    await fs.mkdir(path.dirname(this.options.runtimeEnvPath), { recursive: true, mode: 0o700 });
-    const temporary = `${this.options.runtimeEnvPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    await fs.writeFile(temporary, next, { mode: 0o600 });
-    await fs.rename(temporary, this.options.runtimeEnvPath);
-    await fs.chmod(this.options.runtimeEnvPath, 0o600).catch(() => undefined);
+    await this.writeLoginFile("account.env", this.options.runtimeEnvPath, next);
   }
 
   private async readRuntimeEnvAccount() {
-    const source = await fs.readFile(this.options.runtimeEnvPath, "utf8").catch(() => "");
+    const source = (await this.readLoginFile("account.env", this.options.runtimeEnvPath))?.data.toString("utf8") ?? "";
     const match = source.match(/^[ \t]*(?:export[ \t]+)?NAPCAT_ACCOUNT[ \t]*=[ \t]*(\d{5,12})[ \t]*$/m);
     return match?.[1] ?? "";
   }
 
   private async readQrImage() {
+    if (this.options.loginFiles) {
+      const file = await this.options.loginFiles.read("qrcode.png");
+      if (!file || file.data.length === 0 || file.data.length > MAX_QR_BYTES || !isPng(file.data)) return {};
+      const imageUpdatedAt = new Date(file.mtimeMs).toISOString();
+      const imageExpiresAt = new Date(file.mtimeMs + QR_DISPLAY_WINDOW_MS).toISOString();
+      if (Date.now() >= file.mtimeMs + QR_DISPLAY_WINDOW_MS || file.mtimeMs > Date.now()) {
+        return { imageUpdatedAt, imageExpiresAt, loginError: "二维码已过期，请点击刷新。" };
+      }
+      return { imageDataUrl: `data:image/png;base64,${file.data.toString("base64")}`, imageUpdatedAt, imageExpiresAt };
+    }
     const stats = await fs.stat(this.options.qrCodePath).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return undefined;
       throw error;
@@ -279,10 +282,7 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
   }
 
   private async readManualLoginState(): Promise<ManualLoginState> {
-    const source = await fs.readFile(this.options.manualLoginMarkerPath, "utf8").catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    });
+    const source = (await this.readLoginFile("manual-login-required", this.options.manualLoginMarkerPath))?.data.toString("utf8");
     if (source === undefined) return { exists: false, offlineObserved: false };
     try {
       const value = JSON.parse(source) as { offlineObservedAt?: unknown };
@@ -293,7 +293,8 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
   }
 
   private async markManualLoginOffline() {
-    const source = await fs.readFile(this.options.manualLoginMarkerPath, "utf8");
+    const source = (await this.readLoginFile("manual-login-required", this.options.manualLoginMarkerPath))?.data.toString("utf8");
+    if (source === undefined) throw new Error("手动登录标记已丢失。");
     let value: Record<string, unknown> = {};
     try {
       const parsed = JSON.parse(source) as unknown;
@@ -304,12 +305,34 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
       // Preserve the marker when an older version wrote malformed content.
     }
     if (typeof value.offlineObservedAt === "string") return;
-    const temporary = `${this.options.manualLoginMarkerPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    await fs.writeFile(temporary, `${JSON.stringify({
+    await this.writeLoginFile("manual-login-required", this.options.manualLoginMarkerPath, `${JSON.stringify({
       ...value,
       offlineObservedAt: new Date().toISOString()
-    })}\n`, { mode: 0o600 });
-    await fs.rename(temporary, this.options.manualLoginMarkerPath);
+    })}\n`);
+  }
+
+  private async readLoginFile(name: string, localPath: string) {
+    if (this.options.loginFiles) return this.options.loginFiles.read(name);
+    try {
+      const data = await fs.readFile(localPath);
+      return { data, mtimeMs: (await fs.stat(localPath)).mtimeMs };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+
+  private async writeLoginFile(name: string, localPath: string, data: string) {
+    if (this.options.loginFiles) return this.options.loginFiles.write(name, data);
+    await fs.mkdir(path.dirname(localPath), { recursive: true, mode: 0o700 });
+    const temporary = `${localPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await fs.writeFile(temporary, data, { mode: 0o600 });
+    await fs.rename(temporary, localPath);
+  }
+
+  private async removeLoginFile(name: string, localPath: string) {
+    if (this.options.loginFiles) return this.options.loginFiles.remove(name);
+    await fs.rm(localPath, { force: true });
   }
 
   private async waitForQrChange(previousImage?: Buffer) {

@@ -409,7 +409,7 @@ describe("account runtime daemon singleton", () => {
     expect(isAlive(unrelated.pid!)).toBe(true);
 
     const dockerCalls = (await fs.readFile(docker.tracePath, "utf8")).trim().split("\n");
-    expect(dockerCalls).toContain("stop --timeout 30 napcat-fixture");
+    expect(dockerCalls).toContain("stop -t 30 napcat-fixture");
     expect(dockerCalls).toContain("rm napcat-fixture");
 
     const quarantines = (await fs.readdir(ownerDirectory))

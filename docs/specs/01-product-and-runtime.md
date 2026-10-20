@@ -45,6 +45,8 @@ Core、Bash、MCP、Skill Script 与 WebFetch 只以 Native 形态运行。NapCa
 
 ## 3. 启动、状态与首次运行
 
+显式配置 `workspace/secrets/remote-napcat.json` 时，NapCat 可部署于独立 Linux Docker 主机，Core 与所有业务数据继续留在本地。启动器通过固定主机密钥的 SSH 执行远端 Docker 和账号配置同步，管理 API 读取远端二维码及登录标记；不向远端复制 Core runtime.env。独立受监管隧道将 ECS 私有网桥 OneBot 端口转发到本地回环，WebUI 通过本地回环转发访问。远端不可达不回退本机 QQ，`restart-core` 保留远端容器。具体配置、离线镜像摘要链、切换和回滚见 `../deployment/remote-napcat-ssh.md`。
+
 `up`、`start` 与 `restart` 进入同一清空后启动流程，只停止能通过命令签名、workspace 身份、进程启动身份或 Docker labels 证明属于当前部署的对象。随后启动 Native Core、Linux/WSL Lightpanda Renderer、注册表中全部已启用 NapCat 和 account runtime daemon。未知身份对象、端口占用、迁移未完成或运行依赖缺失时失败关闭。
 
 `restart-core` 使用既有 launcher state 的 OneBot 地址及当前 workspace 的 Docker 网络，仅重启 Native Core、账号调和器和 WebFetch Renderer，保留 NapCat 容器、QQ 进程、账号配置、二维码和登录缓存。依赖、构建及 Renderer 能力检查在停止旧 Core 前完成；新 Native 服务启动失败时只清理 Native 进程，保留连接配置供修复后重试，不自动执行完整重启。缺少既有连接状态或对应网络时明确报错。OneBot 会在 Core 重启期间断开并由 NapCat 重连，此期间的事件补发取决于 NapCat，不能保证零消息丢失。QQ 已失效的凭据仍需单独处理。

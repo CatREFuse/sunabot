@@ -185,6 +185,8 @@ Agent 根目录及 `extensions`、`skills`、`mcp` 控制目录必须是当前�
 
 ## 9. 配置与安全
 
+远端 NapCat 配置和 SSH 私钥位于本地 workspace 的 secrets 边界；固定 known_hosts、BatchMode 和专用非 root 账号。只有 NapCat WebUI/OneBot 配置、QQ 登录目录及部署入口传输到指定远端，不复制 Core runtime.env、Provider 凭据、人格或业务库。控制文件通过 SSH stdin 传递，密钥值不进入 SSH argv；远端文件操作限制在配置根目录内，账号递归清理仅在本地既有账号删除标记与停容器流程完成后作用于对应账号目录。具体权限授权和回滚见 `../deployment/remote-napcat-ssh.md`。
+
 - Provider key、Tavily key、OneBot token 和自动化管理令牌只能通过 `workspace/secrets/runtime.env` 或进程环境变量提供。
 - 新 workspace 的 `bot.adminQq` 默认为空，不内置任何真实 QQ 身份；管理员登录 QQ 后必须在对应 Agent 的“回复行为”中显式保存管理员 QQ，管理员专属工具在此之前保持关闭。
 - Git 不跟踪整个 `workspace/`，其中包括环境变量、配置、Agent 人格、SQLite、WAL、日志、缓存、QQ 登录态、生成图片和备份。

@@ -11,6 +11,9 @@ import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import dotenv from "dotenv";
 import { installGlobalProxyDispatcher } from "../../packages/platform/proxy.mjs";
+import {
+  readRemoteNapcat, remoteDockerInvocation, remoteNapcatFile, remoteAccountPath, offlineNapcatImage
+} from "../../packages/platform/remoteNapcat.mjs";
 import { buildNativeBashSandboxInvocation, nativeToolPath } from "../../packages/platform/nativeToolSandbox.mjs";
 import { validateMultiAgentWorkspacePath } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
@@ -116,6 +119,15 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
     packaged: await exists(path.join(root, "release-manifest.json"))
   };
   context.runtimeEnvironment = await readRuntimeEnvironment(context.runtimeEnv);
+  context.remoteNapcat = await readRemoteNapcat(workspace);
+  if (context.remoteNapcat?.offlineImageArchitecture) {
+    const proofRoot = path.join(workspace, "runtime/napcat/offline-image");
+    context.remoteNapcatImage = offlineNapcatImage(
+      await fs.readFile(path.join(proofRoot, "index.json")),
+      await fs.readFile(path.join(proofRoot, "manifest.json")),
+      contract.napcatImage, context.remoteNapcat.offlineImageArchitecture
+    );
+  }
   context.bubblewrapExecutable = bubblewrapExecutable(context);
   context.composeOverrides = {};
   await installGlobalProxyDispatcher({
@@ -368,7 +380,7 @@ async function validatePackagedRelease(context) {
 
 async function assertNapcatImageAvailable(context) {
   try {
-    await dockerCommand(context, ["image", "inspect", context.contract.napcatImage], {
+    await dockerCommand(context, ["image", "inspect", context.remoteNapcatImage ?? context.contract.napcatImage], {
       capture: true,
       timeoutMs: DOCKER_CONTROL_TIMEOUT_MS
     });
@@ -703,9 +715,7 @@ async function collectRuntimeProbeFacts(context) {
   const conflicts = accountRuntimeConflicts(runtime.reconciler, context);
 
   const docker = await dockerAvailable(context);
-  const compose = docker && await commandSucceeds("docker", ["compose", "version"], {
-    env: nativeProcessEnvironment(context)
-  });
+  const compose = docker && await dockerCommandSucceeds(context, ["compose", "version"]);
   const capabilities = {};
   capabilities.accountReconciler = {
     ok: runtime.reconciler.healthy,
@@ -841,7 +851,11 @@ async function logs(context) {
     children.push(spawn("tail", ["-n", "120", "-F", runtime.state.webfetchRenderer.logPath], { stdio: "inherit" }));
   }
   for (const container of runtime.napcat.matches.filter((item) => item.state === "running")) {
-    children.push(spawn("docker", ["logs", "-f", "--tail", "120", container.id], { stdio: "inherit" }));
+    const args = ["logs", "-f", "--tail", "120", container.id];
+    const invocation = context.remoteNapcat
+      ? remoteDockerInvocation(context.remoteNapcat, args)
+      : { executable: "docker", args };
+    children.push(spawn(invocation.executable, invocation.args, { stdio: "inherit" }));
   }
   await followChildren(children);
 }
@@ -948,7 +962,7 @@ async function reconcileAccount(context, accountId, forceRestart = false) {
       observedState = "running";
     } else {
       for (const containerId of plan.targetContainerIds) {
-        await dockerCommand(context, ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), containerId], {
+        await dockerCommand(context, ["stop", "-t", String(context.contract.shutdownTimeoutSeconds), containerId], {
           timeoutMs: (context.contract.shutdownTimeoutSeconds + 5) * 1_000
         });
         await dockerCommand(context, ["rm", containerId]);
@@ -964,6 +978,9 @@ async function reconcileAccount(context, accountId, forceRestart = false) {
     });
     if (account || await exists(accountRoot)) await writeAccountRuntimeState(accountRoot, state);
     if (!account && await exists(path.join(accountRoot, ".remove-on-stop"))) {
+      if (context.remoteNapcat) {
+        await remoteNapcatFile(context.remoteNapcat, `workspace/runtime/napcat/accounts/${accountId}`, "remove-account");
+      }
       await fs.rm(accountRoot, { recursive: true, force: true });
     }
     const launcherState = await readState(context.statePath);
@@ -1036,6 +1053,17 @@ async function configureNapcat(context, reverseWebSocket, secrets, account) {
   changed = await atomicJsonIfChanged(webuiPath, webui) || changed;
   const accountEnv = account.qqId ? `NAPCAT_ACCOUNT=${account.qqId}\n` : "";
   changed = await atomicTextIfChanged(path.join(accountRoot, "account.env"), accountEnv, 0o600) || changed;
+  if (context.remoteNapcat) {
+    for (const name of [...names.map((name) => `config-full/${name}`), "config-full/webui.json", "account.env"]) {
+      const content = await fs.readFile(path.join(accountRoot, name));
+      const relative = remoteAccountPath(account.id, name);
+      const existing = await remoteNapcatFile(context.remoteNapcat, relative, "read");
+      if (!existing || !content.equals(Buffer.from(existing.data, "base64"))) {
+        await remoteNapcatFile(context.remoteNapcat, relative, "write", content);
+        changed = true;
+      }
+    }
+  }
   console.log(`NapCat ${account.id} 已配置：${names.join(", ")}（Token 已隐藏）。`);
   return changed;
 }
@@ -1061,6 +1089,7 @@ async function loadNapcatAccounts(context) {
 
 async function probeNativeOneBot(context) {
   const advertised = new URL(context.contract.nativeReverseWebSocket);
+  if (context.remoteNapcat) advertised.hostname = context.remoteNapcat.gateway;
   const script = [
     "set -eu",
     "probe() { curl --noproxy '*' --fail --silent --show-error --max-time 3 \"http://$1:${SUNABOT_PROBE_PORT}${SUNABOT_PROBE_PATH}\" >/dev/null 2>&1; }",
@@ -1102,6 +1131,7 @@ async function probeNativeOneBot(context) {
 }
 
 async function resolveNativeOnebotListenHost(context) {
+  if (context.remoteNapcat) return "127.0.0.1";
   if (!isDynamicNativeOnebotHost(context.contract.onebotHost)) return context.contract.onebotHost;
   const network = `${context.project}-runtime`;
   const gateway = (await dockerCommand(context, [
@@ -1160,11 +1190,13 @@ function defaultNativeOnebotHealthHost(host) {
 
 async function ensureRuntimeNetwork(context) {
   const network = `${context.project}-runtime`;
-  if (await commandSucceeds("docker", ["network", "inspect", network], {
-    env: nativeProcessEnvironment(context)
-  })) return;
+  if (await dockerCommandSucceeds(context, ["network", "inspect", network])) return;
   await dockerCommand(context, [
     "network", "create",
+    ...(context.remoteNapcat ? [
+      "--subnet", `${context.remoteNapcat.gateway.split(".").slice(0, 3).join(".")}.0/24`,
+      "--gateway", context.remoteNapcat.gateway
+    ] : []),
     "--label", `io.sunabot.runtime-id=${context.contract.runtimeId}`,
     "--label", `io.sunabot.workspace-id=${context.identity}`,
     "--label", "io.sunabot.component=runtime-network",
@@ -1175,7 +1207,7 @@ async function ensureRuntimeNetwork(context) {
 async function stopNapcatContainers(context) {
   const containers = (await labeledContainers(context)).filter((item) => item.component === "napcat");
   for (const container of containers) {
-    await dockerCommand(context, ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), container.id], {
+    await dockerCommand(context, ["stop", "-t", String(context.contract.shutdownTimeoutSeconds), container.id], {
       timeoutMs: (context.contract.shutdownTimeoutSeconds + 5) * 1_000
     }).catch(() => {});
     await dockerCommand(context, ["rm", container.id]).catch(() => {});
@@ -1193,6 +1225,9 @@ async function cleanupRemovedNapcatAccounts(context) {
     const accountRoot = path.join(accountsRoot, entry.name);
     const markedForRemoval = await exists(path.join(accountRoot, ".remove-on-stop"));
     if (!shouldCleanupRemovedNapcatAccount(entry.name, registeredAccountIds, markedForRemoval)) continue;
+    if (context.remoteNapcat) {
+      await remoteNapcatFile(context.remoteNapcat, `workspace/runtime/napcat/accounts/${entry.name}`, "remove-account");
+    }
     await fs.rm(accountRoot, { recursive: true, force: true });
   }
 }
@@ -1689,6 +1724,7 @@ async function assertComposeServices(context) {
 }
 
 async function compose(context, args, options = {}) {
+  if (context.remoteNapcat) return remoteCompose(context, undefined, args, options);
   return command("docker", composeArgs(context, args), {
     capture: options.capture,
     timeoutMs: options.timeoutMs,
@@ -1698,6 +1734,7 @@ async function compose(context, args, options = {}) {
 }
 
 async function napcatCompose(context, account, args, options = {}) {
+  if (context.remoteNapcat) return remoteCompose(context, account, args, options);
   const project = `${context.project}-napcat-${account.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`;
   return command("docker", composeArgs(context, args, project), {
     capture: options.capture,
@@ -1709,6 +1746,43 @@ async function napcatCompose(context, account, args, options = {}) {
       NAPCAT_ACCOUNT: account.qqId ?? "",
       NAPCAT_WEBUI_PORT: String(account.webuiPort)
     }
+  });
+}
+
+export async function remoteCompose(context, account, args, options = {}) {
+  const remote = context.remoteNapcat;
+  for (const relative of ["deploy/napcat/compose.yml", "deploy/napcat/napcat-entrypoint.sh"]) {
+    await remoteNapcatFile(remote, relative, "write", await fs.readFile(path.join(context.root, relative)),
+      relative.endsWith(".sh") ? 0o700 : 0o600);
+  }
+  const token = context.runtimeEnvironment.WEBUI_TOKEN;
+  if (!token || /[\r\n]/.test(token)) throw new Error("NapCat WebUI Token 缺失或无效。");
+  await remoteNapcatFile(remote, "workspace/secrets/napcat.env", "write", `WEBUI_TOKEN=${token}\n`);
+  const project = account
+    ? `${context.project}-napcat-${account.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`
+    : context.project;
+  const environment = {
+    COMPOSE_PROJECT_NAME: project,
+    NAPCAT_IMAGE: context.remoteNapcatImage ?? context.contract.napcatImage,
+    SUNABOT_NAPCAT_NETWORK: `${context.project}-runtime`,
+    SUNABOT_RUNTIME_ID: context.contract.runtimeId,
+    SUNABOT_RUNTIME_UID: String(remote.uid),
+    SUNABOT_RUNTIME_GID: String(remote.gid),
+    SUNABOT_PROJECT_ROOT: remote.root,
+    SUNABOT_WORKSPACE: `${remote.root}/workspace`,
+    SUNABOT_WORKSPACE_ID: context.identity,
+    NAPCAT_ACCOUNT_ID: account?.id ?? "primary",
+    NAPCAT_ACCOUNT: account?.qqId ?? "",
+    NAPCAT_WEBUI_PORT: String(account?.webuiPort ?? context.contract.webuiPort)
+  };
+  const invocation = remoteDockerInvocation(remote, [
+    "compose", "--project-name", project,
+    "--env-file", `${remote.root}/workspace/secrets/napcat.env`,
+    "--project-directory", remote.root,
+    "-f", `${remote.root}/deploy/napcat/compose.yml`, ...args
+  ], environment);
+  return command(invocation.executable, invocation.args, {
+    ...options, timeoutMs: options.timeoutMs ?? DOCKER_COMPOSE_TIMEOUT_MS
   });
 }
 
@@ -1924,6 +1998,10 @@ async function treeNewerThan(directory, cutoff) {
 }
 
 async function clearNapcatLoginQr(context, account) {
+  if (context.remoteNapcat) {
+    await remoteNapcatFile(context.remoteNapcat, remoteAccountPath(account.id, "qrcode.png"), "remove");
+    return;
+  }
   const qrPath = path.join(context.workspace, "runtime/napcat/accounts", account.id, "qrcode.png");
   await fs.rm(qrPath, { force: true });
 }
@@ -2095,7 +2173,7 @@ async function waitForRuntimePortsClosed(context, state) {
 
 async function assertDockerAvailable(context) {
   if (await dockerAvailable(context)) return;
-  throw new Error("NAPCAT_DOCKER_UNAVAILABLE：NapCat 需要本机 Docker Engine 与 Compose 插件。");
+  throw new Error(`NAPCAT_DOCKER_UNAVAILABLE：${context.remoteNapcat ? "远端" : "本机"} Docker Engine 不可用。`);
 }
 
 async function dockerAvailable(context) {
@@ -2111,10 +2189,25 @@ async function dockerAvailable(context) {
 }
 
 function dockerCommand(context, args, options = {}) {
+  if (context.remoteNapcat) {
+    const invocation = remoteDockerInvocation(context.remoteNapcat, args);
+    return command(invocation.executable, invocation.args, {
+      ...options, timeoutMs: commandTimeoutMs("docker", args, options.timeoutMs)
+    });
+  }
   return command("docker", args, {
     ...options,
     env: options.env ?? nativeProcessEnvironment(context)
   });
+}
+
+async function dockerCommandSucceeds(context, args) {
+  try {
+    await dockerCommand(context, args, { capture: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function command(executable, args, options = {}) {

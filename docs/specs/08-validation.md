@@ -2,6 +2,8 @@
 
 [返回当前系统规范索引](./index.md)
 
+远端 NapCat 验收遵循 `../user-tests/cases/runtime/remote-napcat-ssh.md`。合成 SSH 文件协议和二维码测试只证明控制路径、摘要链与时效处理，不代表 ECS 的真实 QQ 登录、收信、隧道恢复或 arm64 实机运行通过；这些结果必须在切换后分别记录。
+
 发行首次运行验收必须使用没有 `secrets/codex` 的空 workspace，执行实际包内 Codex `--version` 与解压包 `bootstrap`，验证 stderr 目录提示不污染版本比较；错误版本、可执行文件缺失和未登录状态仍分别报告。回归用例位于 `tests/unit/runtime-launcher.test.ts`，用户用例见 `../user-tests/offline-release-first-run.md`。
 
 GitHub verify 与 release gate 的临时 Ubuntu runner 必须安装 Bubblewrap 并启用非特权 user namespace，再执行完整验证；Core 单独重启测试保留真实隔离探针，不因 CI 依赖缺失跳过或模拟成功。发行构建继续使用锁定的包内 Bubblewrap。

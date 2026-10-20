@@ -39,6 +39,8 @@
 | `docs/migrations/agent-workbenches.md` | 0.1.2 历史双 Workbench 迁移、验证与回滚 | 处理 0.1.0/0.1.1 历史实例时读取；当前运行合同以 0.3.0 单 Workbench 为准 |
 | `docs/migrations/upgrade-0.1.0-to-0.1.2.md` | 0.1.0 / 0.1.1 到 0.1.2 的双工作区迁移、恢复点、升级脚本、验收与回滚 | 现有 0.1.0 或 0.1.1 实例升级到 0.1.2 前必读 |
 | `docs/setup-napcat.md` | sunabot、NapCat、WebUI 和 OneBot 反向 WebSocket 的本机启动配置 | 部署、重启或排查 OneBot 连接时读取 |
+| `docs/deployment/remote-napcat-ssh.md` | 本地 Core、远端 NapCat、SSH 隧道、离线镜像证明与切换回滚 | 部署或修改远端 NapCat 时读取 |
+| `docs/user-tests/cases/runtime/remote-napcat-ssh.md` | 远端 Docker、二维码时效、凭据边界与隧道恢复验收 | 验证远端 NapCat 时读取 |
 | `docs/user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md` | NapCat 摘要锁升级、离线恢复点、WSL 对时、真实收信与重连验收 | 升级 NapCat 或修复 Windows/WSL 对时与掉线时读取 |
 | `docs/user-tests/cases/runtime/wsl-process-identity-clock-change.md` | Linux 稳定进程身份、时钟跳变与旧部署安全停止 | 修改启动器、调和器或进程身份时读取 |
 | `docs/user-tests/cases/runtime/core-only-restart.md` | 单独重启 Core、Native 失败清理与 NapCat 登录会话保留 | 修改 restart-core 或 Native 生命周期时读取 |
