@@ -26,3 +26,9 @@
 `npm run test:visual -- agent-connection.visual.spec.ts` 两个主题场景通过，覆盖桌面 1440×900 与手机 390×844，共 20 张截图。独立评审复核 11 张关键截图，确认中文可读、长地址换行、无横向溢出，账号按钮与端口、状态信息在底部导航上方可见。初次缺中文字体的截图已作废重拍，未以机械测试替代视觉验收。
 
 测试使用隔离 WSL workspace 和合成 API 数据，未重启生产 Core 或 NapCat，未向真实 QQ 或外部模型发消息。部署后实际接入状态另行核验。
+
+## 2026-10-21 生产部署
+
+用户明确批准后，将 `e53ddce` 的 13 个运行文件部署到生产 WSL；全部文件通过原始摘要比对和部署后摘要校验，回滚副本保留在 workspace 外的部署暂存目录。`./sunabot.sh restart-core` 构建成功并退出 0，Core 于北京时间 01:06:18 启动，liveness=live、readiness=ready；既有未配置 MCP capability 仍为 degraded。
+
+两个远程 NapCat 的完整容器 ID、StartedAt 和 RestartCount 与部署前一致，均保持 `isLogin=true`、`online=true`。管理台真实页面验证普拉娜与阿罗娜切换、无 QQ 下拉框、远程主机、SSH 隧道、OneBot 8788、Core 回环监听和各账号管理端口 6099/6100，均显示 OneBot 已连接、QQ 在线。只读 SQLite 元数据确认重启后普拉娜 01:08:04、阿罗娜 01:09:20 的真实用户消息已入库；本次未主动发送测试消息。该证据不覆盖断线期间消息补发或长期稳定性。
