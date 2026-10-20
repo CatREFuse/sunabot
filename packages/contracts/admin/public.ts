@@ -1,3 +1,12 @@
+export interface NapcatConnectionInfo {
+  mode: "local" | "remote";
+  host: string;
+  transport: "ssh" | "direct";
+  onebotUrl: string;
+  onebotPort: number;
+  coreUrl: string;
+}
+
 export type ProviderKind =
   | "codex-responses"
   | "openai-official"

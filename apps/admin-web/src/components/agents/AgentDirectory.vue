@@ -28,7 +28,7 @@ const emit = defineEmits<{ select: [agentId: string]; create: [] }>();
       <IdentityAvatar :src="agentAvatarUrl(agent)" :name="agent.name" size="lg" />
       <span class="min-w-0 flex-1">
         <strong class="block truncate font-medium">{{ agent.name }}</strong>
-        <small class="mt-1 block truncate font-mono text-[10px] text-mute">{{ agent.accounts.filter((item) => item.connected).length }}/{{ agent.accounts.length }} 个账号在线</small>
+        <small class="mt-1 block truncate font-mono text-[10px] text-mute">OneBot 连接 {{ agent.accounts.filter((item) => item.connected).length }}/{{ agent.accounts.length }}</small>
       </span>
       <span class="font-mono text-[10px] uppercase" :class="agent.enabled ? 'text-success' : 'text-mute'">{{ agent.enabled ? "已启用" : "已停用" }}</span>
     </button>

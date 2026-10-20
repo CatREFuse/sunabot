@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, shallowRef, watch } from "vue";
-import type { AgentAccount } from "../../types";
+import type { AgentAccount, OneBotLoginCheck } from "../../types";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 import OneBotLoginDialog from "../overview/OneBotLoginDialog.vue";
 import { useQqLogin } from "../../composables/useQqLogin";
@@ -9,6 +9,8 @@ import { apiRequest } from "../../composables/useAdminApi";
 const props = defineProps<{
   agentId: string;
   accounts: readonly AgentAccount[];
+  agentEnabled?: boolean;
+  loginStates?: Record<string, OneBotLoginCheck>;
   busy?: boolean;
   pendingAction?: { kind: "create" } | { kind: "remove"; accountId: string };
 }>();
@@ -62,9 +64,15 @@ async function openNapCat(route: string) {
 }
 
 function accountStatus(account: AgentAccount) {
-  if (account.connected) return "在线";
   if (account.reconcileRequired) return "需要处理";
   if (account.desiredState === "stopped") return "已停用";
+  const snapshot = props.loginStates?.[account.id];
+  if (snapshot?.error) return "QQ 状态未知";
+  if (snapshot?.online && snapshot.data?.user_id) return "QQ 在线";
+  if (snapshot?.authenticated) return "QQ 等待恢复";
+  if (snapshot) return "QQ 未登录";
+  if (props.loginStates) return "QQ 状态未知";
+  if (account.connected) return "OneBot 已连接";
   if (account.observedState === "running" || account.runtimeReady) return "待登录";
   return "未运行";
 }
@@ -78,12 +86,12 @@ function removingAccount(account: AgentAccount) {
   <section class="mt-10 border-t border-line pt-6">
     <div class="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
       <div>
-        <span class="meta-label">NapCat Docker</span>
-        <h3 class="mt-2 text-xl font-medium text-display">QQ 运行容器</h3>
+        <span class="meta-label">NapCat</span>
+        <h3 class="mt-2 text-lg font-medium text-display">QQ 账号</h3>
       </div>
-      <button class="btn min-h-10 whitespace-nowrap px-4" type="button" :disabled="busy" :aria-busy="creatingAccount" @click="createOpen = true">
+      <button v-if="!accounts.length" class="btn min-h-10 whitespace-nowrap px-4" type="button" :disabled="busy" :aria-busy="creatingAccount" @click="createOpen = true">
         <i class="bx text-lg" :class="creatingAccount ? 'bx-loader-alt qq-docker-spinner' : 'bx-plus'" aria-hidden="true"></i>
-        <span>{{ creatingAccount ? "新建中" : "新建 NapCat QQ Docker" }}</span>
+        <span>{{ creatingAccount ? "接入中" : "接入 QQ" }}</span>
       </button>
     </div>
 
@@ -93,8 +101,10 @@ function removingAccount(account: AgentAccount) {
         <span class="min-w-0 flex-1">
           <strong class="block truncate font-normal text-display">{{ account.label }}</strong>
           <small class="mt-1 block truncate font-mono text-[10px] text-mute">{{ account.qqId || account.selfId || account.id }}</small>
+          <span class="mt-2 block text-xs text-mute">管理端口 {{ account.webuiPort }} · 自启动{{ account.enabled && agentEnabled !== false ? "已启用" : "已停用" }}</span>
+          <span class="mt-1 block text-xs text-mute">{{ loginStates?.[account.id]?.connected ?? account.connected ? "OneBot 已连接" : "OneBot 未连接" }}</span>
         </span>
-        <span class="font-mono text-[10px] uppercase" :class="account.connected ? 'text-success' : account.reconcileRequired ? 'text-accent' : 'text-mute'">{{ removingAccount(account) ? "移除中" : accountStatus(account) }}</span>
+        <span class="font-mono text-xs" :class="loginStates?.[account.id]?.online ? 'text-success' : 'text-mute'">{{ removingAccount(account) ? "移除中" : accountStatus(account) }}</span>
         <button v-if="!account.runtimeReady" class="btn min-h-9 px-3" type="button" :disabled="busy" @click="emit('run', account.id)">运行</button>
         <button v-else class="btn min-h-9 px-3" type="button" @click="openLogin(account)">{{ account.connected ? "账号" : "登录" }}</button>
         <button v-if="!account.connected && account.id !== 'primary'" class="icon-btn text-mute hover:text-accent" type="button" :aria-label="removingAccount(account) ? `正在移除 ${account.label}` : `移除 ${account.label}`" :aria-busy="removingAccount(account)" :disabled="busy" @click="emit('remove', account.id)">
@@ -107,14 +117,14 @@ function removingAccount(account: AgentAccount) {
     </div>
     <p v-if="actionError" class="mt-4 text-sm text-accent" role="alert">{{ actionError }}</p>
     <div v-if="!accounts.length" class="empty-state min-h-48 py-12">
-      <div><strong>还没有 QQ 运行容器</strong></div>
+      <div><strong>尚未接入 QQ</strong></div>
     </div>
   </section>
 
   <DialogOverlay :open="createOpen" labelledby="create-account-title" @close="createOpen = false">
     <form class="w-full max-w-md border border-visible bg-panel p-6" @submit.prevent="create">
       <div class="flex items-center justify-between gap-4">
-        <h2 id="create-account-title" class="text-xl font-medium text-display">新建 NapCat QQ Docker</h2>
+        <h2 id="create-account-title" class="text-xl font-medium text-display">接入 QQ</h2>
         <button class="icon-btn" type="button" aria-label="关闭" @click="createOpen = false"><i class="bx bx-x" aria-hidden="true"></i></button>
       </div>
       <label class="field mt-8">

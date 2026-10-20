@@ -9,7 +9,7 @@ test("Agent 可新增、隔离切换并运行独立 NapCat QQ Docker", async ({ 
   await expect(page.getByRole("heading", { name: "Agent", exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "选择 阿罗娜" }).click();
   await expect(page.getByRole("heading", { name: "阿罗娜", exact: true })).toBeVisible();
-  await expect(page.getByText("阿罗娜主账号", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "QQ 接入", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "新增", exact: true }).click();
   const createAgent = page.getByRole("dialog", { name: "新增 Agent" });
@@ -19,8 +19,9 @@ test("Agent 可新增、隔离切换并运行独立 NapCat QQ Docker", async ({ 
   await expect(page.getByRole("heading", { name: "圣娅", exact: true })).toBeVisible();
   expect(state.agents.some((agent) => agent.id === "seia")).toBe(true);
 
-  await page.getByRole("button", { name: "新建 NapCat QQ Docker", exact: true }).click();
-  const createAccount = page.getByRole("dialog", { name: "新建 NapCat QQ Docker" });
+  await page.getByRole("button", { name: "QQ 接入", exact: true }).click();
+  await page.getByRole("button", { name: "接入 QQ", exact: true }).click();
+  const createAccount = page.getByRole("dialog", { name: "接入 QQ" });
   await createAccount.getByLabel("名称").fill("圣娅主账号");
   await createAccount.getByRole("button", { name: "新建", exact: true }).click();
   await expect(page.getByText("圣娅主账号", { exact: true })).toBeVisible();
@@ -43,13 +44,14 @@ test("Agent 可新增、隔离切换并运行独立 NapCat QQ Docker", async ({ 
     reconcileRequired: false,
     runtimeReady: true
   });
-  await expect(page.getByText("待登录", { exact: true })).toBeVisible();
+  await expect(page.getByText("QQ 未登录", { exact: true })).toBeVisible();
   const login = page.getByRole("button", { name: "登录", exact: true });
   await expect(login).toBeEnabled();
   await login.click();
   await expect(page.getByRole("heading", { name: "QQ 登录" })).toBeVisible();
   await page.getByRole("button", { name: "关闭", exact: true }).click();
 
+  await page.goto("/agents");
   await page.getByRole("button", { name: "选择 阿罗娜" }).click();
   const promptRequest = page.waitForRequest((request) => request.url().includes("/api/agent-files?agentId=arona"));
   await page.getByRole("link", { name: "Agent 提示词", exact: true }).click();
@@ -57,9 +59,10 @@ test("Agent 可新增、隔离切换并运行独立 NapCat QQ Docker", async ({ 
 });
 
 test("新建和移除 QQ Docker 会显示进行中状态", async ({ page }) => {
-  await installMockApi(page);
-  await page.goto("/agents");
-  await page.getByRole("button", { name: "选择 阿罗娜" }).click();
+  const state = await installMockApi(page);
+  state.agents.find((agent) => agent.id === "arona")!.accounts = [];
+  await page.addInitScript(() => localStorage.setItem("sunabot.current-agent", "arona"));
+  await page.goto("/agent-settings/connection");
 
   let releaseCreate: () => void = () => undefined;
   const createPending = new Promise<void>((resolve) => { releaseCreate = resolve; });
@@ -69,19 +72,20 @@ test("新建和移除 QQ Docker 会显示进行中状态", async ({ page }) => {
     await route.fallback();
   });
 
-  await page.getByRole("button", { name: "新建 NapCat QQ Docker", exact: true }).click();
-  const createAccount = page.getByRole("dialog", { name: "新建 NapCat QQ Docker" });
-  await createAccount.getByLabel("名称").fill("阿罗娜备用账号");
+  await page.getByRole("button", { name: "接入 QQ", exact: true }).click();
+  const createAccount = page.getByRole("dialog", { name: "接入 QQ" });
+  await createAccount.getByLabel("名称").fill("阿罗娜主账号");
   await createAccount.getByRole("button", { name: "新建", exact: true }).click();
-  await expect(page.getByRole("button", { name: "新建中", exact: true })).toHaveCount(2);
-  await expect(page.getByRole("button", { name: "新建中", exact: true }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: "接入中", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "新建中", exact: true })).toBeDisabled();
   await expect(page.locator(".qq-docker-spinner").first()).toHaveCSS("animation-name", /^qq-docker-spin-/);
   releaseCreate();
-  await expect(page.getByText("阿罗娜备用账号", { exact: true })).toBeVisible();
+  await expect(page.getByText("阿罗娜主账号", { exact: true })).toBeVisible();
+  const accountId = state.agents.find((agent) => agent.id === "arona")!.accounts[0]!.id;
 
   let releaseRemove: () => void = () => undefined;
   const removePending = new Promise<void>((resolve) => { releaseRemove = resolve; });
-  await page.route("**/api/agents/arona/accounts/qq_arona_main", async (route) => {
+  await page.route(`**/api/agents/arona/accounts/${accountId}`, async (route) => {
     if (route.request().method() !== "DELETE") return route.fallback();
     await removePending;
     await route.fallback();

@@ -889,6 +889,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return json(route, { ok: true });
     }
 
+    if (/^\/api\/agents\/[^/]+\/connection$/.test(pathname)) return json(route, {
+      mode: "local", host: "sunabot-local", transport: "direct", onebotPort: 8788,
+      onebotUrl: "ws://172.30.77.1:8788/onebot/v11/ws", coreUrl: "ws://172.30.77.1:8788/onebot/v11/ws"
+    });
     if (pathname === "/api/agents" && method === "GET") return json(route, { agents: state.agents });
     if (pathname === "/api/agents" && method === "POST") {
       const body = request.postDataJSON() as {

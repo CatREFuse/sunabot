@@ -24,6 +24,7 @@ const OrchestratorSettingsForm = defineAsyncComponent(() => import("../component
 const ToolsSettingsForm = defineAsyncComponent(() => import("../components/settings/ToolsSettingsForm.vue"));
 const BashSettingsForm = defineAsyncComponent(() => import("../components/settings/BashSettingsForm.vue"));
 const OneBotSettingsForm = defineAsyncComponent(() => import("../components/settings/OneBotSettingsForm.vue"));
+const AgentConnectionSettings = defineAsyncComponent(() => import("../components/settings/AgentConnectionSettings.vue"));
 const MonitoringSettingsForm = defineAsyncComponent(() => import("../components/settings/MonitoringSettingsForm.vue"));
 const AdminPasswordForm = defineAsyncComponent(() => import("../components/settings/AdminPasswordForm.vue"));
 
@@ -233,7 +234,8 @@ async function logout() {
           @click="handleSettingsClick"
           @keydown="handleSettingsKeydown"
         >
-          <div v-if="current === 'persona'" class="grid gap-12">
+          <AgentConnectionSettings v-if="current === 'connection'" :key="workspace.agentId()" :agent-id="workspace.agentId()" />
+          <div v-else-if="current === 'persona'" class="grid gap-12">
             <PersonaSettingsForm v-model="workspace.drafts.bot" :agent-id="activeAgentId()" />
           </div>
           <ProviderSettings

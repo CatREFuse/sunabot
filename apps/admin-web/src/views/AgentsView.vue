@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, shallowRef } from "vue";
 import { useRouter } from "vue-router";
-import AgentAccountList from "../components/agents/AgentAccountList.vue";
 import AgentDirectory from "../components/agents/AgentDirectory.vue";
 import CreateAgentDialog from "../components/agents/CreateAgentDialog.vue";
 import DeleteAgentDialog from "../components/agents/DeleteAgentDialog.vue";
@@ -15,7 +14,6 @@ const router = useRouter();
 const createOpen = shallowRef(false);
 const deleteOpen = shallowRef(false);
 const busy = shallowRef(false);
-const accountAction = shallowRef<{ kind: "create" } | { kind: "remove"; accountId: string }>();
 const error = shallowRef("");
 const selectedId = shallowRef("");
 const selected = computed(() => state.agents.value.find((agent) => agent.id === selectedId.value) ?? state.currentAgent.value);
@@ -69,42 +67,6 @@ async function removeAgent(confirmation: string) {
   }
 }
 
-async function createAccount(label: string) {
-  if (!selected.value) return;
-  busy.value = true;
-  accountAction.value = { kind: "create" };
-  try {
-    await state.createAccount(selected.value.id, label);
-  } finally {
-    accountAction.value = undefined;
-    busy.value = false;
-  }
-}
-
-async function runAccount(accountId: string) {
-  if (!selected.value) return;
-  busy.value = true;
-  error.value = "";
-  try {
-    await state.startAccountRuntime(selected.value.id, accountId);
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "QQ 运行容器启动失败";
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function removeAccount(accountId: string) {
-  if (!selected.value) return;
-  busy.value = true;
-  accountAction.value = { kind: "remove", accountId };
-  try {
-    await state.removeAccount(selected.value.id, accountId);
-  } finally {
-    accountAction.value = undefined;
-    busy.value = false;
-  }
-}
 </script>
 
 <template>
@@ -135,7 +97,7 @@ async function removeAccount(accountId: string) {
               <dd class="mt-3 text-lg text-display">{{ selected.runtime?.loaded ? "已加载" : "未加载" }}</dd>
             </div>
             <div class="border-t border-line py-6 sm:border-r sm:border-t-0 sm:px-5">
-              <dt class="meta-label">在线账号</dt>
+              <dt class="meta-label">OneBot 连接</dt>
               <dd class="mt-3 text-lg text-display">{{ selected.accounts.filter((item) => item.connected).length }} / {{ selected.accounts.length }}</dd>
             </div>
             <div class="border-t border-line py-6 sm:border-t-0 sm:pl-5">
@@ -144,7 +106,7 @@ async function removeAccount(accountId: string) {
             </div>
           </dl>
 
-          <AgentAccountList :agent-id="selected.id" :accounts="selected.accounts" :busy="busy" :pending-action="accountAction" @create="createAccount" @run="runAccount" @remove="removeAccount" @refresh="state.load({ force: true })" />
+          <button class="divider-row mt-6 w-full bg-transparent text-left" type="button" @click="router.push('/agent-settings/connection')"><span>QQ 接入</span><i class="bx bx-right-arrow-alt text-xl" aria-hidden="true"></i></button>
 
           <section class="mt-10 border-t border-line pt-6">
             <span class="meta-label">工作区</span>

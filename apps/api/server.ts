@@ -86,6 +86,7 @@ import { createBashAuditRuntimePort } from "./bashAuditRuntime.js";
 import { resolveDreamAccountId } from "./dreamApiComposition.js";
 import { registerAgentEmojiApi } from "./emojiApiComposition.js";
 import { registerAgentRoutes } from "./plugins/agentRoutes.js";
+import { describeNapcatConnection } from "./napcatConnection.js";
 import { registerAgentToolRoutes } from "./plugins/agentToolRoutes.js";
 import { registerAuthRoutes } from "./plugins/authRoutes.js";
 import { registerConfigDoctorRoutes } from "./plugins/configDoctorRoutes.js";
@@ -558,6 +559,9 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   registerScheduledTaskRoutes(app, { runtime, getRuntime });
   registerDirectorRoutes(app, { runtime, getRuntime });
   registerAgentRoutes(app, agentRegistry, {
+    describeConnection: () => describeNapcatConnection(
+      getWorkspaceDir(), listenerOptions ?? {}, activeReverseWsPath, onebotServer?.address()
+    ),
     soulService: agentSoul,
     decorateAgents: (agents) => agentRuntimeManager.decorateAgents(agents, onebotGateway.getStatus()),
     onAgentCreated: async (agentId) => {

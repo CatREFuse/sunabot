@@ -152,7 +152,7 @@ function manage() {
           <IdentityAvatar :src="agentAvatarUrl(agent)" :name="agent.name" size="sm" />
           <span class="min-w-0 flex-1">
             <strong class="block truncate text-sm font-normal text-display">{{ agent.name }}</strong>
-            <small class="block truncate font-mono text-[10px] text-mute">{{ agent.accounts.filter((item) => item.connected).length }} 个账号在线</small>
+            <small class="block truncate font-mono text-[10px] text-mute">{{ agent.accounts.some((item) => item.connected) ? "OneBot 已连接" : "OneBot 未连接" }}</small>
           </span>
           <i v-if="agent.id === agentsState.currentAgent.value?.id" class="bx bx-check text-xl" aria-hidden="true"></i>
         </button>

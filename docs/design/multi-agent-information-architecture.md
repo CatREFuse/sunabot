@@ -128,22 +128,22 @@ workspace/
 
 `/agents` 使用左右分栏。左侧是 Agent 列表和“新增 Agent”；右侧显示所选 Agent 的身份、运行状态、QQ 账号和快捷入口。窄屏使用列表页进入详情页。
 
-Agent 列表行只显示头像、名称、在线账号数和启用状态。详情区包含：
+Agent 列表行只显示头像、名称、OneBot 连接数和启用状态。详情区包含：
 
 | 区域 | 内容 | 操作 |
 | --- | --- | --- |
 | 身份 | 头像、名称、Agent ID、状态 | 编辑名称与头像、启用或停用 |
-| QQ 账号 | 账号名称、QQ 号、登录状态、NapCat 状态 | 新建 NapCat QQ Docker、运行、登录、退出、查看 WebUI、移除未登录账号 |
+| QQ 接入 | 当前 Agent 的 QQ 接入入口 | 打开 Agent 设置的 QQ 接入页 |
 | 用量 | 今日 Token、请求数、上下文缓存 | 查看完整统计 |
 | 工作区 | 提示词、记忆、图像、文件入口 | 打开对应页面 |
 
 新增 Agent 使用模态表单，字段为“名称”“Agent ID”“头像”。Agent ID 根据名称生成，可在创建前修改，只允许小写字母、数字和连字符。提交按钮文案为“创建 Agent”。成功后切换到新 Agent 详情。
 
-新增 QQ 账号使用“新建 NapCat QQ Docker”模态表单，字段为“名称”。创建后生成稳定 `accountId`；容器未运行时显示“运行”，启动成功后进入扫码登录状态，QQ 号在 NapCat 登录成功后回填。
+QQ 账号管理集中于 `/agent-settings/connection`，显示本地自启动或远程托管、运行主机、OneBot 地址与端口、管理端口及分别核验的 QQ 登录与 OneBot 连接状态。每个 Bot 接一个 QQ，已有账号时隐藏新增入口。没有账号时使用“接入 QQ”模态表单，字段为“名称”；创建后生成稳定 `accountId`，容器未运行时显示“运行”，启动成功后进入扫码登录状态，QQ 号在 NapCat 登录成功后回填。保留原有数据，不通过本次界面调整删除或迁移历史账号。
 
 ### 状态与统计
 
-状态页顶部提供“全部 Agent / 当前 Agent”范围切换。全局范围显示总 Token、全部 Agent 请求数、在线 Agent 数和在线 QQ 数；Agent 范围显示当前 Agent 的 Token、请求数、账号状态和记忆数量。Token 图表沿用模型与行为筛选，并在查询中增加 `agentId`。
+状态页顶部直接提供各 Agent 的切换按钮及“全部 Agent”统计入口，不再提供独立 QQ 下拉框。全局范围显示总 Token、全部 Agent 请求数、已连接 Agent 数和 OneBot 连接数；Agent 范围显示当前 Agent 的 Token、请求数、对应 QQ 状态和记忆数量。Token 图表沿用模型与行为筛选，并在查询中增加 `agentId`。
 
 每条统计记录必须保存 `agentId`。OneBot 消息产生的记录同时保存 `accountId`；Web Chat 记录保存当前 `agentId`，`accountId` 为空。旧记录前向回填为 `plana`，旧 QQ 接入回填为 `primary`。
 

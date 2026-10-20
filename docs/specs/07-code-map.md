@@ -1,5 +1,7 @@
 # 功能—代码文件索引
 
+Agent QQ 接入与运行位置：`apps/api/napcatConnection.ts`、`apps/api/plugins/agentRoutes.ts`、`apps/admin-web/src/components/settings/AgentConnectionSettings.vue`、`apps/admin-web/src/components/agents/AgentAccountList.vue`；概览 Agent 切换：`apps/admin-web/src/views/OverviewView.vue`。
+
 远端 QQ 每账号缓存限额维护：`deploy/napcat/cache-maintenance.py`、同目录 service/timer 模板；隔离测试：`tests/runtime/napcat-cache-maintenance.test.py`。
 
 [返回当前系统规范索引](./index.md)

@@ -1,7 +1,10 @@
-import { flushPromises, mount } from "@vue/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
+import { shallowRef } from "vue";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentAccount, RuntimeStatus } from "../types";
 import OverviewView from "./OverviewView.vue";
+
+enableAutoUnmount(afterEach);
 
 const runtime = vi.hoisted(() => ({
   status: { value: null as RuntimeStatus | null },
@@ -33,9 +36,10 @@ const agentsState = vi.hoisted(() => ({
     name: string;
     accounts: Array<{ id: string; agentId: string; label: string; qqId?: string }>;
   } },
-  load: vi.fn().mockResolvedValue(undefined)
+  load: vi.fn().mockResolvedValue(undefined),
+  select: vi.fn()
 }));
-agentsState.currentAgent.value = agentsState.agents.value[0];
+agentsState.currentAgent = shallowRef(agentsState.agents.value[0]);
 
 vi.mock("../composables/useRuntimeStatus", () => ({ useRuntimeStatus: () => runtime }));
 vi.mock("../composables/useAdminApi", () => ({ apiRequest }));
@@ -44,6 +48,9 @@ vi.mock("../composables/useAgents", () => ({ useAgents: () => agentsState }));
 describe("OverviewView", () => {
   beforeEach(() => {
     setAccounts([account("primary", "主账号", 6099)]);
+    agentsState.select.mockImplementation((id: string) => {
+      agentsState.currentAgent.value = agentsState.agents.value.find((agent) => agent.id === id)!;
+    });
     runtime.status.value = null;
     runtime.error.value = "状态服务不可用";
     runtime.refresh.mockClear();
@@ -142,19 +149,21 @@ describe("OverviewView", () => {
     wrapper.unmount();
   });
 
-  it("selects primary by identity, switches every QQ action to the chosen account, and labels the login session", async () => {
-    setAccounts([
-      account("secondary", "备用账号", 6100),
-      account("primary", "主账号", 6099)
-    ]);
+  it("switches Agent and all QQ actions together without an account dropdown", async () => {
+    const arona = {
+      ...agentsState.agents.value[0]!,
+      id: "arona", name: "阿罗娜",
+      accounts: [{ ...account("secondary", "阿罗娜账号", 6100), agentId: "arona" }]
+    };
+    agentsState.agents.value = [...agentsState.agents.value, arona];
     const openWindow = vi.spyOn(window, "open").mockImplementation(() => null);
     apiRequest.mockImplementation((path: string) => {
       if (path.endsWith("/login/status")) {
         const secondary = path.includes("/secondary/");
         return Promise.resolve({ connected: true, online: true, data: { user_id: secondary ? 222 : 111, nickname: secondary ? "备用 Bot" : "主 Bot" } });
       }
-      if (path === "/api/agents/plana/accounts/secondary/chats") return Promise.resolve({ connected: true, private: [], groups: [] });
-      if (path === "/api/agents/plana/accounts/secondary/napcat-webui-url") return Promise.resolve({ url: "http://127.0.0.1:6100" });
+      if (path === "/api/agents/arona/accounts/secondary/chats") return Promise.resolve({ connected: true, private: [], groups: [] });
+      if (path === "/api/agents/arona/accounts/secondary/napcat-webui-url") return Promise.resolve({ url: "http://127.0.0.1:6100" });
       if (path === "/api/conversations") return Promise.resolve({ conversations: [] });
       if (path === "/api/images") return Promise.resolve({ images: [] });
       if (path === "/api/overview/summary") return Promise.resolve({ conversations: 0, images: 0 });
@@ -164,11 +173,8 @@ describe("OverviewView", () => {
 
     const wrapper = mount(OverviewView);
     await flushPromises();
-    const selector = wrapper.get<HTMLSelectElement>('select[aria-label="当前 QQ 账号"]');
-    expect(selector.element.value).toBe("primary");
-    expect(selector.text()).toContain("主账号 · primary");
-
-    await selector.setValue("secondary");
+    expect(wrapper.find('select[aria-label="当前 QQ 账号"]').exists()).toBe(false);
+    await wrapper.findAll("button").find((button) => button.text() === "阿罗娜")!.trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("备用 Bot");
     apiRequest.mockClear();
@@ -182,12 +188,13 @@ describe("OverviewView", () => {
 
     const accountRequests = apiRequest.mock.calls.map(([path]) => String(path)).filter((path) => path.includes("/accounts/"));
     expect(accountRequests.every((path) => path.includes("/accounts/secondary/"))).toBe(true);
-    expect(accountRequests).toContain("/api/agents/plana/accounts/secondary/chats");
-    expect(accountRequests).toContain("/api/agents/plana/accounts/secondary/napcat-webui-url");
-    expect(accountRequests).toContain("/api/agents/plana/accounts/secondary/login/status");
-    expect(wrapper.text()).toContain("备用账号 · secondary");
+    expect(accountRequests).toContain("/api/agents/arona/accounts/secondary/chats");
+    expect(accountRequests).toContain("/api/agents/arona/accounts/secondary/napcat-webui-url");
+    expect(accountRequests).toContain("/api/agents/arona/accounts/secondary/login/status");
+    expect(wrapper.text()).toContain("阿罗娜账号 · secondary");
     expect(openWindow).toHaveBeenCalledWith("http://127.0.0.1:6100", "_blank", "noopener,noreferrer");
     openWindow.mockRestore();
+    wrapper.unmount();
   });
 
   it("keeps QQ actions disabled when the current Agent has no accounts", async () => {
@@ -195,9 +202,7 @@ describe("OverviewView", () => {
     const wrapper = mount(OverviewView);
     await flushPromises();
 
-    const selector = wrapper.get<HTMLSelectElement>('select[aria-label="当前 QQ 账号"]');
-    expect(selector.attributes()).toHaveProperty("disabled");
-    expect(selector.text()).toContain("还没有 QQ 账号");
+    expect(wrapper.find('select[aria-label="当前 QQ 账号"]').exists()).toBe(false);
     expect(wrapper.findAll("button").find((button) => button.text().includes("联系人"))!.attributes()).toHaveProperty("disabled");
     expect(wrapper.findAll("button").find((button) => button.text().includes("NapCat"))!.attributes()).toHaveProperty("disabled");
     expect(wrapper.findAll("button").find((button) => button.text().includes("新增 QQ"))).toBeTruthy();

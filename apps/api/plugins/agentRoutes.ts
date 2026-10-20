@@ -10,10 +10,12 @@ import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
 import type { AgentSummary } from "../../../services/agents/agentRegistry.js";
 import type { AccountRuntimeState } from "../../../services/agents/accountRuntimeReconciler.js";
 import type { AgentSoulService } from "../../../src/admin/agentSoul.js";
+import type { NapcatConnectionInfo } from "../../../packages/contracts/admin/public.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 
 export interface AgentRouteOptions {
+  describeConnection?: () => Promise<NapcatConnectionInfo>;
   decorateAgents?: (agents: AgentSummary[]) => unknown;
   onAgentCreated?: (agentId: string) => Promise<void>;
   onAgentUpdated?: (agentId: string, enabled: boolean) => Promise<void>;
@@ -25,6 +27,13 @@ export interface AgentRouteOptions {
 }
 
 export function registerAgentRoutes(app: FastifyInstance, registry: AgentRegistry, options: AgentRouteOptions = {}) {
+  app.get("/api/agents/:agentId/connection", { schema: { response: { 200: openObject } } }, async (request) => {
+    const { agentId } = request.params as { agentId: string };
+    await registry.get(agentId);
+    if (!options.describeConnection) throw new AdminApiError(503, "CONNECTION_INFO_UNAVAILABLE", "连接信息不可用。");
+    return options.describeConnection();
+  });
+
   app.get("/api/agents", { schema: { response: { 200: openObject } } }, async () => ({
     agents: options.decorateAgents?.(await registry.list()) ?? await registry.list()
   }));

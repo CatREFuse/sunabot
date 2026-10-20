@@ -100,7 +100,7 @@ export interface AgentAvatarInput {
 }
 
 export type ConfigSectionKey = "server" | "persona" | "providers" | "broadcastStorm" | "normalReply" | "bot" | "tone" | "memory" | "director" | "orchestrator" | "tools" | "bash" | "onebot";
-export type SettingsSectionKey = ConfigSectionKey | "security";
+export type SettingsSectionKey = ConfigSectionKey | "security" | "connection";
 export type ApplyMode = "hot" | "reconnect" | "restart";
 
 export interface ConfigEnvelope {

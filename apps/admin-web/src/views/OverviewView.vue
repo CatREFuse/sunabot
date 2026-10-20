@@ -34,15 +34,15 @@ const tokenUsage = shallowRef<TokenUsagePayload | null>(null);
 const tokenUsageModel = shallowRef("");
 const tokenUsageBehavior = shallowRef<TokenUsageFilters["behavior"]>("");
 const tokenUsageLoading = shallowRef(false);
-const selectedAccountId = shallowRef("");
 const loginAccount = shallowRef<AgentAccount | null>(null);
 let tokenUsageRequestId = 0;
+let overviewRequestId = 0;
 let overviewMounted = false;
 let accountStatusRequest: { key: string; promise: Promise<void> } | undefined;
 let accountStatusRequestId = 0;
 const currentAccounts = computed(() => agentsState.currentAgent.value?.accounts ?? []);
-const accountCatalogKey = computed(() => `${agentsState.currentAgent.value?.id ?? ""}:${currentAccounts.value.map((account) => account.id).join("|")}`);
-const selectedAccount = computed(() => currentAccounts.value.find((account) => account.id === selectedAccountId.value));
+const selectedAccount = computed(() => currentAccounts.value[0]);
+const selectedAccountId = computed(() => selectedAccount.value?.id ?? "");
 const selectedAccountKey = computed(() => accountKey(selectedAccount.value));
 const qqLogin = useQqLogin({
   paths: () => accountLoginPaths(loginAccount.value),
@@ -59,7 +59,6 @@ const qqLogin = useQqLogin({
   }
 });
 
-watch(accountCatalogKey, syncSelectedAccount, { immediate: true });
 watch(selectedAccountKey, (next, previous) => {
   if (next === previous) return;
   qqStatus.value = null;
@@ -70,9 +69,14 @@ watch(selectedAccountKey, (next, previous) => {
   chatsError.value = "";
   chatsOpen.value = false;
   loadingChats.value = false;
+  conversationCount.value = 0;
+  imageCount.value = 0;
+  tokenUsage.value = null;
+  tokenUsageRequestId += 1;
+  tokenUsageLoading.value = false;
   overviewError.value = "";
   if (qqLogin.open.value) closeQqLogin();
-  if (overviewMounted) void loadSelectedAccountStatus();
+  if (overviewMounted) void loadOverviewDetails();
 });
 
 const accountConnection = computed(() => runtime.status.value?.onebot.accounts?.find((account) => account.accountId === selectedAccountId.value));
@@ -107,8 +111,8 @@ const headerMessageKind = computed(() => {
 });
 const countMetrics = computed(() => usageScope.value === "all" ? [
   { label: "Agent", icon: "bx-bot", value: agentsState.agents.value.length, tone: "interactive" },
-  { label: "在线 Agent", icon: "bx-pulse", value: agentsState.agents.value.filter((agent) => agent.accounts.some((account) => account.connected)).length, tone: "success" },
-  { label: "在线 QQ", icon: "bxl-qq", value: agentsState.agents.value.flatMap((agent) => agent.accounts).filter((account) => account.connected).length, tone: "warning" }
+  { label: "已连接 Agent", icon: "bx-pulse", value: agentsState.agents.value.filter((agent) => agent.accounts.some((account) => account.connected)).length, tone: "success" },
+  { label: "OneBot 连接", icon: "bxl-qq", value: agentsState.agents.value.flatMap((agent) => agent.accounts).filter((account) => account.connected).length, tone: "warning" }
 ] : [
   { label: "记忆", icon: "bx-brain", value: runtime.status.value?.persona.memoryItems ?? 0, tone: "interactive" },
   { label: "会话", icon: "bx-message-square-dots", value: conversationCount.value, tone: "success" },
@@ -132,17 +136,18 @@ const providerReadiness = computed(() => {
 
 onMounted(async () => {
   await agentsState.load().catch(() => undefined);
-  syncSelectedAccount();
   overviewMounted = true;
   await loadOverviewDetails();
 });
 
 async function loadOverviewDetails() {
+  const requestId = ++overviewRequestId;
   const results = await Promise.allSettled([
     loadSelectedAccountStatus(),
     apiRequest<{ conversations: number; images: number }>("/api/overview/summary"),
     Promise.resolve().then(() => apiRequest<TokenUsagePayload>(tokenUsageUrl()))
   ]);
+  if (requestId !== overviewRequestId) return;
   if (results[1].status === "fulfilled") {
     conversationCount.value = results[1].value.conversations;
     imageCount.value = results[1].value.images;
@@ -190,6 +195,8 @@ function tokenUsageUrl() {
 }
 
 async function setUsageScope(scope: "all" | "agent") {
+  tokenUsageRequestId += 1;
+  tokenUsageLoading.value = false;
   usageScope.value = scope;
   tokenUsageModel.value = "";
   tokenUsageBehavior.value = "";
@@ -197,6 +204,7 @@ async function setUsageScope(scope: "all" | "agent") {
 }
 
 async function applyTokenUsageFilters(filters: TokenUsageFilters) {
+  overviewRequestId += 1;
   tokenUsageModel.value = filters.model;
   tokenUsageBehavior.value = filters.behavior;
   const requestId = ++tokenUsageRequestId;
@@ -244,7 +252,7 @@ function openChats() {
 function openAccount() {
   const account = selectedAccount.value;
   if (!account) {
-    void router.push("/agents");
+    void router.push("/agent-settings/connection");
     return;
   }
   loginAccount.value = account;
@@ -278,10 +286,9 @@ function openCurrentNapCat() {
   void openNapCat(`${accountApiBaseFor(account)}/napcat-webui-url`);
 }
 
-function syncSelectedAccount() {
-  const accounts = currentAccounts.value;
-  if (accounts.some((account) => account.id === selectedAccountId.value)) return;
-  selectedAccountId.value = accounts.find((account) => account.id === "primary")?.id ?? accounts[0]?.id ?? "";
+function selectAgent(agentId: string) {
+  agentsState.select(agentId);
+  void setUsageScope("agent");
 }
 
 function accountKey(account: AgentAccount | undefined) {
@@ -298,10 +305,6 @@ function accountLoginPaths(account: AgentAccount | null) {
   return { status: `${base}/login/status`, login: `${base}/login`, logout: `${base}/logout` };
 }
 
-function accountOptionLabel(account: AgentAccount) {
-  if (account.id === "primary") return `${account.label} · primary`;
-  return `${account.label} · ${account.id}`;
-}
 </script>
 
 <template>
@@ -314,19 +317,12 @@ function accountOptionLabel(account: AgentAccount) {
         </template>
       </PageHeader>
 
-      <div class="mt-6 segmented" aria-label="统计范围">
-        <button class="segmented-button" type="button" :aria-pressed="usageScope === 'agent'" @click="setUsageScope('agent')">{{ agentsState.currentAgent.value?.name || "当前 Agent" }}</button>
-        <button class="segmented-button" type="button" :aria-pressed="usageScope === 'all'" @click="setUsageScope('all')">全部 Agent</button>
+      <div class="mt-6 flex flex-wrap gap-2" role="group" aria-label="Agent 与统计范围">
+        <button v-for="agent in agentsState.agents.value" :key="agent.id" class="btn" :class="{ 'btn-primary': usageScope === 'agent' && agentsState.currentAgent.value?.id === agent.id }" type="button" :aria-pressed="usageScope === 'agent' && agentsState.currentAgent.value?.id === agent.id" @click="selectAgent(agent.id)">{{ agent.name }}</button>
+        <button class="btn" :class="{ 'btn-primary': usageScope === 'all' }" type="button" :aria-pressed="usageScope === 'all'" @click="setUsageScope('all')">全部 Agent</button>
       </div>
 
       <div class="mt-8 flex flex-wrap items-end gap-2">
-        <label class="grid min-w-56 gap-2">
-          <span class="meta-label">QQ 账号</span>
-          <select v-model="selectedAccountId" class="control min-h-11" aria-label="当前 QQ 账号" :disabled="currentAccounts.length === 0">
-            <option v-if="currentAccounts.length === 0" value="">还没有 QQ 账号</option>
-            <option v-for="account in currentAccounts" :key="account.id" :value="account.id">{{ accountOptionLabel(account) }}</option>
-          </select>
-        </label>
         <button class="btn btn-primary" type="button" @click="openAccount"><i class="bx bxl-qq" aria-hidden="true"></i>{{ selectedAccount ? qqState === "online" ? "QQ 账号" : "QQ 登录" : "新增 QQ" }}</button>
         <button class="btn" type="button" :disabled="!selectedAccount" @click="openChats"><i class="bx bx-group" aria-hidden="true"></i>联系人</button>
         <button class="btn btn-ghost" type="button" :disabled="!selectedAccount" @click="openCurrentNapCat"><i class="bx bx-link-external" aria-hidden="true"></i>NapCat</button>
