@@ -8,6 +8,10 @@ QQ 登录恢复与环境稳定性用例见 `../user-tests/cases/admin-console/qq
 
 2026-10-21 本轮完整 `npm run verify` 退出 0：unit 3,238 项通过、1 项 macOS 专属跳过，harness 43、integration 43、Skill sandbox 13、backup 45、memory migration 153、runtime smoke 84、E2E 55 项通过；runtime contract、architecture、类型检查、benchmark 和前后端构建均通过。完整 light/dark visual 60/60，通过移动与桌面截图检查；原视觉测试仍从旧 Agent 页面查找 QQ 账号，在未修改基线亦失败，改为实际 `/agents/connection` 入口后保留原有断言并通过。首次完整验证遇到隔离归档中的 workspace 工具 CRLF，修正私有验证副本后完整复跑通过，不计第一次为成功。独立专项质量评审覆盖 142 项通过、1 项既有跳过，缓存维护 Python 7/7；上游 global 迁移合成测试 7/7、实际 amd64 镜像与入口冒烟、真实 Docker Compose 生命周期夹具均通过。4.18.41 的双架构 manifest/config 摘要已验证，实际 amd64 镜像的 QQ 包为 3.2.34-53644。部署包与代码回滚归档已准备，生产尚未更新或重启；实际 QQ 登录复用、升级后收信、长期在线及 arm64 实机仍待验收，隔离测试没有向 QQ 或外部模型发送数据。
 
+同日经用户确认部署 `dea7fca`：ECS 已导入并验证新镜像的 config digest 和全部 8 个 RootFS diffID，旧镜像保留。停服备份两个账号 3,544 个文件，并将 `qq/nt_qq/global` 原子迁移至 `qq/global`，迁移前后文件内容、权限与设备信息摘要一致；本地创建全 Agent SQLite 恢复点 `sqlite-recovery-20261021T120316334Z-6edaea5e`。远端私有脚本首次因 Python 3.10 缺少 `hashlib.file_digest` 在迁移前中止，改用分块摘要后完成；首次 `restart-core` 因两个 NapCat 仍停止而退出，通过既有账号启动函数恢复容器后，最终正式 `restart-core` 退出 0。20:06:33（Asia/Shanghai）Core 恢复为 live/ready，两账号复用登录态，无需扫码；NapCat 启动日志均为 4.18.41，QQ 均为 3.2.34-53644，稳定 hostname 生效。独立核验 117/117 部署文件和 98/98 HTTP 前端资源摘要匹配，管理接口两个账号均 online/authenticated/connected，两个业务库记录到 20:09:17 的真实用户消息。
+
+同次受控隧道恢复：20:09:58.583 仅终止既有 SSH 隧道主进程，systemd 于 20:10:03 自动重建，两个 OneBot 在 20:10:08.655/671 重连；Core PID、两个 QQ 容器 ID、StartedAt、RestartCount 和设备信息均未改变，阿罗娜重连后继续收到 message 事件。1 GiB 缓存维护脚本已定向发布，20:10:49 定时任务成功，unit/timer 保持原配置。代码与摘要恢复点位于本地 `workspace/backups/qq-stability-20261021/`，QQ 全量恢复点位于 ECS `workspace/backups/qq-stability-20261021-data/`。生产浏览器画面受 CUA URL 策略限制未复查，界面验收限定实际 HTTP/API 与此前隔离视觉；未主动向 QQ 发测试消息，长期在线、腾讯会话撤销和 arm64 实机仍不在本次证明范围内。
+
 远端 NapCat 验收遵循 `../user-tests/cases/runtime/remote-napcat-ssh.md`。合成 SSH 文件协议和二维码测试只证明控制路径、摘要链与时效处理，不代表 ECS 的真实 QQ 登录、收信、隧道恢复或 arm64 实机运行通过；这些结果必须在切换后分别记录。
 
 发行首次运行验收必须使用没有 `secrets/codex` 的空 workspace，执行实际包内 Codex `--version` 与解压包 `bootstrap`，验证 stderr 目录提示不污染版本比较；错误版本、可执行文件缺失和未登录状态仍分别报告。回归用例位于 `tests/unit/runtime-launcher.test.ts`，用户用例见 `../user-tests/offline-release-first-run.md`。
