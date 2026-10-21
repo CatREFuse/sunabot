@@ -178,12 +178,22 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
   }
 }
 
-export function napcatAccountUpArguments(action, service) {
-  return [
-    "up", "-d", "--no-build", "--pull", "never",
-    ...(action === "restart" ? ["--force-recreate"] : []),
-    service
-  ];
+export function napcatAccountHostname(accountId) {
+  const name = accountId.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 32);
+  const suffix = crypto.createHash("sha256").update(accountId).digest("hex").slice(0, 12);
+  return `napcat-${name}-${suffix}`;
+}
+
+export async function upNapcatAccount(context, account, action = "start", compose = napcatCompose) {
+  const service = context.contract.napcatService;
+  await compose(context, account, [
+    "up", action === "restart" ? "--no-start" : "-d", "--no-build", "--pull", "never", service
+  ]);
+  if (action === "restart") {
+    await compose(context, account, [
+      "restart", "--no-deps", "--timeout", String(context.contract.shutdownTimeoutSeconds), service
+    ]);
+  }
 }
 
 async function restartRuntime(context) {
@@ -898,7 +908,7 @@ async function startNapcatAccounts(context, accounts, reverseWebSocket, secrets)
   for (const account of accounts) {
     await configureNapcat(context, reverseWebSocket, secrets, account);
     await clearNapcatLoginQr(context, account);
-    await napcatCompose(context, account, napcatAccountUpArguments("start", context.contract.napcatService));
+    await upNapcatAccount(context, account);
     await waitForNapcatAccountHealth(context, account.id, context.contract.napcatReadyTimeoutSeconds * 1_000);
     await writeAccountRuntimeState(
       path.join(context.workspace, "runtime/napcat/accounts", account.id),
@@ -952,7 +962,7 @@ async function reconcileAccount(context, accountId, forceRestart = false) {
       const changed = await configureNapcat(context, reverseWebSocket, secrets, account);
       if (plan.action === "start" || plan.action === "restart") await clearNapcatLoginQr(context, account);
       if (plan.action === "start" || plan.action === "restart" || changed) {
-        await napcatCompose(context, account, napcatAccountUpArguments(plan.action, context.contract.napcatService));
+        await upNapcatAccount(context, account, plan.action);
       }
       await waitForNapcatAccountHealth(
         context,
@@ -1743,6 +1753,7 @@ async function napcatCompose(context, account, args, options = {}) {
     env: {
       ...composeEnvironment(context, project),
       NAPCAT_ACCOUNT_ID: account.id,
+      NAPCAT_HOSTNAME: napcatAccountHostname(account.id),
       NAPCAT_ACCOUNT: account.qqId ?? "",
       NAPCAT_WEBUI_PORT: String(account.webuiPort)
     }
@@ -1772,6 +1783,7 @@ export async function remoteCompose(context, account, args, options = {}) {
     SUNABOT_WORKSPACE: `${remote.root}/workspace`,
     SUNABOT_WORKSPACE_ID: context.identity,
     NAPCAT_ACCOUNT_ID: account?.id ?? "primary",
+    NAPCAT_HOSTNAME: napcatAccountHostname(account?.id ?? "primary"),
     NAPCAT_ACCOUNT: account?.qqId ?? "",
     NAPCAT_WEBUI_PORT: String(account?.webuiPort ?? context.contract.webuiPort)
   };
@@ -1805,6 +1817,7 @@ function composeEnvironment(context, project = context.project) {
     COMPOSE_PROJECT_NAME: project,
     SUNABOT_COMPOSE_PROJECT: project,
     NAPCAT_IMAGE: context.contract.napcatImage,
+    NAPCAT_HOSTNAME: napcatAccountHostname("primary"),
     SUNABOT_NAPCAT_NETWORK: `${context.project}-runtime`,
     SUNABOT_RUNTIME_ID: context.contract.runtimeId,
     SUNABOT_RUNTIME_UID: String(process.getuid?.() ?? 1000),

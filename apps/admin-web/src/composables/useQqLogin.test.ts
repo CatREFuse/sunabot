@@ -11,6 +11,7 @@ let wrapper: ReturnType<typeof mount> | undefined;
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   apiRequest.mockReset();
 });
 
@@ -21,6 +22,160 @@ afterEach(() => {
 });
 
 describe("useQqLogin", () => {
+  it("pauses hidden polling and rechecks immediately without removing an expired QR mask", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "OLD"));
+    const control = mountControl();
+    await control.openDialog();
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    apiRequest.mockClear();
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(apiRequest).not.toHaveBeenCalled();
+
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "AUTO"));
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    expect(control.qrBlocked.value).toBe(true);
+    expect(control.remainingSeconds.value).toBe(0);
+
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await control.refreshQrCode();
+    expect(control.qrBlocked.value).toBe(false);
+    expect(apiRequest).toHaveBeenLastCalledWith("/api/onebot/qq-login", expect.objectContaining({ method: "POST" }));
+    apiRequest.mockClear();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(apiRequest).not.toHaveBeenCalled();
+    control.closeDialog();
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it("aborts hidden polls and ignores their late results after a visible recheck", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "OLD"));
+    const control = mountControl();
+    await control.openDialog();
+    let release!: (value: OneBotQrLogin) => void;
+    let signal!: AbortSignal;
+    apiRequest.mockImplementationOnce((_route: string, init: RequestInit) => new Promise((resolve) => {
+      release = resolve;
+      signal = init.signal!;
+    }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(signal.aborted).toBe(true);
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "VISIBLE"));
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+    release({ connected: true, online: true, available: true, phase: "online" });
+    await flushPromises();
+    expect(control.online.value).toBe(false);
+    expect(control.snapshot.value?.imageDataUrl).toContain("VISIBLE");
+    expect(control.checking.value).toBe(false);
+  });
+
+  it("rechecks a previously online dialog when visible without starting a new login", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    apiRequest.mockResolvedValueOnce({ connected: true, online: true, available: true, phase: "online" });
+    const control = mountControl();
+    await control.openDialog();
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    apiRequest.mockResolvedValue({ connected: false, online: false, authenticated: true, available: true, phase: "reconnecting" });
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+    expect(control.online.value).toBe(false);
+    expect(control.snapshot.value?.phase).toBe("reconnecting");
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+    expect(apiRequest.mock.calls.every(([route]) => route.endsWith("/status"))).toBe(true);
+
+    wrapper!.unmount();
+    wrapper = undefined;
+    apiRequest.mockClear();
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it("does not let an old account poll affect a reopened account or its busy state", async () => {
+    let account = "first";
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "FIRST"));
+    const onOnline = vi.fn();
+    const control = mountControl({ onOnline, paths: () => ({ status: `/${account}/status`, login: `/${account}/login`, logout: `/${account}/logout` }) });
+    await control.openDialog();
+    let releaseOld!: (value: OneBotQrLogin) => void;
+    apiRequest.mockImplementationOnce(() => new Promise((resolve) => { releaseOld = resolve; }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    control.closeDialog();
+    account = "second";
+    let releaseNew!: (value: OneBotQrLogin) => void;
+    apiRequest.mockImplementationOnce(() => new Promise((resolve) => { releaseNew = resolve; }));
+    const opening = control.openDialog();
+    releaseOld({ connected: true, online: true, available: true, phase: "online" });
+    await flushPromises();
+    expect(control.snapshot.value).toBeNull();
+    expect(control.busy.value).toBe(true);
+    expect(onOnline).not.toHaveBeenCalled();
+    releaseNew({ connected: true, online: true, available: true, phase: "online", data: { user_id: 222 } });
+    await opening;
+    expect(control.snapshot.value?.data?.user_id).toBe(222);
+    expect(onOnline).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a replacement poll busy when the canceled poll finishes late", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "OLD"));
+    const control = mountControl();
+    await control.openDialog();
+    let releaseOld!: (value: OneBotQrLogin) => void;
+    apiRequest.mockImplementationOnce(() => new Promise((resolve) => { releaseOld = resolve; }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    let releaseNew!: (value: OneBotQrLogin) => void;
+    apiRequest.mockImplementationOnce(() => new Promise((resolve) => { releaseNew = resolve; }));
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    releaseOld(qrSnapshot(new Date().toISOString(), "STALE"));
+    await flushPromises();
+    expect(control.checking.value).toBe(true);
+    const requests = apiRequest.mock.calls.length;
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(apiRequest).toHaveBeenCalledTimes(requests);
+    releaseNew(qrSnapshot(new Date().toISOString(), "LATEST"));
+    await flushPromises();
+    expect(control.snapshot.value?.imageDataUrl).toContain("LATEST");
+    expect(control.checking.value).toBe(false);
+  });
+
+  it("ignores a late online callback after another dialog reports a refresh error", async () => {
+    let releaseOnline!: () => void;
+    apiRequest.mockResolvedValue(qrSnapshot(new Date().toISOString(), "FIRST"));
+    const control = mountControl({ onOnline: () => new Promise<void>((resolve) => { releaseOnline = resolve; }) });
+    await control.openDialog();
+    apiRequest.mockResolvedValueOnce({ connected: true, online: true, available: true, phase: "online" });
+    await vi.advanceTimersByTimeAsync(2_000);
+    control.closeDialog();
+    apiRequest.mockRejectedValue(new Error("当前账号二维码刷新失败"));
+    await control.openDialog();
+    releaseOnline();
+    await flushPromises();
+    expect(control.error.value).toBe("当前账号二维码刷新失败");
+    expect(control.qrBlocked.value).toBe(true);
+    expect(control.online.value).toBe(false);
+  });
+
   it("still requests a refresh when the opening status read fails", async () => {
     apiRequest.mockRejectedValueOnce(new Error("状态读取失败"))
       .mockResolvedValueOnce(qrSnapshot(new Date().toISOString(), "FRESH"));

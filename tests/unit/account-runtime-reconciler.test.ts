@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AccountRuntimeReconciler,
   RuntimeProbeClient
@@ -253,5 +253,139 @@ describe("account runtime reconciler", () => {
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
     }
+  });
+});
+
+describe("runtime probe request sharing", () => {
+  const workspaces: string[] = [];
+  afterEach(async () => {
+    await Promise.all(workspaces.splice(0).map((workspace) => fs.rm(workspace, { recursive: true, force: true })));
+  });
+
+  async function createFixture() {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-runtime-probe-sharing-"));
+    workspaces.push(workspace);
+    await fs.mkdir(path.join(workspace, "runtime"), { recursive: true });
+    await fs.writeFile(path.join(workspace, "runtime/launcher-state.json"), JSON.stringify({ reconciler: { pid: 42 } }));
+    const requestsDirectory = path.join(workspace, "runtime/account-reconciler/requests");
+    const resultsDirectory = path.join(workspace, "runtime/account-reconciler/results");
+    await fs.mkdir(requestsDirectory, { recursive: true });
+    await fs.mkdir(resultsDirectory, { recursive: true });
+    const client = new RuntimeProbeClient({ workspace, pollIntervalMs: 5, timeoutMs: 1_000 });
+    return {
+      workspace,
+      client,
+      async requests() {
+        const names = (await fs.readdir(requestsDirectory)).filter((name) => name.endsWith(".json"));
+        return Promise.all(names.map(async (name) => JSON.parse(await fs.readFile(path.join(requestsDirectory, name), "utf8")) as {
+          requestId: string; connectedAccountIds: string[];
+        }));
+      },
+      async respond(requestId: string, reply: { facts?: Record<string, unknown>; error?: string }) {
+        const resultPath = path.join(resultsDirectory, `${requestId}.json`);
+        await fs.writeFile(`${resultPath}.tmp`, JSON.stringify({ schemaVersion: 1, kind: "runtime-probe", requestId, ...reply }));
+        await fs.rename(`${resultPath}.tmp`, resultPath);
+      }
+    };
+  }
+
+  async function waitForRequests(fixture: Awaited<ReturnType<typeof createFixture>>, count = 1) {
+    await vi.waitFor(async () => expect((await fixture.requests()).length).toBeGreaterThanOrEqual(count), { timeout: 500, interval: 5 });
+    return fixture.requests();
+  }
+
+  it("shares one host probe for an equivalent connected account set", async () => {
+    const fixture = await createFixture();
+    const first = fixture.client.collectFacts({ connectedAccountIds: ["qq_arona", "primary", "primary"] });
+    const second = fixture.client.collectFacts({ connectedAccountIds: ["primary", "qq_arona"] });
+    await waitForRequests(fixture);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const requests = await fixture.requests();
+    await Promise.all(requests.map((request) => fixture.respond(request.requestId, { facts: { core: { running: true } } })));
+    const results = await Promise.all([first, second]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.connectedAccountIds).toEqual(["primary", "qq_arona"]);
+    expect(results).toEqual([{ core: { running: true } }, { core: { running: true } }]);
+  });
+
+  it("expires successful facts after five seconds without extending the deadline on cache hits", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const fixture = await createFixture();
+    const first = fixture.client.collectFacts({ connectedAccountIds: ["primary"] });
+    const [request] = await waitForRequests(fixture);
+    await fixture.respond(request!.requestId, { facts: { revision: 1 } });
+    await expect(first).resolves.toEqual({ revision: 1 });
+
+    clock.mockReturnValue(5_999);
+    const cached = fixture.client.collectFacts({ connectedAccountIds: ["primary", "primary"] });
+    const cachedOutcome = await Promise.race([cached, new Promise((resolve) => setTimeout(() => resolve("cache miss"), 25))]);
+    if (cachedOutcome === "cache miss") {
+      for (const pending of await fixture.requests()) await fixture.respond(pending.requestId, { facts: { unexpected: true } });
+      await cached;
+    }
+    expect(cachedOutcome).toEqual({ revision: 1 });
+    expect(await fixture.requests()).toEqual([]);
+
+    clock.mockReturnValue(6_000);
+    const expired = fixture.client.collectFacts({ connectedAccountIds: ["primary"] });
+    const [next] = await waitForRequests(fixture);
+    await fixture.respond(next!.requestId, { facts: { revision: 2 } });
+    await expect(expired).resolves.toEqual({ revision: 2 });
+  });
+
+  it("does not cache a failed host probe and allows a fresh retry", async () => {
+    const fixture = await createFixture();
+    const failed = fixture.client.collectFacts({ connectedAccountIds: ["primary"] });
+    const rejection = expect(failed).rejects.toThrow("synthetic host probe failure");
+    const [request] = await waitForRequests(fixture);
+    await fixture.respond(request!.requestId, { error: "synthetic host probe failure" });
+    await rejection;
+    const retry = fixture.client.collectFacts({ connectedAccountIds: ["primary"] });
+    const [next] = await waitForRequests(fixture);
+    expect(next!.requestId).not.toBe(request!.requestId);
+    await fixture.respond(next!.requestId, { facts: { recovered: true } });
+    await expect(retry).resolves.toEqual({ recovered: true });
+  });
+
+  it("invalidates completed facts when the set changes A to B to A", async () => {
+    const fixture = await createFixture();
+    const requestIds: string[] = [];
+    for (const [revision, connectedAccountIds] of [[1, ["primary"]], [2, ["qq_arona"]], [3, ["primary"]]] as const) {
+      const pending = fixture.client.collectFacts({ connectedAccountIds: [...connectedAccountIds] });
+      const [request] = await waitForRequests(fixture);
+      requestIds.push(request!.requestId);
+      await fixture.respond(request!.requestId, { facts: { revision } });
+      await expect(pending).resolves.toEqual({ revision });
+    }
+    expect(new Set(requestIds).size).toBe(3);
+  });
+
+  it("does not reuse or cache an older in-flight A after A to B to A", async () => {
+    const fixture = await createFixture();
+    const first = fixture.client.collectFacts({ connectedAccountIds: ["primary"] });
+    const [oldA] = await waitForRequests(fixture);
+    const second = fixture.client.collectFacts({ connectedAccountIds: ["qq_arona"] });
+    const middle = (await waitForRequests(fixture, 2)).find((request) => request.connectedAccountIds[0] === "qq_arona")!;
+    const third = fixture.client.collectFacts({ connectedAccountIds: ["primary"] });
+    const currentA = (await waitForRequests(fixture, 3)).find((request) => request.connectedAccountIds[0] === "primary" && request.requestId !== oldA!.requestId)!;
+    await fixture.respond(currentA.requestId, { facts: { revision: "current" } });
+    await expect(third).resolves.toEqual({ revision: "current" });
+    await fixture.respond(oldA!.requestId, { facts: { revision: "old" } });
+    await fixture.respond(middle.requestId, { facts: { revision: "middle" } });
+    await Promise.all([first, second]);
+    await expect(fixture.client.collectFacts({ connectedAccountIds: ["primary"] })).resolves.toEqual({ revision: "current" });
+    expect(await fixture.requests()).toEqual([]);
+  });
+
+  it("keeps different workspaces independent", async () => {
+    const first = await createFixture();
+    const second = await createFixture();
+    const pendingFirst = first.client.collectFacts({ connectedAccountIds: ["primary"] });
+    const pendingSecond = second.client.collectFacts({ connectedAccountIds: ["primary"] });
+    const [[requestFirst], [requestSecond]] = await Promise.all([waitForRequests(first), waitForRequests(second)]);
+    await first.respond(requestFirst!.requestId, { facts: { workspace: "first" } });
+    await second.respond(requestSecond!.requestId, { facts: { workspace: "second" } });
+    await expect(pendingFirst).resolves.toEqual({ workspace: "first" });
+    await expect(pendingSecond).resolves.toEqual({ workspace: "second" });
   });
 });

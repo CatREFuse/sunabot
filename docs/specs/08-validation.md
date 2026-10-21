@@ -1,8 +1,12 @@
 # 验证标准与已知限制
 
-QQ 缓存维护独立运行 `python3 tests/runtime/napcat-cache-maintenance.test.py`，以稀疏文件验证 1 GiB 阈值、账号隔离、旧文件优先、登录与数据库保留、链接和权限错误边界。实机记录清理前后容量与定时器状态；定时触发不等于文件系统硬配额。
+QQ 缓存维护独立运行 `python3 tests/runtime/napcat-cache-maintenance.test.py`，以稀疏文件验证 1 GiB 阈值、新旧 global 与账号媒体共用配额、账号隔离、旧文件优先、登录与设备及数据库逐字节保留、链接和权限错误边界。实机记录清理前后容量与定时器状态；定时触发不等于文件系统硬配额。
 
 [返回当前系统规范索引](./index.md)
+
+QQ 登录恢复与环境稳定性用例见 `../user-tests/cases/admin-console/qq-session-stability.md`。回归必须覆盖同账号并发查询共享、旧生命周期查询与写入不清除新的手动登录标记、稳定在线仅完成一次持久化、登录与退出 HTTP 别名共享操作及恢复、失败可明确重试、脱敏操作审计、隐藏页暂停与恢复时立即核对、账号切换迟到响应隔离、宿主探测成功缓存与连接集合变化失效。容器夹具必须验证普通账号重启保留 ID、配置变化可以重建且 hostname 不变、其他账号不受影响；此合同不包含全局清空启动或自动身份转移与手动恢复交错的去重。镜像摘要验证分别覆盖 amd64/arm64，实际镜像的 global 迁移、入口脚本与缓存维护使用合成目录验证，真实 QQ 登录和长期稳定另行验收。
+
+2026-10-21 本轮完整 `npm run verify` 退出 0：unit 3,238 项通过、1 项 macOS 专属跳过，harness 43、integration 43、Skill sandbox 13、backup 45、memory migration 153、runtime smoke 84、E2E 55 项通过；runtime contract、architecture、类型检查、benchmark 和前后端构建均通过。完整 light/dark visual 60/60，通过移动与桌面截图检查；原视觉测试仍从旧 Agent 页面查找 QQ 账号，在未修改基线亦失败，改为实际 `/agents/connection` 入口后保留原有断言并通过。首次完整验证遇到隔离归档中的 workspace 工具 CRLF，修正私有验证副本后完整复跑通过，不计第一次为成功。独立专项质量评审覆盖 142 项通过、1 项既有跳过，缓存维护 Python 7/7；上游 global 迁移合成测试 7/7、实际 amd64 镜像与入口冒烟、真实 Docker Compose 生命周期夹具均通过。4.18.41 的双架构 manifest/config 摘要已验证，实际 amd64 镜像的 QQ 包为 3.2.34-53644。部署包与代码回滚归档已准备，生产尚未更新或重启；实际 QQ 登录复用、升级后收信、长期在线及 arm64 实机仍待验收，隔离测试没有向 QQ 或外部模型发送数据。
 
 远端 NapCat 验收遵循 `../user-tests/cases/runtime/remote-napcat-ssh.md`。合成 SSH 文件协议和二维码测试只证明控制路径、摘要链与时效处理，不代表 ECS 的真实 QQ 登录、收信、隧道恢复或 arm64 实机运行通过；这些结果必须在切换后分别记录。
 

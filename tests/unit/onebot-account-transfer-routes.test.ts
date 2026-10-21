@@ -7,6 +7,134 @@ import { registerOneBotRoutes } from "../../apps/api/plugins/onebotRoutes.js";
 import type { AgentAccount, AgentRegistry } from "../../services/agents/agentRegistry.js";
 
 describe("OneBot account identity transfer routes", () => {
+  it("does not let an old OneBot online response complete a new manual login", async () => {
+    const control = {
+      status: vi.fn(async () => ({ isLogin: true, online: true, manualLogin: true, data: { user_id: 985436737 } })),
+      refreshQrCode: vi.fn(), beginManualLogin: vi.fn(), cancelManualLogin: vi.fn(),
+      startLoginCompletionWatch: vi.fn(), close: vi.fn()
+    } satisfies NapcatLoginControlPort;
+    const gateway = {
+      getStatus: () => ({ connected: true, accounts: [{ accountId: "primary" }] }),
+      sendAction: vi.fn(async (action: string) => ({ data: action === "get_status" ? { online: true } : { user_id: 985436737 } }))
+    } as unknown as OneBotGateway;
+    const app = Fastify();
+    registerOneBotRoutes(app, gateway, { napcatLoginControl: control });
+    try {
+      const result = await app.inject({ method: "GET", url: "/api/onebot/qq-login/status" });
+      expect(result.json()).toMatchObject({ connected: true, online: false, authenticated: false, phase: "restarting" });
+    } finally { await app.close(); }
+  });
+
+  it("coalesces recovery across route aliases, keeps other accounts independent and audits without credentials", async () => {
+    const primary = account("primary", "plana", "985436737");
+    const other = account("other", "arona", "123456789");
+    let releaseRestart!: () => void;
+    const blocked = new Promise<void>((resolve) => { releaseRestart = resolve; });
+    const restarted = new Set<string>();
+    const controls = new Map<string, NapcatLoginControlPort>();
+    const controlFor = (id: string) => {
+      const control = {
+        status: vi.fn(async () => restarted.has(id)
+          ? { isLogin: false, manualLogin: true, imageDataUrl: "data:image/png;base64,FRESH" }
+          : { isLogin: true, manualLogin: false, loginError: "[KICKEDOFFLINE] expired" }),
+        refreshQrCode: vi.fn(), beginManualLogin: vi.fn(), cancelManualLogin: vi.fn(),
+        startLoginCompletionWatch: vi.fn(), close: vi.fn()
+      };
+      controls.set(id, control);
+      return control;
+    };
+    const registry = { account: (id: string) => id === "primary" ? primary : other } as AgentRegistry;
+    const gateway = { getStatus: () => ({ connected: false, accounts: [] }) } as unknown as OneBotGateway;
+    const logs: string[] = [];
+    const app = Fastify({ logger: { stream: { write: (value: string) => { logs.push(value); } } } });
+    const restartAccount = vi.fn(async (id: string) => {
+      if (id === "primary") await blocked;
+      restarted.add(id);
+    });
+    registerOneBotRoutes(app, gateway, {
+      agentRegistry: registry, napcatLoginControlFactory: controlFor, restartAccount,
+      authorizationSessionBinding: () => "session:private-binding"
+    });
+    try {
+      const first = app.inject({ method: "POST", url: "/api/onebot/qq-login" }).then((value) => value);
+      await vi.waitFor(() => expect(restartAccount).toHaveBeenCalledWith("primary"));
+      const second = app.inject({ method: "POST", url: "/api/agents/plana/accounts/primary/login" }).then((value) => value);
+      const independent = await app.inject({ method: "POST", url: "/api/agents/arona/accounts/other/login" });
+      expect(independent.statusCode).toBe(200);
+      await vi.waitFor(() => expect(logs.some((line) => line.includes('"outcome":"joined"'))).toBe(true));
+      releaseRestart();
+      expect((await first).statusCode).toBe(200);
+      expect((await second).statusCode).toBe(200);
+      expect(controls.get("primary")!.beginManualLogin).toHaveBeenCalledOnce();
+      expect(restartAccount.mock.calls.filter(([id]) => id === "primary")).toHaveLength(1);
+      const audit = logs.map((line) => JSON.parse(line)).filter((entry) => entry.event === "qq.login.operation");
+      expect(audit).toContainEqual(expect.objectContaining({ action: "login", outcome: "completed", accountId: "primary", sessionTag: expect.stringMatching(/^[a-f0-9]{16}$/) }));
+      expect(JSON.stringify(audit)).not.toContain("private-binding");
+    } finally { releaseRestart(); await app.close(); }
+  });
+
+  it("releases a failed recovery so a later explicit request can retry", async () => {
+    const control = {
+      status: vi.fn(async () => ({ isLogin: true, manualLogin: false, loginError: "[KICKEDOFFLINE] expired" })),
+      refreshQrCode: vi.fn(), beginManualLogin: vi.fn(), cancelManualLogin: vi.fn(),
+      startLoginCompletionWatch: vi.fn(), close: vi.fn()
+    } satisfies NapcatLoginControlPort;
+    const gateway = { getStatus: () => ({ connected: false, accounts: [] }) } as unknown as OneBotGateway;
+    const restartAccount = vi.fn().mockRejectedValueOnce(new Error("runtime failed token=private-restart-token")).mockResolvedValue(undefined);
+    const logs: string[] = [];
+    const app = Fastify({ logger: { stream: { write: (value: string) => { logs.push(value); } } } });
+    const authorizationSessionBinding = vi.fn(() => "session:private-session-token");
+    registerOneBotRoutes(app, gateway, { napcatLoginControl: control, restartAccount, authorizationSessionBinding });
+    try {
+      expect((await app.inject({ method: "POST", url: "/api/onebot/qq-login" })).statusCode).toBe(502);
+      expect((await app.inject({ method: "POST", url: "/api/onebot/qq-login" })).statusCode).toBe(200);
+      expect(restartAccount).toHaveBeenCalledTimes(2);
+      expect(control.startLoginCompletionWatch).toHaveBeenCalledOnce();
+      expect(authorizationSessionBinding).toHaveBeenCalledTimes(2);
+      expect(logs.join("")).not.toContain("private-restart-token");
+      expect(logs.join("")).not.toContain("private-session-token");
+      expect(logs.map((line) => JSON.parse(line))).toContainEqual(expect.objectContaining({ event: "qq.login.operation", action: "login", outcome: "failed", errorCode: "QQ_LOGIN_RECOVERY_FAILED" }));
+    } finally { await app.close(); }
+  });
+
+  it("shares logout aliases and lets a login request await that recovery", async () => {
+    const primary = account("primary", "plana", "985436737");
+    let releaseRestart!: () => void;
+    const blocked = new Promise<void>((resolve) => { releaseRestart = resolve; });
+    let restarted = false;
+    const control = {
+      status: vi.fn(async () => restarted
+        ? { isLogin: false, manualLogin: true, imageDataUrl: "data:image/png;base64,PRIVATE_QR" }
+        : { isLogin: true, online: true, manualLogin: false, data: { user_id: 985436737 } }),
+      refreshQrCode: vi.fn(), beginManualLogin: vi.fn(), cancelManualLogin: vi.fn(),
+      startLoginCompletionWatch: vi.fn(), close: vi.fn()
+    } satisfies NapcatLoginControlPort;
+    const registry = { account: () => primary, clearAccountIdentity: vi.fn() } as unknown as AgentRegistry;
+    const gateway = { getStatus: () => ({ connected: false, accounts: [] }) } as unknown as OneBotGateway;
+    const logs: string[] = [];
+    const app = Fastify({ logger: { stream: { write: (value: string) => { logs.push(value); } } } });
+    const restartAccount = vi.fn(async () => { await blocked; restarted = true; });
+    registerOneBotRoutes(app, gateway, { napcatLoginControl: control, agentRegistry: registry, restartAccount });
+    try {
+      const logout = app.inject({ method: "POST", url: "/api/onebot/qq-logout", headers: { cookie: "private-cookie", authorization: "Bearer private-token" } }).then((value) => value);
+      await vi.waitFor(() => expect(restartAccount).toHaveBeenCalledOnce());
+      const alias = app.inject({ method: "POST", url: "/api/agents/plana/accounts/primary/logout" }).then((value) => value);
+      const login = app.inject({ method: "POST", url: "/api/agents/plana/accounts/primary/login" }).then((value) => value);
+      await vi.waitFor(() => expect(logs.some((line) => line.includes('"outcome":"joined"'))).toBe(true));
+      releaseRestart();
+      expect((await logout).statusCode).toBe(200);
+      expect((await alias).statusCode).toBe(200);
+      expect((await login).json()).toMatchObject({ phase: "waiting_scan" });
+      expect(control.beginManualLogin).toHaveBeenCalledOnce();
+      expect(control.refreshQrCode).not.toHaveBeenCalled();
+      expect(registry.clearAccountIdentity).toHaveBeenCalledOnce();
+      const audit = logs.map((line) => JSON.parse(line)).filter((entry) => entry.event === "qq.login.operation");
+      expect(audit).toContainEqual(expect.objectContaining({ action: "logout", outcome: "completed", route: "/api/onebot/qq-logout" }));
+      expect(audit).toContainEqual(expect.objectContaining({ action: "logout", outcome: "joined", route: "/api/agents/:agentId/accounts/:accountId/logout" }));
+      expect(logs.join("")).not.toMatch(/private-cookie|private-token|PRIVATE_QR/);
+    } finally { releaseRestart(); await app.close(); }
+  });
+
   it("does not report cached identity as online or reset an authenticated offline session", async () => {
     const control = {
       status: vi.fn(async () => ({ isLogin: true, online: false, manualLogin: false, data: { user_id: 985436737 } })),
@@ -83,7 +211,8 @@ describe("OneBot account identity transfer routes", () => {
       dispatchAction: vi.fn(async () => undefined),
       getRecentEvents: vi.fn(() => [])
     } as unknown as OneBotGateway;
-    const app = Fastify();
+    const logs: string[] = [];
+    const app = Fastify({ logger: { stream: { write: (value: string) => { logs.push(value); } } } });
     const restartAccount = vi.fn(async () => undefined);
     registerOneBotRoutes(app, gateway, {
       agentRegistry: registry,
@@ -102,6 +231,10 @@ describe("OneBot account identity transfer routes", () => {
     expect(gateway.dispatchAction).toHaveBeenCalledWith("bot_exit", {}, source.id, true);
     expect(restartAccount).toHaveBeenCalledWith(source.id);
     expect(registry.updateAccountIdentity).toHaveBeenCalledWith(target.id, "123456789", undefined, true);
+    expect(logs.map((line) => JSON.parse(line))).toContainEqual(expect.objectContaining({
+      event: "qq.login.operation", action: "identity_transfer", outcome: "completed",
+      accountId: "target", previousAccountId: "source", route: "/api/agents/:agentId/accounts/:accountId/login/status"
+    }));
     await app.close();
   });
 

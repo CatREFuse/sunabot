@@ -1,5 +1,6 @@
 // @vitest-environment node
 import fs from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -124,6 +125,7 @@ describe("NapCat runtime layout", () => {
     expect(services.match(/^  [a-z0-9_-]+:/gmu)).toEqual(["  napcat:"]);
     expect(services).toContain("pull_policy: never");
     expect(services).toContain("image: ${NAPCAT_IMAGE:");
+    expect(services).toContain("hostname: ${NAPCAT_HOSTNAME:");
     expect(services).not.toContain("build:");
     expect(entrypoint).toContain('cp -an "$temporary_root/config/." "$config_root/"');
     expect(entrypoint).toContain('[[ ! -f "$manual_login_marker" ]] || requested_account=');
@@ -135,6 +137,49 @@ describe("NapCat runtime layout", () => {
     expect(services).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/qq:/app/.config/QQ");
     expect(services).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/plugins:/app/napcat/plugins");
     expect(services).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}:/app/napcat/cache");
+  });
+
+  it.skipIf(process.platform === "win32").each([
+    { accountEnv: "NAPCAT_ACCOUNT=223344556\n", manual: false, expected: "223344556" },
+    { accountEnv: "NAPCAT_ACCOUNT=223344556\n", manual: true, expected: "" },
+    { accountEnv: "NAPCAT_ACCOUNT=\n", manual: false, expected: "" },
+    { accountEnv: undefined, manual: false, expected: "112233445" }
+  ])("uses current persisted login and the manual marker despite an old container ACCOUNT: %j", async ({ accountEnv, manual, expected }) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-napcat-entrypoint-"));
+    temporaryDirectories.push(directory);
+    const appRoot = path.join(directory, "app");
+    const configRoot = path.join(appRoot, "napcat/config");
+    const cacheRoot = path.join(appRoot, "napcat/cache");
+    const script = path.join(directory, "entrypoint.sh");
+    const bin = path.join(directory, "bin");
+    await fs.mkdir(bin);
+    await fs.writeFile(path.join(bin, "jq"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const [, , flag, key, value, expression, file] = process.argv;
+if (flag !== "--arg" || key !== "account" || expression !== ".autoLoginAccount = $account") process.exit(2);
+const config = JSON.parse(fs.readFileSync(file, "utf8"));
+config.autoLoginAccount = value;
+process.stdout.write(JSON.stringify(config));
+`, { mode: 0o700 });
+    const source = await fs.readFile(path.join(root, "deploy/napcat/napcat-entrypoint.sh"), "utf8");
+    await write(script, source.replaceAll("/app/", `${appRoot}/`));
+    await write(path.join(configRoot, "napcat.json"), "{}");
+    await write(path.join(configRoot, "webui.json"), JSON.stringify({ autoLoginAccount: "112233445", token: "fixture-token" }));
+    await write(path.join(appRoot, ".config/QQ/login.fixture"), "retained-login-state");
+    await write(path.join(appRoot, "entrypoint.sh"), 'printf "%s" "${ACCOUNT-unset}" > "$ACCOUNT_RESULT"\n');
+    if (accountEnv !== undefined) await write(path.join(cacheRoot, "account.env"), accountEnv);
+    if (manual) await write(path.join(cacheRoot, "manual-login-required"), "fixture");
+    const accountResult = path.join(directory, "upstream-account");
+    const result = spawnSync("bash", [script], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ACCOUNT: "112233445", ACCOUNT_RESULT: accountResult }
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(await readJson(path.join(configRoot, "webui.json"))).toEqual({ autoLoginAccount: expected, token: "fixture-token" });
+    expect(await fs.readFile(accountResult, "utf8")).toBe("");
+    expect(await fs.readFile(path.join(appRoot, ".config/QQ/login.fixture"), "utf8")).toBe("retained-login-state");
+    if (manual) expect(await fs.readFile(path.join(cacheRoot, "manual-login-required"), "utf8")).toBe("fixture");
   });
 
   it("provisions writable native component cache paths", async () => {

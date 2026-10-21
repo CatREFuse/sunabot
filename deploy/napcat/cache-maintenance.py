@@ -18,9 +18,9 @@ def scan_error(error):
 def cache_roots(account):
     qq = account / "qq"
     roots = [qq / "NapCat" / name for name in ("data", "temp")]
-    global_root = qq / "nt_qq" / "global"
-    roots.extend(global_root / "nt_data" / name for name in ("Log", "Emoji", "Skin"))
-    roots.append(global_root / "nt_temp")
+    for global_root in (qq / "nt_qq" / "global", qq / "global"):
+        roots.extend(global_root / "nt_data" / name for name in ("Log", "Emoji", "Skin"))
+        roots.append(global_root / "nt_temp")
     if qq.is_dir() and not qq.is_symlink():
         for profile in qq.iterdir():
             if re.fullmatch(r"nt_qq_[a-f0-9]{32}", profile.name):

@@ -11,6 +11,7 @@ const agents = ["plana", "arona"].map((id) => ({
 }));
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   apiRequest.mockReset().mockImplementation(async (url: string) => {
     if (url === "/api/agents") return { agents };
     if (url.endsWith("/connection")) return info;
@@ -21,6 +22,64 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("Agent QQ connection", () => {
+  it("waits while hidden, resumes immediately, and still allows a manual hidden refresh", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const wrapper = mount(AgentConnectionSettings, { props: { agentId: "plana" } });
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(apiRequest).not.toHaveBeenCalled();
+
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+    expect(apiRequest.mock.calls.filter(([url]) => url.endsWith("/login/status"))).toHaveLength(1);
+
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    apiRequest.mockClear();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(apiRequest).not.toHaveBeenCalled();
+    await wrapper.findAll("button").find((button) => button.text() === "刷新状态")!.trigger("click");
+    await flushPromises();
+    expect(apiRequest.mock.calls.filter(([url]) => url.endsWith("/login/status"))).toHaveLength(1);
+    apiRequest.mockClear();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(apiRequest).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it("reuses an in-flight refresh and rejects its late response after hiding", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const original = apiRequest.getMockImplementation()!;
+    let release!: (value: unknown) => void;
+    let signal!: AbortSignal;
+    apiRequest.mockImplementation((url: string, options: RequestInit) => url.endsWith("/login/status")
+      ? new Promise((resolve) => { release = resolve; signal = options.signal!; }) : original(url, options));
+    const wrapper = mount(AgentConnectionSettings, { props: { agentId: "plana" } });
+    await flushPromises();
+    await wrapper.findAll("button").find((button) => button.text() === "刷新状态")!.trigger("click");
+    await flushPromises();
+    expect(apiRequest.mock.calls.filter(([url]) => url.endsWith("/login/status"))).toHaveLength(1);
+
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(signal.aborted).toBe(true);
+    apiRequest.mockImplementation(original);
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+    release({ online: true, connected: true, data: { user_id: 111 } });
+    await flushPromises();
+    expect(wrapper.text()).toContain("QQ 未登录");
+    expect(wrapper.text()).not.toContain("QQ 在线");
+    wrapper.unmount();
+  });
+
   it("separates QQ login from OneBot and shows host, ports and autostart", async () => {
     const wrapper = mount(AgentConnectionSettings, { props: { agentId: "plana" } });
     await flushPromises();

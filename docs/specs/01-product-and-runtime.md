@@ -53,6 +53,8 @@ Core、Bash、MCP、Skill Script 与 WebFetch 只以 Native 形态运行。NapCa
 
 `status`、`doctor`、管理 API 和平台入口共用只读运行探针，分别报告 API、OneBot、每个 QQ、Provider、Codex、Native Bash、MCP、Skill Script、Bubblewrap、WebFetch Renderer、workspace 和迁移状态。QQ 临时离线只降低 readiness，不把 Core 判为死亡。macOS 的动态 WebFetch capability 固定为 unavailable；静态 WebFetch 保持可用。
 
+同一 Core 的宿主探针复用当前 workspace 与已连接账号集合对应的在途请求，成功事实最多缓存 5 秒；账号集合改变立即失效，失败不缓存。该缓存只减少 Docker/SSH 宿主探测，不替代 QQ 在线核验。账号级重启通过 Compose 调和后重启既有容器，镜像与启动配置未变时保留容器 ID；需要更新时由 Compose 重建。每账号固定 hostname，入口从挂载的 `account.env` 读取当前快速登录账号，手动登录标记覆盖该值；容器创建时的旧 `ACCOUNT` 仅在持久账号文件不存在时兼容使用。
+
 首次 `up` 使用带 HMAC 的持久 journal，并在当前终端进入 Landing：设置管理员名称、管理员密码和密码确认。密码输入不回显，长度至少 12 个字符；凭据通过同目录临时文件写入，完成文件 `fsync`、原子替换和父目录 `fsync` 后才返回。Core 构建阶段只复验持久边界与凭据可读性，不能提交完成状态；launcher 必须等待 AdminAuth 成功读取凭据、管理 API 与 OneBot 已监听、account runtime daemon 和全部应运行 NapCat 通过完整探针并连续稳定后，再次读取并校验凭据，把完成提交作为启动流程最后一个可失败步骤。此前任一步失败都保留 journal，可继续启动或通过 `rollback-first-run` 受控回滚，未知文件保留。workspace 完整父目录链在 marker、配置、凭据、SQLite、注册表或运行目录写入前逐级拒绝用户符号链接。
 
 发行包的 `help|status|doctor|logs|down|up|start|restart|restart-core` 不安装应用依赖。`bootstrap` 只验证随包运行时、生产依赖、构建产物和组件完整性。发行包内供进程管理器使用的 Core 入口同样只接受包内 Node 与绝对 Bubblewrap，拒绝宿主可执行文件覆盖与 `/usr/bin/bwrap` 回退，并在执行 Core 前验证完整 release manifest。源码形态可以按锁文件显式准备依赖。
@@ -109,6 +111,6 @@ GitHub `v<version>` tag 发布必须经过完整 `verify` 与 light/dark visual 
 
 导入必须经过严格 schema、UTF-8、大小、文件映射和摘要校验。预览绑定上传包 SHA-256 与目标全部人格文件的聚合 revision；确认时任一摘要或 revision 变化返回冲突且零写入。有效导入在同一管理写事务中预校验、暂存、备份和替换全部人格文件，并只执行一次 runtime reload；提交或 reload 失败时全量恢复。来源 metadata 不修改目标 Agent ID、名称、manifest、账号或业务数据。
 
-### 本地 QQ 兼容更新（2026-10-14）
+### QQ 组件与登录兼容更新（2026-10-21）
 
-NapCat 镜像锁定为 4.18.30，摘要为 `sha256:335f9310198504d8d07aba91cc91d89215269891919c26eb4e46052ff8bb176d`；amd64 镜像内 QQ 为 3.2.32-52194。OCI 清单包含 linux/amd64 和 linux/arm64，实际宿主验收为 WSL amd64。升级保留账号配置、QQ 登录目录及独立账号挂载，普通启动继续使用 `pull never`。4.18.30 上游提供静默离线持续 60 秒后的 Worker 重启与快速登录；腾讯拒绝快速登录时仍需扫码，不能把容器存活视为 QQ 可收信。具体部署与恢复验收见 `../user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md`。
+NapCat 镜像锁定为 4.18.41，摘要为 `sha256:b101b8968cc31ae428ec0f8e117386e4ced7773b2d8226ed9f7ddfcec55f1b7e`，QQ 为 3.2.34-53644。OCI 清单包含 linux/amd64 和 linux/arm64；双架构摘要核验不等于 arm64 实机运行验收。升级保留每账号独立配置及 QQ 登录目录，普通启动继续使用 `pull never`。上游 Linux 全局资料目录从 `QQ/nt_qq/global` 迁移至 `QQ/global`，实际升级需要停服备份，并核验已有目录和文件摘要；已有新目录不得用旧目录覆盖。腾讯拒绝快速登录时仍需扫码，不能把容器存活视为 QQ 可收信。当前优化用例见 `../user-tests/cases/admin-console/qq-session-stability.md`，历史部署验收见 `../user-tests/cases/admin-console/napcat-wsl-upgrade-recovery.md`。

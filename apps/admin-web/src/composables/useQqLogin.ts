@@ -24,6 +24,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
   let expiryTimer: number | undefined;
   let refreshVersion = 0;
   let pollTimer: number | undefined;
+  let pollController: AbortController | undefined;
   let session = 0;
   let activePaths: QqLoginPaths | undefined;
 
@@ -41,8 +42,8 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
     confirmingLogout.value = false;
     error.value = "";
     blockQr();
-    document.addEventListener("visibilitychange", updateExpiry);
-    stopPolling();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    cancelStatusPoll();
     busy.value = true;
     const currentSession = ++session;
     let refreshAfterStatus = false;
@@ -51,6 +52,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
       const current = await apiRequest<OneBotQrLogin>(activePaths.status);
       if (!isCurrent(currentSession)) return;
       await applySnapshot({ ...current, imageDataUrl: undefined, imageUrl: undefined, qrcode: undefined });
+      if (!isCurrent(currentSession)) return;
       refreshAfterStatus = !current.online && !current.authenticated;
       if (current.authenticated && !current.online) startPolling();
     } catch (cause) {
@@ -67,8 +69,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
     if (!open.value || busy.value) return;
     const currentSession = session;
     const requestPaths = activePaths ?? resolvePaths();
-    refreshVersion += 1;
-    stopPolling();
+    cancelStatusPoll();
     blockQr();
     busy.value = true;
     error.value = "";
@@ -80,7 +81,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
       if (!isCurrent(currentSession)) return;
       qrBlocked.value = false;
       await applySnapshot(next);
-      if (!next.online) startPolling();
+      if (isCurrent(currentSession) && !next.online) startPolling();
     } catch (cause) {
       if (!isCurrent(currentSession)) return;
       error.value = errorMessage(cause, "二维码刷新失败");
@@ -102,6 +103,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
     if (!open.value || busy.value) return;
     const currentSession = session;
     const requestPaths = activePaths ?? resolvePaths();
+    cancelStatusPoll();
     busy.value = true;
     error.value = "";
     try {
@@ -113,7 +115,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
       confirmingLogout.value = false;
       qrBlocked.value = false;
       await applySnapshot(next);
-      startPolling(1_000);
+      if (isCurrent(currentSession)) startPolling(1_000);
     } catch (cause) {
       if (!isCurrent(currentSession)) return;
       error.value = errorMessage(cause, "QQ 退出失败");
@@ -130,28 +132,31 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
     confirmingLogout.value = false;
     activePaths = undefined;
     blockQr();
-    document.removeEventListener("visibilitychange", updateExpiry);
-    stopPolling();
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    cancelStatusPoll();
   }
 
   function startPolling(delayMs = LOGIN_POLL_INTERVAL_MS) {
     stopPolling();
-    if (!open.value || snapshot.value?.online) return;
+    if (!open.value || snapshot.value?.online || document.visibilityState !== "visible") return;
     pollTimer = window.setTimeout(() => void pollStatus(), delayMs);
   }
 
-  async function pollStatus() {
-    pollTimer = undefined;
-    if (!open.value || busy.value || checking.value || snapshot.value?.online) return;
+  async function pollStatus(recheckOnline = false) {
+    stopPolling();
+    if (!open.value || busy.value || checking.value || document.visibilityState !== "visible"
+      || (snapshot.value?.online && !recheckOnline)) return;
     const currentSession = session;
     const currentRefresh = refreshVersion;
     const requestPaths = activePaths ?? resolvePaths();
+    pollController = new AbortController();
     checking.value = true;
     try {
-      const next = await apiRequest<OneBotQrLogin>(requestPaths.status);
+      const next = await apiRequest<OneBotQrLogin>(requestPaths.status, { signal: pollController.signal });
       if (!isCurrent(currentSession) || currentRefresh !== refreshVersion) return;
       updateExpiry();
       await applySnapshot(next);
+      if (!isCurrent(currentSession) || currentRefresh !== refreshVersion) return;
       if (!qrBlocked.value || next.online) error.value = next.error ?? "";
     } catch (cause) {
       if (!isCurrent(currentSession) || currentRefresh !== refreshVersion) return;
@@ -160,14 +165,30 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
         error.value = errorMessage(cause, "登录状态读取失败");
       }
     } finally {
-      if (isCurrent(currentSession)) checking.value = false;
-      if (isCurrent(currentSession) && !snapshot.value?.online) {
+      if (isCurrent(currentSession) && currentRefresh === refreshVersion) {
+        pollController = undefined;
+        checking.value = false;
         startPolling();
       }
     }
   }
 
+  function cancelStatusPoll() {
+    refreshVersion += 1;
+    pollController?.abort();
+    pollController = undefined;
+    checking.value = false;
+    stopPolling();
+  }
+
+  function onVisibilityChange() {
+    updateExpiry();
+    if (document.visibilityState === "visible") void pollStatus(true);
+    else cancelStatusPoll();
+  }
+
   async function applySnapshot(next: OneBotQrLogin) {
+    const currentSession = session;
     const becameOnline = snapshot.value?.online !== true && next.online;
     snapshot.value = next;
     updateExpiry();
@@ -175,6 +196,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
       expiryTimer = window.setInterval(updateExpiry, 250);
     }
     options.onStatus?.(next);
+    if (!isCurrent(currentSession)) return;
     if (next.online) {
       stopPolling();
       blockQr();

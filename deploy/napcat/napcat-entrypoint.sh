@@ -3,6 +3,7 @@ set -euo pipefail
 
 config_root=/app/napcat/config
 manual_login_marker=/app/napcat/cache/manual-login-required
+account_env=/app/napcat/cache/account.env
 mkdir -p "$config_root"
 
 if [[ ! -f "$config_root/napcat.json" ]]; then
@@ -16,6 +17,9 @@ fi
 [[ -f "$config_root/webui.json" ]] || { echo "NapCat WebUI 配置初始化失败" >&2; exit 1; }
 
 requested_account=${ACCOUNT:-}
+if [[ -f "$account_env" ]]; then
+  requested_account=$(sed -n 's/^NAPCAT_ACCOUNT=//p' "$account_env")
+fi
 [[ ! -f "$manual_login_marker" ]] || requested_account=
 temporary_webui="$config_root/webui.json.$$.tmp"
 jq --arg account "$requested_account" '.autoLoginAccount = $account' \

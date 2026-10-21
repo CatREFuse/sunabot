@@ -45,6 +45,7 @@
 | `docs/user-tests/cases/runtime/wsl-process-identity-clock-change.md` | Linux 稳定进程身份、时钟跳变与旧部署安全停止 | 修改启动器、调和器或进程身份时读取 |
 | `docs/user-tests/cases/runtime/core-only-restart.md` | 单独重启 Core、Native 失败清理与 NapCat 登录会话保留 | 修改 restart-core 或 Native 生命周期时读取 |
 | `docs/user-tests/cases/admin-console/qq-runtime-status-recovery.md` | QQ 实际在线、逐账号心跳与管理台慢查询恢复 | 修改连接状态、登录探测或状态轮询时读取 |
+| `docs/user-tests/cases/admin-console/qq-session-stability.md` | 登录代次、并发恢复、操作审计、可见性轮询、稳定容器身份与 NapCat 升级 | 修改登录恢复、账号重启或 NapCat 版本时读取 |
 | `docs/security/admin-access.md` | 管理员账号密码、会话、CSRF、限流、熔断与公网代理边界 | 修改鉴权、WebUI 外网访问或紧急处置时读取 |
 | `docs/deployment/distributed-workspace.md` | Git pull、新终端、workspace 分离、主实例切换、离线备份与 Agent 配置文件夹复制边界 | 多终端开发、更新、接管 workspace 或迁移单个 Agent 时读取 |
 | `docs/deployment/online-voice-synthesis.md` | 在线语音协议、Provider 配置、音色 ID、安全边界与真实 QQ 外发流程 | 配置、迁移或验收在线语音合成前读取 |

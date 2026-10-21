@@ -114,6 +114,7 @@ expect(arraysEqual(serviceNames, ["napcat"]), "NapCat Compose must declare only 
 for (const required of [
   "pull_policy: never",
   "NAPCAT_IMAGE",
+  "hostname: ${NAPCAT_HOSTNAME:?Set NAPCAT_HOSTNAME through the launcher}",
   "host.docker.internal:host-gateway",
   "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099",
   "io.sunabot.account-id",
@@ -178,13 +179,19 @@ expect(rendererProxy.includes('server.on("connect"') && rendererProxy.includes("
 expect(rendererClient.includes("authorization: `Bearer ${this.authToken}`"),
   "Core must authenticate renderer requests");
 
-const napcatUpFunction = /export function napcatAccountUpArguments[\s\S]*?\n\}\n/u.exec(launcher)?.[0] ?? "";
+const napcatUpFunction = /export async function upNapcatAccount[\s\S]*?\r?\n\}\r?\n/u.exec(launcher)?.[0] ?? "";
 expect(!launcher.includes("upDocker")
   && !launcher.includes("prepareDockerWebfetchRenderer")
   && !launcher.includes("nativeBashImageComposeArguments")
-  && !napcatUpFunction.includes("--build")
+  && napcatUpFunction.includes('"--no-build"')
+  && !napcatUpFunction.includes('"--build"')
   && napcatUpFunction.includes('"--pull", "never"'),
 "launcher must run Native Core and never build or pull at startup");
+expect(napcatUpFunction.includes('action === "restart" ? "--no-start" : "-d"')
+  && napcatUpFunction.includes('"restart", "--no-deps", "--timeout"')
+  && !napcatUpFunction.includes("--force-recreate")
+  && !napcatUpFunction.includes("--no-recreate"),
+"NapCat account restart must reconcile changed configuration and restart without forcing container replacement");
 expect(!launcherCore.includes('new Set(["auto", "native", "docker"])')
   && launcherCore.includes("SUNABOT_CORE_MODE 已移除")
   && launcherCore.includes("--core 已移除"),

@@ -16,6 +16,86 @@ afterEach(async () => {
 });
 
 describe("NapcatLoginControl", () => {
+  it("coalesces status reads and persists an unchanged online identity only once", async () => {
+    const fixture = await createFixture();
+    const calls: string[] = [];
+    const control = new NapcatLoginControl({ ...fixture, fetchImpl: async (input) => {
+      const pathname = new URL(input).pathname;
+      calls.push(pathname);
+      if (pathname.endsWith("/login")) return json({ code: 0, data: { Credential: "credential" } });
+      if (pathname.endsWith("/CheckLoginStatus")) return json({ code: 0, data: { isLogin: true } });
+      return json({ code: 0, data: { uin: "985436737", online: true } });
+    } });
+    try {
+      await Promise.all([control.status(), control.status(), control.status()]);
+      expect(calls.filter((name) => name.endsWith("/CheckLoginStatus"))).toHaveLength(1);
+      await control.status();
+      expect(calls.filter((name) => name.endsWith("/SetQuickLoginQQ"))).toHaveLength(1);
+    } finally { control.close(); }
+  });
+
+  it("cannot finalize a stale online read after manual login begins", async () => {
+    const fixture = await createFixture();
+    let releaseInfo!: () => void;
+    const infoPending = new Promise<void>((resolve) => { releaseInfo = resolve; });
+    let infoStarted = false;
+    let isLogin = true;
+    const writes: string[] = [];
+    const control = new NapcatLoginControl({ ...fixture, fetchImpl: async (input, init) => {
+      const pathname = new URL(input).pathname;
+      if (pathname.endsWith("/login")) return json({ code: 0, data: { Credential: "credential" } });
+      if (pathname.endsWith("/CheckLoginStatus")) return json({ code: 0, data: { isLogin } });
+      if (pathname.endsWith("/GetQQLoginInfo")) {
+        infoStarted = true;
+        await infoPending;
+        return json({ code: 0, data: { uin: "985436737", online: true } });
+      }
+      writes.push(JSON.parse(String(init?.body)).uin);
+      return json({ code: 0, data: null });
+    } });
+    try {
+      const oldStatus = control.status();
+      await vi.waitFor(() => expect(infoStarted).toBe(true));
+      await control.beginManualLogin();
+      isLogin = false;
+      releaseInfo();
+      await expect(oldStatus).resolves.toMatchObject({ isLogin: false, manualLogin: true });
+      expect(writes).toEqual([""]);
+      await expect(fs.access(fixture.manualLoginMarkerPath)).resolves.toBeUndefined();
+      await expect(fs.readFile(fixture.runtimeEnvPath, "utf8")).resolves.toBe("NAPCAT_ACCOUNT=\n");
+    } finally { releaseInfo(); control.close(); }
+  });
+
+  it("orders a new manual login after an already running persistence write", async () => {
+    const fixture = await createFixture();
+    let releaseWrite!: () => void;
+    const writePending = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    let writeStarted = false;
+    let isLogin = true;
+    const writes: string[] = [];
+    const control = new NapcatLoginControl({ ...fixture, fetchImpl: async (input, init) => {
+      const pathname = new URL(input).pathname;
+      if (pathname.endsWith("/login")) return json({ code: 0, data: { Credential: "credential" } });
+      if (pathname.endsWith("/CheckLoginStatus")) return json({ code: 0, data: { isLogin } });
+      if (pathname.endsWith("/GetQQLoginInfo")) return json({ code: 0, data: { uin: "985436737", online: true } });
+      const uin = JSON.parse(String(init?.body)).uin;
+      writes.push(uin);
+      if (uin) { writeStarted = true; await writePending; }
+      return json({ code: 0, data: null });
+    } });
+    try {
+      const oldStatus = control.status();
+      await vi.waitFor(() => expect(writeStarted).toBe(true));
+      const manual = control.beginManualLogin();
+      isLogin = false;
+      releaseWrite();
+      await manual;
+      await expect(oldStatus).resolves.toMatchObject({ isLogin: false, manualLogin: true });
+      expect(writes).toEqual(["985436737", ""]);
+      await expect(fs.access(fixture.manualLoginMarkerPath)).resolves.toBeUndefined();
+    } finally { releaseWrite(); control.close(); }
+  });
+
   it("never returns an expired QR as scannable", async () => {
     const fixture = await createFixture();
     await fs.writeFile(fixture.qrCodePath, pngHeader);

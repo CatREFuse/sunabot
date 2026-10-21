@@ -83,6 +83,10 @@ export interface NapcatLoginControlOptions {
 export class NapcatLoginControl implements NapcatLoginControlPort {
   private credential = "";
   private refreshRequest?: Promise<NapcatLoginSnapshot>;
+  private statusRequest?: { generation: number; promise: Promise<NapcatLoginSnapshot> };
+  private loginGeneration = 0;
+  private loginMutation: Promise<void> = Promise.resolve();
+  private finalizedUserId?: number;
   private watchTimer?: NodeJS.Timeout;
   private watchStartedAt = 0;
   private manualLoginObservedOffline = false;
@@ -100,12 +104,22 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
   }
 
   async status(): Promise<NapcatLoginSnapshot> {
-    const [manualLoginState, qr] = await Promise.all([
-      this.readManualLoginState(),
-      this.readQrImage()
-    ]);
+    const generation = this.loginGeneration;
+    if (this.statusRequest?.generation === generation) return this.statusRequest.promise;
+    const promise = this.readStatus(generation).then((snapshot) =>
+      generation === this.loginGeneration ? snapshot : this.status()
+    ).finally(() => {
+      if (this.statusRequest?.promise === promise) this.statusRequest = undefined;
+    });
+    this.statusRequest = { generation, promise };
+    return promise;
+  }
+
+  private async readStatus(generation: number): Promise<NapcatLoginSnapshot> {
+    await this.loginMutation;
+    const manualLoginState = await this.readManualLoginState();
     const manualLogin = manualLoginState.exists;
-    if (manualLoginState.offlineObserved) this.manualLoginObservedOffline = true;
+    if (manualLoginState.offlineObserved && generation === this.loginGeneration) this.manualLoginObservedOffline = true;
     let source: NapcatRawLoginStatus;
     try {
       source = await this.request<NapcatRawLoginStatus>("/QQLogin/CheckLoginStatus");
@@ -118,9 +132,13 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
     }
     const isLogin = source.isLogin === true;
     const loginError = cleanText(source.loginError);
-    if (manualLogin && !isLogin && !this.manualLoginObservedOffline) {
-      await this.markManualLoginOffline();
-      this.manualLoginObservedOffline = true;
+    if ((!isLogin || loginError) && generation === this.loginGeneration) this.finalizedUserId = undefined;
+    if (manualLogin && !isLogin && !this.manualLoginObservedOffline && generation === this.loginGeneration) {
+      await this.mutateLogin(async () => {
+        if (generation !== this.loginGeneration || this.closed) return;
+        await this.markManualLoginOffline();
+        if (generation === this.loginGeneration) this.manualLoginObservedOffline = true;
+      });
     }
     if (isLogin) {
       let loginInfo: NapcatRawLoginInfo;
@@ -131,7 +149,12 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
       }
       const userId = normalizeQq(loginInfo.uin);
       const canFinalize = loginInfo.online === true && !loginError && (!manualLogin || this.manualLoginObservedOffline);
-      if (userId && canFinalize) await this.finalizeLogin(userId);
+      if (loginInfo.online !== true && generation === this.loginGeneration) this.finalizedUserId = undefined;
+      if (userId && canFinalize) await this.mutateLogin(async () => {
+        if (generation !== this.loginGeneration || this.closed || (!manualLogin && this.finalizedUserId === userId)) return;
+        await this.finalizeLogin(userId);
+        if (generation === this.loginGeneration) this.finalizedUserId = userId;
+      });
       return {
         isLogin: true,
         online: loginInfo.online,
@@ -150,7 +173,7 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
       manualLogin,
       qrcodeUrl: cleanText(source.qrcodeurl),
       loginError: cleanText(source.loginError),
-      ...qr,
+      ...await this.readQrImage(),
       ...(loginError ? { loginError, imageDataUrl: undefined } : {})
     };
   }
@@ -174,23 +197,39 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
     return refreshed;
   }
 
-  async beginManualLogin() {
-    await this.writeLoginFile("manual-login-required", this.options.manualLoginMarkerPath,
-      `${JSON.stringify({ requestedAt: new Date().toISOString() })}\n`);
-    await this.removeLoginFile("qrcode.png", this.options.qrCodePath);
+  beginManualLogin() {
+    this.loginGeneration += 1;
+    this.finalizedUserId = undefined;
     this.manualLoginObservedOffline = false;
-    try {
-      await this.request("/QQLogin/SetQuickLoginQQ", { uin: "" });
-    } catch (error) {
-      await this.removeLoginFile("manual-login-required", this.options.manualLoginMarkerPath);
-      throw error;
-    }
+    return this.mutateLogin(async () => {
+      await this.writeLoginFile("manual-login-required", this.options.manualLoginMarkerPath,
+        `${JSON.stringify({ requestedAt: new Date().toISOString() })}\n`);
+      await this.removeLoginFile("qrcode.png", this.options.qrCodePath);
+      try {
+        await this.request("/QQLogin/SetQuickLoginQQ", { uin: "" });
+      } catch (error) {
+        await this.removeLoginFile("manual-login-required", this.options.manualLoginMarkerPath);
+        throw error;
+      }
+    });
   }
 
-  async cancelManualLogin() {
-    const account = await this.readRuntimeEnvAccount();
-    if (account) await this.request("/QQLogin/SetQuickLoginQQ", { uin: account }).catch(() => undefined);
-    await this.removeLoginFile("manual-login-required", this.options.manualLoginMarkerPath);
+  cancelManualLogin() {
+    this.loginGeneration += 1;
+    this.finalizedUserId = undefined;
+    this.manualLoginObservedOffline = false;
+    return this.mutateLogin(async () => {
+      const account = await this.readRuntimeEnvAccount();
+      if (account) await this.request("/QQLogin/SetQuickLoginQQ", { uin: account });
+      await this.removeLoginFile("manual-login-required", this.options.manualLoginMarkerPath);
+    });
+  }
+
+  private mutateLogin(operation: () => Promise<void>): Promise<void> {
+    const result = this.loginMutation.then(operation);
+    // Keep later transitions runnable; the original rejection is returned to its caller.
+    this.loginMutation = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   startLoginCompletionWatch() {
@@ -201,6 +240,7 @@ export class NapcatLoginControl implements NapcatLoginControlPort {
 
   close() {
     this.closed = true;
+    this.loginGeneration += 1;
     this.stopLoginCompletionWatch();
   }
 

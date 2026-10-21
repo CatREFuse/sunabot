@@ -122,14 +122,40 @@ export class AccountRuntimeReconciler implements AccountRuntimeReconcilerPort {
 }
 
 export class RuntimeProbeClient implements RuntimeProbeClientPort {
+  private currentProbe?: {
+    key: string;
+    pending?: Promise<Record<string, unknown>>;
+    facts?: Record<string, unknown>;
+    expiresAt: number;
+  };
+
   constructor(private readonly options: {
     workspace?: string;
     pollIntervalMs?: number;
     timeoutMs?: number;
   } = {}) {}
 
-  async collectFacts(input: { connectedAccountIds?: string[] } = {}): Promise<Record<string, unknown>> {
-    const workspace = this.options.workspace ?? getWorkspaceDir();
+  collectFacts(input: { connectedAccountIds?: string[] } = {}): Promise<Record<string, unknown>> {
+    const workspace = path.resolve(this.options.workspace ?? getWorkspaceDir());
+    const connectedAccountIds = [...new Set((input.connectedAccountIds ?? [])
+      .filter((value) => /^[A-Za-z0-9_-]{1,64}$/.test(value)))].sort();
+    const key = JSON.stringify([workspace, connectedAccountIds]);
+    if (this.currentProbe?.key !== key) this.currentProbe = { key, expiresAt: 0 };
+    const probe = this.currentProbe;
+    if (probe.pending) return probe.pending;
+    if (probe.facts && performance.now() < probe.expiresAt) return Promise.resolve(probe.facts);
+    probe.facts = undefined;
+    probe.pending = this.requestFacts(workspace, connectedAccountIds).then((facts) => {
+      if (this.currentProbe === probe) {
+        probe.facts = facts;
+        probe.expiresAt = performance.now() + 5_000;
+      }
+      return facts;
+    }).finally(() => { probe.pending = undefined; });
+    return probe.pending;
+  }
+
+  private async requestFacts(workspace: string, connectedAccountIds: string[]): Promise<Record<string, unknown>> {
     if (!await launcherReconcilerConfigured(workspace)) {
       throw new Error("Host runtime probe 服务未启动；请执行 ./sunabot.sh restart。");
     }
@@ -141,7 +167,7 @@ export class RuntimeProbeClient implements RuntimeProbeClientPort {
       schemaVersion: 1,
       kind: "runtime-probe",
       requestId,
-      connectedAccountIds: (input.connectedAccountIds ?? []).filter((value) => /^[A-Za-z0-9_-]{1,64}$/.test(value)),
+      connectedAccountIds,
       requestedAt: new Date().toISOString()
     });
     const deadline = Date.now() + (this.options.timeoutMs ?? 15_000);

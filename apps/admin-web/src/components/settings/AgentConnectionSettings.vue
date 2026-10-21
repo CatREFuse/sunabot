@@ -22,10 +22,18 @@ const onebotUrl = computed(() => {
 let controller: AbortController | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let generation = 0;
+let pendingRefresh: Promise<void> | undefined;
 
-async function refresh() {
+function refresh(): Promise<void> {
+  if (pendingRefresh) return pendingRefresh;
   const current = ++generation;
-  controller?.abort();
+  pendingRefresh = loadConnection(current).finally(() => {
+    if (current === generation) pendingRefresh = undefined;
+  });
+  return pendingRefresh;
+}
+
+async function loadConnection(current: number) {
   clearTimeout(timer);
   controller = new AbortController();
   const signal = controller.signal;
@@ -52,21 +60,37 @@ async function refresh() {
     loginStates.value = {};
     error.value = cause instanceof Error ? cause.message : "连接状态读取失败";
   } finally {
-    if (current === generation) timer = setTimeout(() => void refresh(), 10_000);
+    if (current === generation && document.visibilityState === "visible") {
+      timer = setTimeout(() => void refresh(), 10_000);
+    }
   }
 }
 
+function stopRefresh() {
+  generation += 1;
+  controller?.abort();
+  controller = undefined;
+  pendingRefresh = undefined;
+  clearTimeout(timer);
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === "visible") void refresh();
+  else stopRefresh();
+}
+
 watch(() => props.agentId, () => {
+  stopRefresh();
   agent.value = undefined;
   connection.value = undefined;
   loginStates.value = {};
   error.value = "";
-  void refresh();
+  if (document.visibilityState === "visible") void refresh();
 }, { immediate: true });
+document.addEventListener("visibilitychange", onVisibilityChange);
 onBeforeUnmount(() => {
-  generation += 1;
-  controller?.abort();
-  clearTimeout(timer);
+  stopRefresh();
+  document.removeEventListener("visibilitychange", onVisibilityChange);
 });
 
 async function act(kind: "create" | "run" | "remove", value: string) {
@@ -80,7 +104,10 @@ async function act(kind: "create" | "run" | "remove", value: string) {
       method: kind === "remove" ? "DELETE" : "POST",
       ...(kind === "create" ? { body: JSON.stringify({ label: value }) } : {})
     });
-    if (agentId === props.agentId) await refresh();
+    if (agentId === props.agentId) {
+      stopRefresh();
+      await refresh();
+    }
   } catch (cause) {
     if (agentId === props.agentId) error.value = cause instanceof Error ? cause.message : "账号操作失败";
   } finally {

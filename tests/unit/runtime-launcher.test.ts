@@ -28,7 +28,8 @@ import {
   firstRunCompletionReadiness,
   inspectNativeCodex,
   nativeCoreEnvironment,
-  napcatAccountUpArguments,
+  napcatAccountHostname,
+  upNapcatAccount,
   selectNativeOnebotListenHost,
   shouldCleanupRemovedNapcatAccount,
   startupReportFailures
@@ -190,13 +191,93 @@ describe("Native Core runtime launcher", () => {
     expect(commandTimeoutMs("docker", ["info"], 1234)).toBe(1234);
   });
 
-  it("force recreates only the selected NapCat account during login recovery", () => {
-    expect(napcatAccountUpArguments("start", "napcat")).toEqual([
+  it("starts the selected NapCat account with Compose reconciliation and no forced recreation", async () => {
+    const context = { contract: { napcatService: "napcat", shutdownTimeoutSeconds: 35 } };
+    const account = { id: "qq_Arona" };
+    const compose = vi.fn().mockResolvedValue(undefined);
+    await upNapcatAccount(context, account, "start", compose);
+    expect(compose.mock.calls).toEqual([[context, account, [
       "up", "-d", "--no-build", "--pull", "never", "napcat"
+    ]]]);
+  });
+
+  it("reconciles image and configuration before restarting the same account without forcing a new identity", async () => {
+    const context = { contract: { napcatService: "napcat", shutdownTimeoutSeconds: 35 } };
+    const account = { id: "qq_Arona" };
+    const compose = vi.fn().mockResolvedValue(undefined);
+    await upNapcatAccount(context, account, "restart", compose);
+    expect(compose.mock.calls).toEqual([
+      [context, account, ["up", "--no-start", "--no-build", "--pull", "never", "napcat"]],
+      [context, account, ["restart", "--no-deps", "--timeout", "35", "napcat"]]
     ]);
-    expect(napcatAccountUpArguments("restart", "napcat")).toEqual([
-      "up", "-d", "--no-build", "--pull", "never", "--force-recreate", "napcat"
-    ]);
+  });
+
+  it("does not start an unreconciled account after Compose fails and preserves restart errors", async () => {
+    const context = { contract: { napcatService: "napcat", shutdownTimeoutSeconds: 35 } };
+    const account = { id: "qq_Arona" };
+    const failure = new Error("fixture compose configuration failure");
+    const compose = vi.fn().mockRejectedValue(failure);
+    await expect(upNapcatAccount(context, account, "restart", compose)).rejects.toBe(failure);
+    expect(compose).toHaveBeenCalledTimes(1);
+    compose.mockReset().mockResolvedValueOnce(undefined).mockRejectedValueOnce(failure);
+    await expect(upNapcatAccount(context, account, "restart", compose)).rejects.toBe(failure);
+    expect(compose).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives each account a stable DNS hostname without case, punctuation or truncation collisions", () => {
+    const ids = ["primary", "qq_Arona", "qq_arona", "qq-arona", "a".repeat(64), `${"a".repeat(63)}b`];
+    const names = ids.map(napcatAccountHostname);
+    expect(new Set(names).size).toBe(ids.length);
+    for (const [index, name] of names.entries()) {
+      expect(name).toMatch(/^napcat-[a-z0-9-]+-[a-f0-9]{12}$/u);
+      expect(name.length).toBeLessThanOrEqual(63);
+      expect(napcatAccountHostname(ids[index])).toBe(name);
+    }
+  });
+
+  it.skipIf(process.platform === "win32").each([false, true])("passes stable account hostnames through actual Compose command construction (remote=%s)", async (remote) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-napcat-compose-"));
+    const bin = path.join(directory, "bin");
+    const trace = path.join(directory, "commands.log");
+    await fs.mkdir(bin);
+    await fs.writeFile(path.join(bin, "docker"), `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.appendFileSync(process.env.NAPCAT_FIXTURE_TRACE, JSON.stringify({
+  args: process.argv.slice(2), hostname: process.env.NAPCAT_HOSTNAME, account: process.env.NAPCAT_ACCOUNT_ID
+}) + "\\n");
+`, { mode: 0o700 });
+    await fs.writeFile(path.join(bin, "ssh"), '#!/bin/bash\nexec /bin/sh -c "${@: -1}"\n', { mode: 0o700 });
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+    vi.stubEnv("NAPCAT_FIXTURE_TRACE", trace);
+    const context = {
+      root, workspace: path.join(directory, "workspace"), identity: "fixture-workspace", project: "fixture-napcat",
+      environment: process.env, runtimeEnvironment: { WEBUI_TOKEN: "fixture-webui" }, runtimeEnv: path.join(directory, "runtime.env"),
+      contract: { napcatService: "napcat", shutdownTimeoutSeconds: 35, composeFile: path.join(root, "deploy/napcat/compose.yml"),
+        napcatImage: `fixture/napcat@sha256:${"a".repeat(64)}`, runtimeId: "fixture", webuiPort: 6099 },
+      ...(remote ? { remoteNapcat: { root: path.join(directory, "remote"), uid: 1000, gid: 1000,
+        host: "fixture.invalid", user: "fixture", port: 22, identityFile: path.join(directory, "key"),
+        knownHostsFile: path.join(directory, "known-hosts") } } : {})
+    };
+    try {
+      await fs.writeFile(context.runtimeEnv, "WEBUI_TOKEN=fixture-webui\n");
+      for (const id of ["primary", "qq_Arona"]) {
+        await upNapcatAccount(context, { id, qqId: "123456789", webuiPort: 6099 }, "restart");
+      }
+      const calls = (await fs.readFile(trace, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(calls).toHaveLength(4);
+      for (const [index, id] of ["primary", "qq_Arona"].entries()) {
+        const pair = calls.slice(index * 2, index * 2 + 2);
+        expect(pair.map((call) => [call.account, call.hostname])).toEqual([
+          [id, napcatAccountHostname(id)], [id, napcatAccountHostname(id)]
+        ]);
+        expect(pair[0].args.slice(-6)).toEqual(["up", "--no-start", "--no-build", "--pull", "never", "napcat"]);
+        expect(pair[1].args.slice(-5)).toEqual(["restart", "--no-deps", "--timeout", "35", "napcat"]);
+        expect(pair.every((call) => !call.args.includes("--force-recreate"))).toBe(true);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("gives graceful NapCat stop and first-run credential input explicit longer budgets", async () => {

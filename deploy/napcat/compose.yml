@@ -3,6 +3,7 @@ name: sunabot-napcat
 services:
   napcat:
     image: ${NAPCAT_IMAGE:?Set NAPCAT_IMAGE to the locked upstream digest}
+    hostname: ${NAPCAT_HOSTNAME:?Set NAPCAT_HOSTNAME through the launcher}
     pull_policy: never
     entrypoint: ["/usr/local/bin/sunabot-napcat-entrypoint"]
     restart: unless-stopped

@@ -607,6 +607,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
   registerOneBotRoutes(app, onebotGateway, {
     agentRegistry,
+    authorizationSessionBinding: (request) => adminAuth.authorizationSessionBinding(request),
     restartAccount: accountRuntimeReconciler ? async (accountId: string) => {
       const state = await accountRuntimeReconciler.restart(accountId);
       if (state.reconcileRequired) throw new ServiceError(503, "ACCOUNT_RUNTIME_RESTART_FAILED", state.lastError ?? "QQ 运行容器重启失败。");

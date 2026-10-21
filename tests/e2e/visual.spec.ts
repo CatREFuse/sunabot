@@ -432,6 +432,9 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await createAgentDialog.getByRole("button", { name: "关闭", exact: true }).click();
     await page.getByRole("button", { name: "选择 阿罗娜" }).click();
     await expect(page.getByRole("heading", { name: "阿罗娜", exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "agents-arona-identity");
+    await page.goto("/agents/connection");
+    await expect(page.getByRole("heading", { name: "QQ 接入", exact: true })).toBeVisible();
     await expect(page.getByText("阿罗娜主账号", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "agents-arona");
     const aronaAccount = state.agents.find((agent) => agent.id === "arona")?.accounts[0];
@@ -455,6 +458,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
       observedState: "running",
       reconcileRequired: false
     });
+    await page.goto("/agents");
     await page.getByRole("button", { name: "选择 普拉娜" }).click();
 
     await page.goto("/extensions");
