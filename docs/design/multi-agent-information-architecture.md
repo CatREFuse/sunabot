@@ -126,20 +126,20 @@ workspace/
 
 ### Agent 页面
 
-`/agents` 使用左右分栏。左侧是 Agent 列表和“新增 Agent”；右侧显示所选 Agent 的身份、运行状态、QQ 账号和快捷入口。窄屏使用列表页进入详情页。
+`/agents/:section?` 是 Agent 管理与设置的唯一页面，默认显示身份分区。旧 `/agent-settings/:section?` 携带 query/hash 跳转到对应新路由。全局 Agent 下拉菜单只负责切换，移除“管理 Agent”重复入口。
 
-Agent 列表行只显示头像、名称、OneBot 连接数和启用状态。详情区包含：
+身份分区提供角色切换按钮、“新增 Agent”、当前角色启停、删除、运行时与记忆摘要；QQ 状态统一在 QQ 接入分区查看。各分区包含：
 
 | 区域 | 内容 | 操作 |
 | --- | --- | --- |
 | 身份 | 头像、名称、Agent ID、状态 | 编辑名称与头像、启用或停用 |
 | QQ 接入 | 当前 Agent 的 QQ 接入入口 | 打开 Agent 设置的 QQ 接入页 |
 | 用量 | 今日 Token、请求数、上下文缓存 | 查看完整统计 |
-| 工作区 | 提示词、记忆、图像、文件入口 | 打开对应页面 |
+| 工作区 | 提示词、记忆、图像 | 通过现有主导航打开对应页面 |
 
 新增 Agent 使用模态表单，字段为“名称”“Agent ID”“头像”。Agent ID 根据名称生成，可在创建前修改，只允许小写字母、数字和连字符。提交按钮文案为“创建 Agent”。成功后切换到新 Agent 详情。
 
-QQ 账号管理集中于 `/agent-settings/connection`，显示本地自启动或远程托管、运行主机、OneBot 地址与端口、管理端口及分别核验的 QQ 登录与 OneBot 连接状态。每个 Bot 接一个 QQ，已有账号时隐藏新增入口。没有账号时使用“接入 QQ”模态表单，字段为“名称”；创建后生成稳定 `accountId`，容器未运行时显示“运行”，启动成功后进入扫码登录状态，QQ 号在 NapCat 登录成功后回填。保留原有数据，不通过本次界面调整删除或迁移历史账号。
+QQ 账号管理集中于 `/agents/connection`，显示本地自启动或远程托管、运行主机、OneBot 地址与端口、管理端口及分别核验的 QQ 登录与 OneBot 连接状态。每个 Bot 接一个 QQ，已有账号时隐藏新增入口。没有账号时使用“接入 QQ”模态表单，字段为“名称”；创建后生成稳定 `accountId`，容器未运行时显示“运行”，启动成功后进入扫码登录状态，QQ 号在 NapCat 登录成功后回填。保留原有数据，不通过本次界面调整删除或迁移历史账号。
 
 ### 状态与统计
 
@@ -168,17 +168,16 @@ AppShell
 ├── DesktopNavigation
 ├── MobileNavigation
 └── RouterView
-    └── AgentsView
-        ├── AgentDirectory
-        ├── AgentProfile
-        ├── AgentAccountList
-        ├── CreateAgentDialog
-        └── CreateAgentAccountDialog
+    └── SettingsView
+        ├── AgentManagementSettings → CreateAgentDialog / DeleteAgentDialog
+        ├── PersonaSettingsForm
+        ├── AgentConnectionSettings → AgentAccountList
+        └── 其他设置分区
 ```
 
 - `useAgents` 负责列表、当前 Agent、创建、单账号容器启动、更新与 API 错误状态。
-- `AgentSwitcher` 只接收 Agent 列表和当前 ID，通过事件请求切换。
-- `AgentsView` 组合列表与详情，不直接实现 API 请求。
+- `AgentSwitcher` 通过 `useAgents` 切换；在统一设置页不重新加载浏览器，由设置页完成保存与切换。
+- `SettingsView` 组合管理、身份和 QQ 接入分区；管理组件接收已建立配置上下文的 `agentId` 和保存回调，保持与配置表单一致。
 - 创建表单独立为模态组件，关闭时清空草稿。
 - Agent 作用域通过显式 `agentId` 进入 API；组件不读取全局可变变量来决定数据归属。
 

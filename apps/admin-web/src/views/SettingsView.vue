@@ -9,7 +9,7 @@ import { focusConfigField } from "../utils/configFieldFocus";
 import PageHeader from "../components/ui/PageHeader.vue";
 import SettingsNavigation from "../components/settings/SettingsNavigation.vue";
 import DialogOverlay from "../components/ui/DialogOverlay.vue";
-import { activeAgentId, activeAgentIdState, setActiveAgentId } from "../composables/agentScope";
+import { activeAgentIdState, setActiveAgentId } from "../composables/agentScope";
 import { settingsForScope } from "../components/settings/settingsCatalog";
 
 const props = withDefaults(defineProps<{ scope?: "agent" | "system" }>(), { scope: "agent" });
@@ -25,6 +25,7 @@ const ToolsSettingsForm = defineAsyncComponent(() => import("../components/setti
 const BashSettingsForm = defineAsyncComponent(() => import("../components/settings/BashSettingsForm.vue"));
 const OneBotSettingsForm = defineAsyncComponent(() => import("../components/settings/OneBotSettingsForm.vue"));
 const AgentConnectionSettings = defineAsyncComponent(() => import("../components/settings/AgentConnectionSettings.vue"));
+const AgentManagementSettings = defineAsyncComponent(() => import("../components/settings/AgentManagementSettings.vue"));
 const MonitoringSettingsForm = defineAsyncComponent(() => import("../components/settings/MonitoringSettingsForm.vue"));
 const AdminPasswordForm = defineAsyncComponent(() => import("../components/settings/AdminPasswordForm.vue"));
 
@@ -155,7 +156,7 @@ function restoreActiveAgent(agentId: string) {
 }
 
 function selectSection(section: SettingsSectionKey) {
-  void router.push(`/${props.scope === "agent" ? "agent-settings" : "settings"}/${section}`);
+  void router.push(`/${props.scope === "agent" ? "agents" : "settings"}/${section}`);
 }
 
 function isConfigSection(section: SettingsSectionKey): section is ConfigSectionKey {
@@ -236,7 +237,8 @@ async function logout() {
         >
           <AgentConnectionSettings v-if="current === 'connection'" :key="workspace.agentId()" :agent-id="workspace.agentId()" />
           <div v-else-if="current === 'persona'" class="grid gap-12">
-            <PersonaSettingsForm v-model="workspace.drafts.bot" :agent-id="activeAgentId()" />
+            <AgentManagementSettings :key="workspace.agentId()" :agent-id="workspace.agentId()" :before-change="workspace.flush" />
+            <PersonaSettingsForm v-model="workspace.drafts.bot" :agent-id="workspace.agentId()" />
           </div>
           <ProviderSettings
             v-else-if="current === 'providers'"

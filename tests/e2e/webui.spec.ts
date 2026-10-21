@@ -2,16 +2,61 @@ import { expect, test } from "@playwright/test";
 import sharp from "sharp";
 import { installMockApi, modelCatalog } from "./mock-api";
 
+test("Agent 设置统一路由并移除下拉菜单管理入口", async ({ page }) => {
+  await installMockApi(page);
+  await page.goto("/agent-settings/tools?from=bookmark#main-content");
+  await expect(page).toHaveURL(/\/agents\/tools\?from=bookmark#main-content$/);
+  await expect(page.getByRole("heading", { name: "Agent 工具", exact: true })).toBeVisible();
+  await page.goto("/agents");
+  await page.getByRole("button", { name: "当前 Agent：普拉娜", exact: true }).click();
+  await expect(page.getByRole("listbox", { name: "Agent", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "管理 Agent", exact: true })).toHaveCount(0);
+  await page.getByRole("option", { name: /阿罗娜/ }).click();
+  await expect(page.getByRole("heading", { name: "阿罗娜", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "当前 Agent：阿罗娜", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "当前 Agent：阿罗娜", exact: true }).click();
+  await page.getByRole("heading", { name: "Agent 设置", exact: true }).click();
+  await expect(page.getByRole("listbox", { name: "Agent", exact: true })).toHaveCount(0);
+});
+
+test("Agent 切换失败时身份与设置保持一致", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/agents");
+  state.nextPatchError = "管理员称呼保存失败。";
+  await page.getByLabel("管理员称呼").fill("保留当前输入");
+  await page.locator('[data-confirm-label="确认管理员称呼"]').click();
+  await expect(page.getByText("管理员称呼保存失败。", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "选择 阿罗娜", exact: true }).click();
+  await expect(page.getByRole("button", { name: "放弃更改并切换", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "选择 普拉娜", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "当前 Agent：普拉娜", exact: true })).toBeVisible();
+  await expect(page.getByLabel("管理员称呼")).toHaveValue("保留当前输入");
+  await page.getByRole("button", { name: "放弃更改并切换", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "阿罗娜", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "选择 普拉娜", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "普拉娜", exact: true })).toBeVisible();
+  await page.route("**/api/config?**", async (route) => {
+    if (route.request().method() === "GET" && new URL(route.request().url()).searchParams.get("agentId") === "arona") {
+      return route.fulfill({ status: 500, json: { error: { message: "读取失败" } } });
+    }
+    return route.fallback();
+  });
+  await page.getByRole("button", { name: "选择 阿罗娜", exact: true }).click();
+  await expect(page.getByText("Agent 配置读取失败，已返回原 Agent。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "选择 普拉娜", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "当前 Agent：普拉娜", exact: true })).toBeVisible();
+});
+
 test("Agent 可新增、隔离切换并运行独立 NapCat QQ Docker", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/agents");
 
-  await expect(page.getByRole("heading", { name: "Agent", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Agent 设置", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "选择 阿罗娜" }).click();
   await expect(page.getByRole("heading", { name: "阿罗娜", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "QQ 接入", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /QQ 接入/ })).toBeVisible();
 
-  await page.getByRole("button", { name: "新增", exact: true }).click();
+  await page.getByRole("button", { name: "新增 Agent", exact: true }).click();
   const createAgent = page.getByRole("dialog", { name: "新增 Agent" });
   await createAgent.getByLabel("名称").fill("圣娅");
   await createAgent.getByLabel("Agent ID").fill("seia");
@@ -19,7 +64,7 @@ test("Agent 可新增、隔离切换并运行独立 NapCat QQ Docker", async ({ 
   await expect(page.getByRole("heading", { name: "圣娅", exact: true })).toBeVisible();
   expect(state.agents.some((agent) => agent.id === "seia")).toBe(true);
 
-  await page.getByRole("button", { name: "QQ 接入", exact: true }).click();
+  await page.getByRole("button", { name: /QQ 接入/ }).click();
   await page.getByRole("button", { name: "接入 QQ", exact: true }).click();
   const createAccount = page.getByRole("dialog", { name: "接入 QQ" });
   await createAccount.getByLabel("名称").fill("圣娅主账号");
@@ -62,7 +107,7 @@ test("新建和移除 QQ Docker 会显示进行中状态", async ({ page }) => {
   const state = await installMockApi(page);
   state.agents.find((agent) => agent.id === "arona")!.accounts = [];
   await page.addInitScript(() => localStorage.setItem("sunabot.current-agent", "arona"));
-  await page.goto("/agent-settings/connection");
+  await page.goto("/agents/connection");
 
   let releaseCreate: () => void = () => undefined;
   const createPending = new Promise<void>((resolve) => { releaseCreate = resolve; });
@@ -116,7 +161,7 @@ test("删除 Bot 需要输入确认删除", async ({ page }) => {
 
 test("Agent 身份页可设置 WebUI 头像并立即刷新", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/agent-settings/persona");
+  await page.goto("/agents/persona");
 
   await expect(page.getByText("WebUI 头像", { exact: true })).toBeVisible();
   await expect(page.getByLabel("管理员 QQ")).toBeVisible();
@@ -176,23 +221,23 @@ test("Agent 设置只保留有效且唯一的配置入口", async ({ page }) => 
     expect((await menu.boundingBox())?.width).toBeGreaterThanOrEqual(256);
   }
 
-  await page.goto("/agent-settings/persona");
+  await page.goto("/agents/persona");
   await expect(page.getByText("Agent ID", { exact: true })).toBeVisible();
   await expect(page.getByText("工作目录", { exact: true })).toBeVisible();
   await expect(page.getByText("记忆上限", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
 
-  await page.goto("/agent-settings/memory");
+  await page.goto("/agents/memory");
   await expect(page.getByRole("heading", { name: "记忆处理", exact: true })).toBeVisible();
 
-  await page.goto("/agent-settings/tools");
+  await page.goto("/agents/tools");
   await expect(page.getByLabel("启用 Native Bash")).toBeVisible();
   await expect(page.getByLabel("启用 Docker Bash")).toHaveCount(0);
   await expect(page.getByLabel("启用 Codex")).toBeVisible();
   await page.getByRole("tab", { name: "运行参数", exact: true }).click();
   await expect(page.getByLabel("启动 Codex Worker")).toHaveCount(0);
 
-  await page.goto("/agent-settings/bash");
+  await page.goto("/agents/bash");
   await expect(page.getByLabel("启用 Native Bash")).toHaveCount(0);
   await expect(page.getByLabel("启用 Docker Bash")).toHaveCount(0);
   await expect(page.getByLabel("严格审批")).toBeVisible();
@@ -200,14 +245,14 @@ test("Agent 设置只保留有效且唯一的配置入口", async ({ page }) => 
   await expect(page.getByLabel("管理员身份门禁")).toHaveCount(0);
   await expect(page.getByLabel("管理员私聊后端")).toHaveCount(0);
 
-  await page.goto("/agent-settings/orchestrator");
+  await page.goto("/agents/orchestrator");
   const groupReply = page.getByLabel("启用群聊回复", { exact: true });
   await groupReply.uncheck();
   await page.getByRole("link", { name: "状态", exact: true }).click();
   await expect(page).toHaveURL(/\/overview$/);
   await expect.poll(() => state.config.onebot.autoReplyUserGroup).toBe(false);
   await expect(page.getByRole("dialog", { name: "放弃未保存的设置？" })).toHaveCount(0);
-  await page.goto("/agent-settings/orchestrator");
+  await page.goto("/agents/orchestrator");
   await expect(groupReply).not.toBeChecked();
 });
 
@@ -530,7 +575,7 @@ test("模型下拉目录、推理强度联动与字段确认", async ({ page }) 
   });
   await expect(page.locator('[data-slot="settings-auto-save-status"]')).toHaveCount(0);
 
-  await page.goto("/agent-settings/tools");
+  await page.goto("/agents/tools");
   await page.getByRole("tab", { name: "运行参数", exact: true }).click();
   const codexModelSelect = page.getByRole("combobox", { name: "模型", exact: true });
   await expect(codexModelSelect.locator("option")).toHaveText(modelCatalog.map((model) => model.label));
@@ -568,7 +613,7 @@ test("模型下拉目录、推理强度联动与字段确认", async ({ page }) 
 
 test("防抖时间、回复开关、名称和命令前缀只在回复行为分区编辑", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/agent-settings/bot");
+  await page.goto("/agents/bot");
 
   await expect(page.getByRole("heading", { name: "Agent 行为" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "模型", exact: true })).toHaveValue("gpt-5.6-sol");
@@ -617,7 +662,7 @@ test("防抖时间、回复开关、名称和命令前缀只在回复行为分�
 
 test("Agent 可独立配置语气处理并打开提示词", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/agent-settings/tone");
+  await page.goto("/agents/tone");
 
   await expect(page.getByRole("heading", { name: "语气处理" })).toBeVisible();
   await page.getByLabel("启用语气处理").check();
@@ -753,7 +798,7 @@ test("旧版 Agent 配置缺少回复模型和读图设置时仍可打开设置�
   delete (state.config.bot as Partial<typeof state.config.bot>).replyReasoningEffort;
   delete (state.config.bot as Partial<typeof state.config.bot>).imageReader;
 
-  await page.goto("/agent-settings/bot");
+  await page.goto("/agents/bot");
 
   await expect(page.getByRole("heading", { name: "Agent 行为" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "模型", exact: true })).toHaveValue("gpt-5.5");
@@ -915,7 +960,7 @@ test("语音设置按 Agent 保存在线服务、语言和音色资料", async (
 
 test("工具目录支持启停、全局说明和继承说明恢复", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/agent-settings/tools");
+  await page.goto("/agents/tools");
 
   await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("搜索工具")).toBeVisible();
@@ -1031,7 +1076,7 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
 
 test("no_reply 与回复行为共用戳一戳设置", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/agent-settings/tools");
+  await page.goto("/agents/tools");
 
   await page.getByRole("button", { name: "查看 静默结束 详情" }).click();
   let dialog = page.getByRole("dialog", { name: "静默结束" });
@@ -1042,12 +1087,12 @@ test("no_reply 与回复行为共用戳一戳设置", async ({ page }) => {
   expect(state.patchRequests[0]?.section).toBe("bot");
   expect(state.config.bot.pokeOnNoReply).toBe(true);
 
-  await page.goto("/agent-settings/bot");
+  await page.goto("/agents/bot");
   await expect(page.getByLabel("no_reply 时戳一戳")).toBeChecked();
   await page.getByLabel("no_reply 时戳一戳").uncheck();
   await expect.poll(() => state.config.bot.pokeOnNoReply).toBe(false);
 
-  await page.goto("/agent-settings/tools");
+  await page.goto("/agents/tools");
   await page.getByRole("button", { name: "查看 静默结束 详情" }).click();
   dialog = page.getByRole("dialog", { name: "静默结束" });
   await expect(dialog.getByLabel("no_reply 时戳一戳")).not.toBeChecked();
@@ -1333,7 +1378,7 @@ test("生产构建支持深链接刷新与浏览器返回", async ({ page }) => 
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
-  await page.goto("/agent-settings/memory");
+  await page.goto("/agents/memory");
   await expect(page.getByRole("heading", { name: "记忆处理" })).toBeVisible();
   await page.goBack();
   await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
@@ -1379,7 +1424,7 @@ test("每个会话都有独立设置侧栏且 Agent 总开关优先", async ({ p
     disabledTools: []
   });
   await settingsPanel.getByRole("link", { name: "Agent 总开关", exact: true }).click();
-  await expect(page).toHaveURL(/\/agent-settings\/tools/);
+  await expect(page).toHaveURL(/\/agents\/tools/);
 
   await page.goto("/web-chat");
   await page.getByRole("link", { name: "会话设置", exact: true }).click();
@@ -1679,7 +1724,7 @@ test("弹层约束焦点、支持 Escape 并恢复触发位置", async ({ page }
 
 test("设置按字段确认、离开时刷新队列并在失败时保留输入", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/agent-settings/persona");
+  await page.goto("/agents/persona");
   await page.getByLabel("管理员称呼").fill("新的管理员称呼");
   await page.locator('[data-confirm-label="确认管理员称呼"]').click();
 
@@ -1688,13 +1733,13 @@ test("设置按字段确认、离开时刷新队列并在失败时保留输入",
   await expect.poll(() => state.config.bot.adminName).toBe("新的管理员称呼");
   await expect(page.getByRole("dialog", { name: "放弃未保存的设置？" })).toHaveCount(0);
 
-  await page.goto("/agent-settings/persona");
+  await page.goto("/agents/persona");
   await expect(page.getByLabel("管理员称呼")).toHaveValue("新的管理员称呼");
   state.nextPatchError = "管理员称呼保存失败。";
   await page.getByLabel("管理员称呼").fill("保存失败时保留");
   await page.locator('[data-confirm-label="确认管理员称呼"]').click();
   await page.getByRole("link", { name: "状态", exact: true }).click();
-  await expect(page).toHaveURL(/\/agent-settings\/persona$/);
+  await expect(page).toHaveURL(/\/agents\/persona$/);
   await expect(page.getByText("管理员称呼保存失败。", { exact: true })).toBeVisible();
   await expect(page.getByLabel("管理员称呼")).toHaveValue("保存失败时保留");
   await expect(page.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);

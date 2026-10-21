@@ -7,7 +7,7 @@ test("Agent 行为中的互动约定模型可保存并恢复跟随", async ({ pa
   const state = await installMockApi(page);
   for (const viewport of compactVisualViewports) {
     await page.setViewportSize(viewport);
-    await page.goto("/agent-settings/bot");
+    await page.goto("/agents/bot");
     await expect(page.getByRole("heading", { name: "Agent 行为", exact: true })).toBeVisible();
     const model = page.getByRole("combobox", { name: "互动约定模型", exact: true });
     await expect(model).toHaveValue("");

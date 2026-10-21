@@ -17,7 +17,7 @@ test("Agent 切换与本地、远程 QQ 接入", async ({ page }, testInfo) => {
     await expect(page.getByText("主账号", { exact: true })).toBeVisible();
     await captureVisual(page, viewport.name, theme, "agent-overview-switch");
 
-    await page.goto("/agent-settings/connection");
+    await page.goto("/agents/connection");
     await expect(page.getByText("本地自启动", { exact: true })).toBeVisible();
     await expect(page.getByText("OneBot 已连接", { exact: true })).toBeVisible();
     await expect(page.getByText("QQ 在线", { exact: true })).toBeVisible();

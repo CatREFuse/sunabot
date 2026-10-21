@@ -11,7 +11,6 @@ const OverviewView = () => import("./views/OverviewView.vue");
 const PromptsView = () => import("./views/PromptsView.vue");
 const SettingsView = () => import("./views/SettingsView.vue");
 const WebChatView = () => import("./views/WebChatView.vue");
-const AgentsView = () => import("./views/AgentsView.vue");
 const AgentExtensionsView = () => import("./views/AgentExtensionsView.vue");
 const ConversationSettingsView = () => import("./views/ConversationSettingsView.vue");
 const ScheduledTasksView = () => import("./views/ScheduledTasksView.vue");
@@ -42,9 +41,9 @@ export const router = createRouter({
     { path: "/images", name: "images", component: ImagesView },
     { path: "/emojis", name: "emojis", component: EmojisView },
     { path: "/logs", name: "logs", component: LogsView },
-    { path: "/agents", name: "agents", component: AgentsView },
+    { path: "/agents/:section?", name: "agents", component: SettingsView, props: { scope: "agent" } },
     { path: "/extensions", name: "extensions", component: AgentExtensionsView },
-    { path: "/agent-settings/:section?", name: "agent-settings", component: SettingsView, props: { scope: "agent" } },
+    { path: "/agent-settings/:section?", redirect: (to) => ({ name: "agents", params: { section: to.params.section }, query: to.query, hash: to.hash }) },
     { path: "/settings/:section?", name: "settings", component: SettingsView, props: { scope: "system" } },
     { path: "/config-doctor", name: "config-doctor", component: ConfigDoctorView },
     { path: "/releases", name: "releases", component: ReleasesView },

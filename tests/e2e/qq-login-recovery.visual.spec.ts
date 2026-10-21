@@ -26,7 +26,7 @@ test("QQ 二维码倒计时和过期遮罩", async ({ page }, testInfo) => {
   });
   for (const viewport of [visualViewports[0], visualViewports[3]]) {
     await page.setViewportSize(viewport);
-    await page.goto("/agents");
+    await page.goto("/agents/connection");
     await page.locator("section").filter({ hasText: "主账号" }).last().getByRole("button", { name: "账号", exact: true }).click();
     await expect(page.getByAltText("QQ 登录二维码")).toBeVisible();
     await expect(page.getByText(/秒后过期/)).toBeVisible();
@@ -68,7 +68,7 @@ test("QQ 被踢下线后自动恢复四视口矩阵", async ({ page }, testInfo)
     let releaseRecovery!: () => void;
     recoveryGate = new Promise<void>((resolve) => { releaseRecovery = resolve; });
 
-    await page.goto("/agents");
+    await page.goto("/agents/connection");
     const primaryAccountRow = page.locator("section").filter({ hasText: "主账号" }).last();
     await primaryAccountRow.getByRole("button", { name: "账号", exact: true }).click();
     await expect(page.getByText("正在恢复登录", { exact: true })).toBeVisible();

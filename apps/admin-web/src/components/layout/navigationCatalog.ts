@@ -19,7 +19,7 @@ export const navigationSections: readonly NavigationSection[] = [
   {
     label: "Agent",
     items: [
-      { to: "/agent-settings", label: "Agent 设置", mobileLabel: "Agent", description: "身份、回复与工具", icon: "bx-slider-alt", mobilePlacement: "primary", mobileOrder: 4 },
+      { to: "/agents", label: "Agent 设置", mobileLabel: "Agent", description: "身份、回复与工具", icon: "bx-slider-alt", mobilePlacement: "primary", mobileOrder: 4 },
       { to: "/overview", label: "状态", mobileLabel: "状态", description: "运行与用量", icon: "bx-pulse", mobilePlacement: "primary", mobileOrder: 0 },
       { to: "/web-chat", label: "Web Chat", mobileLabel: "Web Chat", description: "与当前 Agent 对话", icon: "bx-chat", mobilePlacement: "primary", mobileOrder: 1 },
       { to: "/conversations", label: "会话", mobileLabel: "会话", description: "查看消息记录", icon: "bx-message-square-dots", mobilePlacement: "primary", mobileOrder: 2 },

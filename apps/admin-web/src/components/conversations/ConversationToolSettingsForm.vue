@@ -33,7 +33,7 @@ function availability(tool: SunaTool) {
         <h2 id="conversation-tools-title" class="section-title">工具权限</h2>
         <p class="mt-2 font-mono text-[10px] text-mute">{{ loading ? "正在读取" : `当前会话 · ${enabledCount} / ${tools.length} 启用` }}</p>
       </div>
-      <RouterLink class="btn btn-ghost" to="/agent-settings/tools">Agent 总开关</RouterLink>
+      <RouterLink class="btn btn-ghost" to="/agents/tools">Agent 总开关</RouterLink>
     </header>
     <div v-if="loading" class="empty-state min-h-48 py-16">
       <div><strong>加载中</strong></div>

@@ -2,10 +2,10 @@ import { computed, readonly, shallowRef } from "vue";
 import type { AgentAccount, AgentAvatarInput, AgentSummary } from "../types";
 import type { AgentConfigImportPayload } from "./useAgentConfigImport";
 import { apiRequest } from "./useAdminApi";
-import { activeAgentId, setActiveAgentId } from "./agentScope";
+import { activeAgentIdState, setActiveAgentId } from "./agentScope";
 
 const agents = shallowRef<AgentSummary[]>([]);
-const currentAgentId = shallowRef(activeAgentId());
+const currentAgentId = activeAgentIdState;
 const loading = shallowRef(false);
 const error = shallowRef("");
 let loadPromise: Promise<AgentSummary[]> | undefined;
@@ -42,7 +42,6 @@ export function useAgents() {
   function select(agentId: string) {
     const agent = agents.value.find((item) => item.id === agentId);
     if (!agent) return;
-    currentAgentId.value = agent.id;
     setActiveAgentId(agent.id);
   }
 

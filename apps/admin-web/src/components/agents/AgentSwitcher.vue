@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useId, useTemplateRef } from "vue";
-import { useRouter } from "vue-router";
 import { useRoute } from "vue-router";
 import { useAgents } from "../../composables/useAgents";
 import { agentAvatarUrl } from "../../utils/agentIdentity";
@@ -11,7 +10,6 @@ withDefaults(defineProps<{ compact?: boolean; expanded?: boolean }>(), {
   expanded: false
 });
 const agentsState = useAgents();
-const router = useRouter();
 const route = useRoute();
 const open = shallowRef(false);
 const activeIndex = shallowRef(-1);
@@ -101,16 +99,12 @@ function handleMenuKeydown(event: KeyboardEvent) {
 
 function select(agentId: string) {
   const changed = agentId !== agentsState.currentAgent.value?.id;
-  const reload = changed && route.path !== "/agents";
+  const reload = changed && route.name !== "agents";
   agentsState.select(agentId);
   closeMenu(!reload);
   if (reload) window.location.reload();
 }
 
-function manage() {
-  closeMenu();
-  void router.push("/agents");
-}
 </script>
 
 <template>
@@ -157,10 +151,6 @@ function manage() {
           <i v-if="agent.id === agentsState.currentAgent.value?.id" class="bx bx-check text-xl" aria-hidden="true"></i>
         </button>
       </div>
-      <button class="mt-2 flex min-h-11 w-full items-center gap-3 border-t border-line bg-transparent px-4 pt-2 text-sm text-ink hover:text-display" type="button" @click="manage">
-        <i class="bx bx-group text-xl" aria-hidden="true"></i>
-        <span>管理 Agent</span>
-      </button>
     </div>
   </div>
 </template>

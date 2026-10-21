@@ -84,7 +84,7 @@ test.afterAll(async () => {
 test("Fastify 生产服务提供静态资源、深链接回退与管理鉴权", async ({ request }) => {
   const deepLinks = [
     "/settings/providers",
-    "/agent-settings/persona",
+    "/agents/persona",
     "/agent-prompts/persona.soul",
     "/agent-prompts/image.selfie-rewrite",
     "/system-prompts/conversation.private-reply",

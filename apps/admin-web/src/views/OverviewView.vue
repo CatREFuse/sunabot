@@ -252,7 +252,7 @@ function openChats() {
 function openAccount() {
   const account = selectedAccount.value;
   if (!account) {
-    void router.push("/agent-settings/connection");
+    void router.push("/agents/connection");
     return;
   }
   loginAccount.value = account;

@@ -423,7 +423,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     state.qqOnline = true;
 
     await page.goto("/agents");
-    await page.getByRole("button", { name: "新增", exact: true }).click();
+    await page.getByRole("button", { name: "新增 Agent", exact: true }).click();
     const createAgentDialog = page.getByRole("dialog", { name: "新增 Agent" });
     await expect(createAgentDialog.getByText("导入现有配置", { exact: true })).toBeVisible();
     await expect(createAgentDialog.getByText("选择文件夹", { exact: true })).toBeVisible();
@@ -623,14 +623,14 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByLabel("广播风暴嗅探")).toBeChecked();
     await capture(page, viewport.name, theme, "settings-broadcast-storm");
 
-    await page.goto("/agent-settings/orchestrator");
+    await page.goto("/agents/orchestrator");
     await expect(page.getByRole("heading", { name: "群聊编排器" })).toBeVisible();
     await page.getByLabel("启用编排器", { exact: true }).uncheck();
     await expect(page.getByLabel("启动时间 / 秒")).toHaveValue("60");
     await page.getByLabel("启动时间 / 秒").scrollIntoViewIfNeeded();
     await capture(page, viewport.name, theme, "settings-orchestrator-disabled");
 
-    await page.goto("/agent-settings/tone");
+    await page.goto("/agents/tone");
     await expect(page.getByRole("heading", { name: "语气处理" })).toBeVisible();
     const toneEnabled = page.getByLabel("启用语气处理");
     if (!await toneEnabled.isChecked()) {
@@ -644,18 +644,18 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByLabel("随机性（Temperature）")).toBeDisabled();
     await capture(page, viewport.name, theme, "settings-tone-follow-main-model");
 
-    await page.goto("/agent-settings/persona");
+    await page.goto("/agents/persona");
     await expect(page.getByRole("heading", { name: "Agent 身份" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-agent-identity");
 
-    await page.goto("/agent-settings/bot");
+    await page.goto("/agents/bot");
     await expect(page.getByRole("heading", { name: "回复模型" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "读图" })).toBeVisible();
     await expect(page.getByLabel("生成图片描述")).toBeChecked();
     await expect(page.getByLabel("读图模型")).toHaveValue("gpt-5.4-mini");
     await capture(page, viewport.name, theme, "settings-reply-model-image-reader");
 
-    await page.goto("/agent-settings/memory");
+    await page.goto("/agents/memory");
     await expect(page.getByRole("heading", { name: "记忆处理" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-memory");
     const dreamPrompt = page.getByRole("heading", { name: "提示词文件" });
@@ -665,7 +665,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByLabel("久远记忆数")).toHaveCount(0);
     await capture(page, viewport.name, theme, "settings-memory-dream");
 
-    await page.goto("/agent-settings/tools");
+    await page.goto("/agents/tools");
     await page.getByRole("tab", { name: "运行参数", exact: true }).click();
     const codexModel = page.getByRole("combobox", { name: "模型", exact: true });
     await expect(codexModel).toHaveValue("gpt-5.4-mini");
@@ -678,7 +678,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(codexModel).toBeDisabled();
     await capture(page, viewport.name, theme, "settings-tools-codex-disabled");
 
-    await page.goto("/agent-settings/bash");
+    await page.goto("/agents/bash");
     await expect(page.getByRole("heading", { name: "命令执行" })).toBeVisible();
     state.nextPatchError = "审批模型不可用。";
     await page.getByLabel("对抗审批 Agent").fill("gpt-unavailable");
@@ -697,10 +697,10 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await capture(page, viewport.name, theme, "settings-security");
 
     state.config.bot.adminName = "管理员";
-    await page.goto("/agent-settings/bot");
+    await page.goto("/agents/bot");
     await expect(page.getByLabel("过滤名单")).toBeVisible();
     await capture(page, viewport.name, theme, "settings-reply-behavior");
-    await page.goto("/agent-settings/persona");
+    await page.goto("/agents/persona");
     await page.getByLabel("管理员称呼").fill("新的管理员称呼");
     await expect(page.locator('[data-confirm-label="确认管理员称呼"]')).toBeEnabled();
     await capture(page, viewport.name, theme, "settings-field-confirm-pending");
@@ -834,7 +834,7 @@ test("头像裁图四视口矩阵", async ({ page }, testInfo) => {
 
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.goto("/agent-settings/persona");
+    await page.goto("/agents/persona");
     await expect(page.getByRole("heading", { name: "Agent 身份" })).toBeVisible();
     await page.getByLabel("选择 WebUI 头像").setInputFiles({
       name: "plana.png",
@@ -855,7 +855,7 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
 
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.goto("/agent-settings/tools");
+    await page.goto("/agents/tools");
     await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByLabel("搜索工具")).toBeVisible();
     await expect(page.getByLabel(/^启用 /)).toHaveCount(24);
@@ -897,7 +897,7 @@ test("Bash 权限与会话状态四视口矩阵", async ({ page }, testInfo) => 
 
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.goto("/agent-settings/bash");
+    await page.goto("/agents/bash");
     await expect(page.getByRole("heading", { name: "命令执行" })).toBeVisible();
     await expect(page.getByText("对抗审批 Agent", { exact: true })).toBeVisible();
     await expect(page.getByLabel("严格审批")).toBeVisible();
@@ -906,7 +906,7 @@ test("Bash 权限与会话状态四视口矩阵", async ({ page }, testInfo) => 
     await expect(page.getByText("Skill 与 MCP · 只读", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-bash-permissions");
 
-    await page.goto("/agent-settings/tools");
+    await page.goto("/agents/tools");
     await page.getByLabel("搜索工具").fill("native_bash");
     const bashRow = page.locator("article").filter({ has: page.getByText("native_bash", { exact: true }) });
     await expect(bashRow.getByText("按平台授权会话", { exact: true })).toBeVisible();
