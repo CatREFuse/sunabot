@@ -48,3 +48,11 @@
 独立 ECS 夹具在 11:39:51—11:40:49 使用已有摘要锁定的 amd64 NapCat 镜像，仅启动 `sh/sleep` 和合成文件，在独立 internal 网络核对本地/远端 Compose 合并结果、初次创建、普通重启和删除后重建。两账号 hostname、各自 MAC/IP 和只读 machine-id 均一致，合成 QQ machine-info 保持原字节；全部夹具资源已清理，生产容器 ID、StartedAt、RestartCount 与 Running 前后完全一致。报告位于私有 `workspace/runtime/tmp/ecs-assets/qq-device-live-fixture-20261022-result.json` 和同名 `report.md`。
 
 最终网络检查回归通过 83 项定向测试、1 项既有 macOS 跳过，实际调用启动器验证本地/远程四个启动入口在网络不符时没有停服或 Compose 操作，禁用和删除两种停止计划仍执行对应容器的 stop/rm。缓存维护 7 项及 harness 43 项通过，独立质量评审通过。本轮没有界面修改、外部模型调用或 QQ 外发；生产重建后的真实收信、腾讯登录态接受程度、闭源 QQ 全部硬件指纹与真实 arm64 仍需分别核验。
+
+## 2026-10-22 固定身份生产部署
+
+用户批准后，14:32—14:35 部署 `c8995f9`，逐个停止、备份并重建两个 ECS NapCat。普拉娜 1,771 个文件、阿罗娜 1,838 个文件完成归档与全部文件内容、大小、权限和属主核对；QQ 目录未迁移或清空。恢复点位于 ECS `workspace/backups/napcat-device-identity-20261022-063219/<accountId>/`，本地同名恢复点保存部署前代码、状态和选定配置。初次操作脚本使用远端 Python 不支持的摘要函数，在发布代码前停止；修正脚本兼容性后以新恢复点完整执行通过。
+
+14:37 独立只读核验共 42 项通过：两个新容器均 healthy、hostname=`Tanshow`；原有网桥、镜像和持久化挂载保留，MAC/IP 不变且 IPv4 已显式配置。容器内 `/etc/machine-id` 的原始字节与规范化摘要、QQ machine-info 及公开算法计算的 GUID 摘要均不变，Docker 与容器 mountinfo 均证明 machine-id 只读；ECS CPU/DMI 未改变。Core PID 940、账号调和器 PID 1109 的启动时间和进程签名均不变，调和器在备份期间临时暂停后恢复运行。
+
+两个 QQ 在部署前 14:00:44、14:00:46 已收到登录失效通知，随后快速登录失败；重建后的自动登录仍失败，管理接口正确返回未认证、未连接和待扫码状态。已分别刷新二维码，真实收信验收等待用户手机确认，不将容器健康视为 QQ 已在线，也不把部署前失效归因于本次固定身份。独立证据位于私有 `workspace/runtime/tmp/ecs-assets/qq-identity-postdeploy-comparison-20261022.json` 与 `qq-identity-postdeploy-quality-20261022.md`。
