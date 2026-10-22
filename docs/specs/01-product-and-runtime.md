@@ -55,6 +55,8 @@ Core、Bash、MCP、Skill Script 与 WebFetch 只以 Native 形态运行。NapCa
 
 同一 Core 的宿主探针复用当前 workspace 与已连接账号集合对应的在途请求，成功事实最多缓存 5 秒；账号集合改变立即失效，失败不缓存。该缓存只减少 Docker/SSH 宿主探测，不替代 QQ 在线核验。账号级重启通过 Compose 调和后重启既有容器，镜像与启动配置未变时保留容器 ID；需要更新时由 Compose 重建。每账号固定 hostname，入口从挂载的 `account.env` 读取当前快速登录账号，手动登录标记覆盖该值；容器创建时的旧 `ACCOUNT` 仅在持久账号文件不存在时兼容使用。
 
+需要固定设备与网络身份时，管理员在 `workspace/secrets/napcat-device-identities.json` 保存版本 1 配置，显式指定运行网段、网关及每账号 hostname、MAC、IPv4、machine-id。本地与远端启动器使用同一配置生成 Compose override，以只读文件挂载固定 `/etc/machine-id`；machine-id 值改变时挂载源路径随之改变，使 Compose 能识别需要重建。网络创建使用明确子网，现存网络参数不匹配时报告错误，不静默重建。没有该配置的部署保持原启动行为，不自动采样或生成设备标识。QQ 自身 `machine-info` 和登录资料继续随既有 QQ 持久目录保留；CPU、DMI 与系统类型来自实际 NapCat 宿主，不伪造为 Windows。操作和身份迁移边界见 `../deployment/remote-napcat-ssh.md`。
+
 首次 `up` 使用带 HMAC 的持久 journal，并在当前终端进入 Landing：设置管理员名称、管理员密码和密码确认。密码输入不回显，长度至少 12 个字符；凭据通过同目录临时文件写入，完成文件 `fsync`、原子替换和父目录 `fsync` 后才返回。Core 构建阶段只复验持久边界与凭据可读性，不能提交完成状态；launcher 必须等待 AdminAuth 成功读取凭据、管理 API 与 OneBot 已监听、account runtime daemon 和全部应运行 NapCat 通过完整探针并连续稳定后，再次读取并校验凭据，把完成提交作为启动流程最后一个可失败步骤。此前任一步失败都保留 journal，可继续启动或通过 `rollback-first-run` 受控回滚，未知文件保留。workspace 完整父目录链在 marker、配置、凭据、SQLite、注册表或运行目录写入前逐级拒绝用户符号链接。
 
 发行包的 `help|status|doctor|logs|down|up|start|restart|restart-core` 不安装应用依赖。`bootstrap` 只验证随包运行时、生产依赖、构建产物和组件完整性。发行包内供进程管理器使用的 Core 入口同样只接受包内 Node 与绝对 Bubblewrap，拒绝宿主可执行文件覆盖与 `/usr/bin/bwrap` 回退，并在执行 Core 前验证完整 release manifest。源码形态可以按锁文件显式准备依赖。

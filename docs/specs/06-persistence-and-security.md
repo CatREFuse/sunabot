@@ -192,6 +192,7 @@ Agent 根目录及 `extensions`、`skills`、`mcp` 控制目录必须是当前�
 - Provider key、Tavily key、OneBot token 和自动化管理令牌只能通过 `workspace/secrets/runtime.env` 或进程环境变量提供。
 - 新 workspace 的 `bot.adminQq` 默认为空，不内置任何真实 QQ 身份；管理员登录 QQ 后必须在对应 Agent 的“回复行为”中显式保存管理员 QQ，管理员专属工具在此之前保持关闭。
 - Git 不跟踪整个 `workspace/`，其中包括环境变量、配置、Agent 人格、SQLite、WAL、日志、缓存、QQ 登录态、生成图片和备份。
+- NapCat 固定设备配置的唯一入口为 `workspace/secrets/napcat-device-identities.json`，由部署管理员维护，不向 Bot 暴露。启动器只在账号 `runtime/napcat/accounts/<accountId>/device-identity/` 内原子写入派生 Compose 文件和 machine-id 快照；远端使用同一私有相对目录。配置损坏、地址冲突、账号地址超出指定网段或远端网关不一致时明确报错。缓存维护不得删除该目录和 QQ `global/nt_data/msf/machine-info`，身份变更前须保留恢复点，不能通过删除登录资料重新生成设备。
 - 浏览器管理台不得把账号、密码、Bearer Token 或会话密钥写入 localStorage/sessionStorage。
 - 请求日志递归脱敏授权、token、password、secret 和常见 key 字段；模型 request/response payload 的单字符串上限为 8 MiB，其他日志长字符串上限为 16,000 字符。文件工具与 MCP 的参数和结果继续使用有界安全投影，原始 Provider payload 不能绕过该投影。
 - WebFetch 静态抓取接受带主机名的 HTTP(S) URL。Linux/WSL 动态 Renderer 使用 Lightpanda 0.3.3，不依赖 Chrome、Chromium 或 Playwright；受控代理支持带鉴权的 HTTP、HTTPS 与 CONNECT，并执行单响应、累计响应、请求数、原始字节、并发、队列、取消和总时限边界。renderer `/render` 只接受启动器生成的 bearer token，不接收 query，不挂载 workspace、secrets、Provider key、Codex 授权、OneBot/NapCat 凭据或浏览器用户目录，不保存 Cookie，并阻断下载、WebSocket、非 GET 及不受支持资源。Linux/WSL 使用随包 Bubblewrap、独立临时 HOME/cache/run，并遮蔽仓库、workspace 与凭据。Lightpanda、Bubblewrap、平台隔离或健康值无法验证时动态能力失败关闭，静态抓取保持可用；macOS 动态能力固定 unavailable。清理后的正文只进入 5 分钟进程内 LRU，不新增持久化格式或原始 HTML 日志。

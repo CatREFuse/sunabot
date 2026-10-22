@@ -75,12 +75,14 @@ class CacheMaintenanceTest(unittest.TestCase):
         protected = [
             self.sparse(self.media.parent.parent / "nt_db/nt_msg.db", 100),
             self.sparse(self.account / "config-full/onebot11.json", 100),
+            self.sparse(self.account / "device-identity/machine-id-fixed", 32),
+            self.sparse(self.account / "device-identity/compose.json", 100),
             self.sparse(self.root / "second/qq/NapCat/temp/media", 100),
         ]
         for global_root in (self.account / "qq/nt_qq/global", self.account / "qq/global"):
             for directory in ("nt_data/Log", "nt_data/Emoji", "nt_data/Skin", "nt_temp"):
                 disposable.append(self.sparse(global_root / directory / "old", 100))
-            for relative in ("nt_data/Login/session", "nt_data/Config/device", "nt_db/nt_msg.db", "machine-id"):
+            for relative in ("nt_data/Login/session", "nt_data/Config/device", "nt_data/msf/machine-info", "nt_db/nt_msg.db", "machine-id"):
                 file = self.sparse(global_root / relative, 100)
                 file.write_bytes(("synthetic:" + relative).encode())
                 protected.append(file)

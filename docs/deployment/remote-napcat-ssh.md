@@ -77,6 +77,33 @@ Docker 28 之前的版本存在同一二层网络访问回环发布端口的已�
 
 QQ 留在 ECS 可避免本地网络断开直接结束 QQ 进程。本地断网期间 Core 的消息处理和回复仍会中断，NapCat 是否补发历史事件需要实测，不能承诺零消息丢失。低内存 ECS 加 Swap 仅用于试运行，需要持续观察实际内存、Swap、OOM、磁盘与登录状态。
 
+## 固定设备与网络身份
+
+可选文件 `workspace/secrets/napcat-device-identities.json` 是固定身份的唯一配置入口，由部署管理员保存为 `0600`。下面使用合成 machine-id；实际配置必须从要保留的设备读取，不能复制示例值：
+
+```json
+{
+  "version": 1,
+  "network": { "subnet": "172.30.77.0/24", "gateway": "172.30.77.1" },
+  "accounts": {
+    "primary": {
+      "hostname": "My-PC",
+      "machineId": "1234567890abcdef1234567890abcdef",
+      "macAddress": "02:42:ac:1e:4d:02",
+      "ipv4Address": "172.30.77.2"
+    }
+  }
+}
+```
+
+每账号使用不同的 MAC 和 IP，不能把同一个 ECS 网卡 MAC 分配给共享网桥上的两个容器。网段与网关必须对应实际运行网络；远端网关同时与 `remote-napcat.json` 一致。本地首次创建网络时也显式使用该子网；已有网络不匹配时只报错。未列出的账号沿用既有启动配置。
+
+启动器在账号目录的 `device-identity/` 中生成 Compose override 和 machine-id 文件，本地与远端均以只读绑定挂载覆盖 `/etc/machine-id`。机器 ID 值进入挂载源文件名，明确变更身份会触发 Compose 更新；重复启动不重新抽取宿主标识或分配随机 MAC。原有 QQ 目录及 `global/nt_data/msf/machine-info` 不由此功能修改。设备快照不属于 1 GiB 缓存清理范围。
+
+NapCat 4.18.41 的公开代码将 `os.hostname()` 传入登录的 `hostName` 和会话的 `devName`。Linux GUID 辅助工具读取 `/etc/machine-id` 与 QQ 保存的 MAC，计算 MD5；实际登录 GUID 由 QQ 原生 `getMachineGuid()` 返回。将镜像内 machine-id 换成不同的 ECS 值属于设备身份迁移，可能需要重新扫码，必须明确选择后再进行停服备份、配置发布和容器重建。保留原值并固定快照可避免升级镜像时该输入变化。DMI 与 CPU 已由 ECS 提供，平台仍为 Linux；闭源 QQ 的全部指纹字段无法由此配置保证，固定身份也不保证腾讯不撤销会话。
+
+依据：[设备名](https://github.com/NapNeko/NapCatQQ/blob/v4.18.41/packages/napcat-common/src/system.ts)、[GUID 辅助工具](https://github.com/NapNeko/NapCatQQ/blob/v4.18.41/packages/napcat-webui-backend/src/utils/guid.ts)、[登录入口](https://github.com/NapNeko/NapCatQQ/blob/v4.18.41/packages/napcat-shell/base.ts)、[Docker 固定地址](https://docs.docker.com/reference/compose-file/services/#ipv4_address-ipv6_address)。
+
 ## QQ 缓存维护
 
 `deploy/napcat/cache-maintenance.py` 按账号分别统计 QQ 媒体、临时文件、表情缓存和日志，超过 1 GiB 时按修改时间从旧到新删除至不超过 1 GiB。登录文件、配置、消息库与 Sunabot 业务数据库均不属于自动清理范围。它不跟随符号链接，权限错误及清理后仍超限会明确失败。

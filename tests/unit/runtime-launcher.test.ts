@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -25,10 +26,13 @@ import {
   bubblewrapProbeArguments,
   command,
   commandTimeoutMs,
+  ensureRuntimeNetwork,
   firstRunCompletionReadiness,
   inspectNativeCodex,
   nativeCoreEnvironment,
   napcatAccountHostname,
+  remoteCompose,
+  runLauncher,
   upNapcatAccount,
   selectNativeOnebotListenHost,
   shouldCleanupRemovedNapcatAccount,
@@ -235,16 +239,31 @@ describe("Native Core runtime launcher", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32").each([false, true])("passes stable account hostnames through actual Compose command construction (remote=%s)", async (remote) => {
+  it.skipIf(process.platform === "win32").each([[false, false], [true, false], [false, true], [true, true]])("passes stable device identities through actual Compose command construction (remote=%s, fixed=%s)", async (remote, fixed) => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-napcat-compose-"));
     const bin = path.join(directory, "bin");
     const trace = path.join(directory, "commands.log");
     await fs.mkdir(bin);
     await fs.writeFile(path.join(bin, "docker"), `#!/usr/bin/env node
 const fs = require("node:fs");
+if (process.argv[2] === "network") {
+  const args = process.argv.slice(2);
+  fs.appendFileSync(process.env.NAPCAT_FIXTURE_TRACE, JSON.stringify({ args }) + "\\n");
+  if (args[1] === "inspect") {
+    if (process.env.NAPCAT_FIXTURE_NETWORK === "missing") process.exit(1);
+    process.stdout.write(JSON.stringify([{ Subnet: "172.30.77.0/24", Gateway: process.env.NAPCAT_FIXTURE_NETWORK === "mismatch" ? "172.30.77.254" : "172.30.77.1" }]));
+  }
+  process.exit(0);
+}
+const override = process.argv.slice(2).find(arg => arg.endsWith("/device-identity/compose.json"));
+const device = override ? JSON.parse(fs.readFileSync(override, "utf8")).services.napcat : undefined;
 fs.appendFileSync(process.env.NAPCAT_FIXTURE_TRACE, JSON.stringify({
-  args: process.argv.slice(2), hostname: process.env.NAPCAT_HOSTNAME, account: process.env.NAPCAT_ACCOUNT_ID
+  args: process.argv.slice(2), hostname: process.env.NAPCAT_HOSTNAME, account: process.env.NAPCAT_ACCOUNT_ID,
+  device, machineId: device ? fs.readFileSync(device.volumes[0].source, "utf8") : undefined
 }) + "\\n");
+if (process.env.NAPCAT_FIXTURE_RECONCILE === "1" && process.argv[2] === "ps" && process.argv.some(arg => arg.startsWith("label=io.sunabot.workspace-id="))) {
+  process.stdout.write("fixture-primary\\tnapcat\\trunning\\tfixture-napcat\\tprimary\\tfalse\\tfixture-primary\\tfixture\\tfixture-workspace\\n");
+}
 `, { mode: 0o700 });
     await fs.writeFile(path.join(bin, "ssh"), '#!/bin/bash\nexec /bin/sh -c "${@: -1}"\n', { mode: 0o700 });
     vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
@@ -253,7 +272,12 @@ fs.appendFileSync(process.env.NAPCAT_FIXTURE_TRACE, JSON.stringify({
       root, workspace: path.join(directory, "workspace"), identity: "fixture-workspace", project: "fixture-napcat",
       environment: process.env, runtimeEnvironment: { WEBUI_TOKEN: "fixture-webui" }, runtimeEnv: path.join(directory, "runtime.env"),
       contract: { napcatService: "napcat", shutdownTimeoutSeconds: 35, composeFile: path.join(root, "deploy/napcat/compose.yml"),
-        napcatImage: `fixture/napcat@sha256:${"a".repeat(64)}`, runtimeId: "fixture", webuiPort: 6099 },
+        napcatImage: `fixture/napcat@sha256:${"a".repeat(64)}`, runtimeId: "fixture", webuiPort: 6099,
+        codexCli: { executable: "node_modules/@openai/codex/bin/codex.js" } },
+      ...(fixed ? { napcatDeviceIdentities: { version: 1, network: { subnet: "172.30.77.0/24", gateway: "172.30.77.1" }, accounts: {
+        primary: { hostname: "Fixture-PC", machineId: "1234567890abcdef1234567890abcdef", macAddress: "02:42:ac:1e:4d:02", ipv4Address: "172.30.77.2" },
+        qq_Arona: { hostname: "Fixture-PC", machineId: "1234567890abcdef1234567890abcdef", macAddress: "02:42:ac:1e:4d:03", ipv4Address: "172.30.77.3" }
+      } } } : {}),
       ...(remote ? { remoteNapcat: { root: path.join(directory, "remote"), uid: 1000, gid: 1000,
         host: "fixture.invalid", user: "fixture", port: 22, identityFile: path.join(directory, "key"),
         knownHostsFile: path.join(directory, "known-hosts") } } : {})
@@ -273,6 +297,73 @@ fs.appendFileSync(process.env.NAPCAT_FIXTURE_TRACE, JSON.stringify({
         expect(pair[0].args.slice(-6)).toEqual(["up", "--no-start", "--no-build", "--pull", "never", "napcat"]);
         expect(pair[1].args.slice(-5)).toEqual(["restart", "--no-deps", "--timeout", "35", "napcat"]);
         expect(pair.every((call) => !call.args.includes("--force-recreate"))).toBe(true);
+        if (fixed) {
+          expect(pair[0].device).toEqual(pair[1].device);
+          expect(pair[0].device.hostname).toBe("Fixture-PC");
+          expect(pair[0].device.networks.runtime).toEqual({ mac_address: `02:42:ac:1e:4d:0${index + 2}`, ipv4_address: `172.30.77.${index + 2}` });
+          expect(pair[0].machineId).toBe("1234567890abcdef1234567890abcdef\n");
+          expect(pair[1].machineId).toBe(pair[0].machineId);
+          expect(pair[0].device.volumes[0].read_only).toBe(true);
+          expect(pair[0].args.filter((arg: string) => arg === "-f")).toHaveLength(2);
+        } else {
+          expect(pair[0].device).toBeUndefined();
+        }
+      }
+      if (remote && fixed) {
+        await remoteCompose(context, undefined, ["run", "--rm", "--no-deps", "--entrypoint", "/bin/true", "napcat"]);
+        const probe = JSON.parse((await fs.readFile(trace, "utf8")).trim().split("\n").at(-1)!);
+        expect(probe.device).toBeUndefined();
+        expect(probe.args.filter((arg: string) => arg === "-f")).toHaveLength(1);
+      }
+      if (fixed) {
+        await ensureRuntimeNetwork(context, { create: false });
+        const secrets = path.join(context.workspace, "secrets");
+        await fs.mkdir(secrets, { recursive: true });
+        await fs.writeFile(path.join(secrets, "napcat-device-identities.json"), JSON.stringify(context.napcatDeviceIdentities));
+        if (remote) await fs.writeFile(path.join(secrets, "remote-napcat.json"), JSON.stringify({
+          ...context.remoteNapcat, version: 1, gateway: "172.30.77.1"
+        }));
+        vi.stubEnv("SUNABOT_WORKSPACE", context.workspace);
+        vi.stubEnv("NAPCAT_FIXTURE_NETWORK", "mismatch");
+        await fs.writeFile(trace, "");
+        for (const action of ["up", "start", "restart"]) {
+          await expect(runLauncher([action], process.env)).rejects.toThrow("NAPCAT_DEVICE_IDENTITY_NETWORK_MISMATCH");
+        }
+        const rejected = (await fs.readFile(trace, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+        expect(rejected).toHaveLength(6);
+        expect(rejected.every((call) => call.args[0] === "network" && call.args[1] === "inspect")).toBe(true);
+        await expect(fs.stat(path.join(context.workspace, "business"))).rejects.toMatchObject({ code: "ENOENT" });
+        const data = path.join(context.workspace, "business/data");
+        await fs.mkdir(data, { recursive: true });
+        const database = new DatabaseSync(path.join(data, "sunabot.sqlite"));
+        try {
+          database.exec("CREATE TABLE agents (id TEXT PRIMARY KEY, enabled INTEGER); CREATE TABLE agent_accounts (id TEXT PRIMARY KEY, agent_id TEXT, qq_id TEXT, enabled INTEGER, webui_port INTEGER, created_at TEXT)");
+          database.prepare("INSERT INTO agents VALUES (?, ?)").run("fixture", 1);
+          database.prepare("INSERT INTO agent_accounts VALUES (?, ?, ?, ?, ?, ?)").run("primary", "fixture", "123456789", 1, 6099, "2026-10-22");
+          vi.stubEnv("NAPCAT_FIXTURE_RECONCILE", "1");
+          await fs.writeFile(trace, "");
+          await expect(runLauncher(["reconcile-account", "--account=primary", "--force-restart"], process.env)).rejects.toThrow("NAPCAT_DEVICE_IDENTITY_NETWORK_MISMATCH");
+          const running = (await fs.readFile(trace, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+          expect(running.every((call) => ["version", "info", "ps", "image", "network"].includes(call.args[0]))).toBe(true);
+          expect(running.filter((call) => call.args[0] === "network")).toHaveLength(2);
+          for (const change of ["UPDATE agent_accounts SET enabled = 0", "DELETE FROM agent_accounts"]) {
+            database.exec(change);
+            await fs.writeFile(trace, "");
+            await runLauncher(["reconcile-account", "--account=primary"], process.env);
+            const stopping = (await fs.readFile(trace, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+            expect(stopping.filter((call) => call.args[0] === "network")).toHaveLength(0);
+            expect(stopping.filter((call) => ["stop", "rm"].includes(call.args[0])).map((call) => call.args.at(-1))).toEqual(["fixture-primary", "fixture-primary"]);
+          }
+        } finally {
+          database.close();
+        }
+        vi.stubEnv("NAPCAT_FIXTURE_NETWORK", "missing");
+        await fs.writeFile(trace, "");
+        await ensureRuntimeNetwork(context, { create: false });
+        expect((await fs.readFile(trace, "utf8")).trim().split("\n")).toHaveLength(1);
+        await ensureRuntimeNetwork(context);
+        const created = JSON.parse((await fs.readFile(trace, "utf8")).trim().split("\n").at(-1)!);
+        expect(created.args.slice(0, 6)).toEqual(["network", "create", "--subnet", "172.30.77.0/24", "--gateway", "172.30.77.1"]);
       }
     } finally {
       vi.unstubAllEnvs();

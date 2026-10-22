@@ -14,6 +14,7 @@ import { installGlobalProxyDispatcher } from "../../packages/platform/proxy.mjs"
 import {
   readRemoteNapcat, remoteDockerInvocation, remoteNapcatFile, remoteAccountPath, offlineNapcatImage
 } from "../../packages/platform/remoteNapcat.mjs";
+import { readNapcatDeviceIdentities, prepareNapcatDeviceIdentity, napcatNetworkArguments } from "../../packages/platform/napcatDeviceIdentity.mjs";
 import { buildNativeBashSandboxInvocation, nativeToolPath } from "../../packages/platform/nativeToolSandbox.mjs";
 import { validateMultiAgentWorkspacePath } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
@@ -120,6 +121,7 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
   };
   context.runtimeEnvironment = await readRuntimeEnvironment(context.runtimeEnv);
   context.remoteNapcat = await readRemoteNapcat(workspace);
+  context.napcatDeviceIdentities = await readNapcatDeviceIdentities(workspace, context.remoteNapcat);
   if (context.remoteNapcat?.offlineImageArchitecture) {
     const proofRoot = path.join(workspace, "runtime/napcat/offline-image");
     context.remoteNapcatImage = offlineNapcatImage(
@@ -134,6 +136,9 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
     env: nativeProcessEnvironment(context),
     platform: process.platform
   });
+  if (context.napcatDeviceIdentities && ["up", "start", "restart"].includes(parsed.command)) {
+    await ensureRuntimeNetwork(context, { create: false });
+  }
 
   switch (parsed.command) {
     case "up":
@@ -944,6 +949,7 @@ async function reconcileAccount(context, accountId, forceRestart = false) {
     await assertNapcatImageAvailable(context);
     let observedState = plan.observedState;
     if (plan.desiredState === "running") {
+      if (context.napcatDeviceIdentities) await ensureRuntimeNetwork(context, { create: false });
       if (!account) throw new Error(`QQ 账号 ${accountId} 未注册。`);
       if (!runtime.native.running) {
         throw new Error("Sunabot Core 未运行；请执行 ./sunabot.sh up。");
@@ -1198,15 +1204,22 @@ function defaultNativeOnebotHealthHost(host) {
   return isDynamicNativeOnebotHost(host) ? "127.0.0.1" : host;
 }
 
-async function ensureRuntimeNetwork(context) {
+export async function ensureRuntimeNetwork(context, { create = true } = {}) {
   const network = `${context.project}-runtime`;
-  if (await dockerCommandSucceeds(context, ["network", "inspect", network])) return;
+  if (await dockerCommandSucceeds(context, ["network", "inspect", network])) {
+    if (context.napcatDeviceIdentities) {
+      const raw = await dockerCommand(context, ["network", "inspect", "--format", "{{json .IPAM.Config}}", network], { capture: true });
+      const expected = context.napcatDeviceIdentities.network;
+      if (!JSON.parse(raw).some((item) => item.Subnet === expected.subnet && item.Gateway === expected.gateway)) {
+        throw new Error("NAPCAT_DEVICE_IDENTITY_NETWORK_MISMATCH");
+      }
+    }
+    return;
+  }
+  if (!create) return;
   await dockerCommand(context, [
     "network", "create",
-    ...(context.remoteNapcat ? [
-      "--subnet", `${context.remoteNapcat.gateway.split(".").slice(0, 3).join(".")}.0/24`,
-      "--gateway", context.remoteNapcat.gateway
-    ] : []),
+    ...napcatNetworkArguments(context),
     "--label", `io.sunabot.runtime-id=${context.contract.runtimeId}`,
     "--label", `io.sunabot.workspace-id=${context.identity}`,
     "--label", "io.sunabot.component=runtime-network",
@@ -1746,7 +1759,8 @@ async function compose(context, args, options = {}) {
 async function napcatCompose(context, account, args, options = {}) {
   if (context.remoteNapcat) return remoteCompose(context, account, args, options);
   const project = `${context.project}-napcat-${account.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`;
-  return command("docker", composeArgs(context, args, project), {
+  const deviceArgs = await prepareNapcatDeviceIdentity(context, account.id);
+  return command("docker", composeArgs(context, [...deviceArgs, ...args], project), {
     capture: options.capture,
     timeoutMs: options.timeoutMs,
     cwd: context.root,
@@ -1762,6 +1776,7 @@ async function napcatCompose(context, account, args, options = {}) {
 
 export async function remoteCompose(context, account, args, options = {}) {
   const remote = context.remoteNapcat;
+  const deviceArgs = account ? await prepareNapcatDeviceIdentity(context, account.id) : [];
   for (const relative of ["deploy/napcat/compose.yml", "deploy/napcat/napcat-entrypoint.sh"]) {
     await remoteNapcatFile(remote, relative, "write", await fs.readFile(path.join(context.root, relative)),
       relative.endsWith(".sh") ? 0o700 : 0o600);
@@ -1791,7 +1806,7 @@ export async function remoteCompose(context, account, args, options = {}) {
     "compose", "--project-name", project,
     "--env-file", `${remote.root}/workspace/secrets/napcat.env`,
     "--project-directory", remote.root,
-    "-f", `${remote.root}/deploy/napcat/compose.yml`, ...args
+    "-f", `${remote.root}/deploy/napcat/compose.yml`, ...deviceArgs, ...args
   ], environment);
   return command(invocation.executable, invocation.args, {
     ...options, timeoutMs: options.timeoutMs ?? DOCKER_COMPOSE_TIMEOUT_MS
